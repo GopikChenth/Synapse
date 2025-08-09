@@ -6,8 +6,11 @@ npm init -y
 npm install electron ws
 npm install electron --save-dev
 npm install electron-reload --save-dev
+```
 
-MySyncApp/
+
+```
+Synapse/
 ├── core/
 │   ├── watcher.js        # Watches folders for changes
 │   ├── network.js        # Handles peer connections
@@ -20,4 +23,5 @@ MySyncApp/
 │       ├── index.html
 │       └── app.js
 └── package.json
+```
 
