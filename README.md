@@ -4,13 +4,17 @@ This app is designed to be a simple starting point for building real-time, cross
 ---
 ## 📦 Folder Structure
 Synapse/
-├── node_modules/
-├── main.js # Main Electron process
-├── package.json
-├── index.html # Frontend UI
-├── preload.js # Optional (for contextBridge APIs)
-├── renderer.js # Optional (for frontend logic)
-└── README.md
+├── core/
+│   ├── watcher.js        # Watches folders for changes
+│   ├── network.js        # Handles peer connections
+│   ├── transfer.js       # Handles file sending/receiving
+│   └── state.js          # Saves metadata
+├── renderer/         # UI
+│       ├── index.html
+│       └── app.js
+├── preload.js
+├── main.js           # Electron backend
+└── package.json
 ---
 ## 🚀 Getting Started
 ### 1. Clone the repository
@@ -34,3 +38,4 @@ npm install electron-reload --save-dev
 ```
 npm start
 ```
+
