@@ -3,6 +3,7 @@ Synapse is a minimal Electron-based desktop application featuring WebSocket (`ws
 This app is designed to be a simple starting point for building real-time, cross-platform desktop applications using JavaScript.
 ---
 ## 📦 Folder Structure
+```
 Synapse/
 ├── core/
 │   ├── watcher.js        # Watches folders for changes
@@ -15,6 +16,7 @@ Synapse/
 ├── preload.js
 ├── main.js           # Electron backend
 └── package.json
+```
 ---
 ## 🚀 Getting Started
 ### 1. Clone the repository
@@ -38,4 +40,5 @@ npm install electron-reload --save-dev
 ```
 npm start
 ```
+
 
