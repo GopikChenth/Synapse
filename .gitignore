@@ -20,3 +20,5 @@ node_modules/
 syncthing-android-main/
 syncthing-main/
 *.zip
+**/bin/
+**/out/
