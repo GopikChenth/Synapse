@@ -40,7 +40,7 @@ class FolderViewModel(
                     _foldersState.value = config.folders
                     _devicesState.value = config.devices
                     _error.value = null
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     // Ignore background network transient errors during startup
                 }
                 delay(3000)

@@ -39,12 +39,12 @@ class SyncthingApiClient(
         }.body()
     }
 
-    suspend fun updateConfig(config: SyncthingConfig): HttpStatusCode {
-        return client.post("$baseUrl/rest/system/config") {
+    suspend fun updateConfig(config: SyncthingConfig) {
+        client.post("$baseUrl/rest/system/config") {
             header("X-API-Key", apiKey)
             contentType(ContentType.Application.Json)
             setBody(config)
-        }.status
+        }
     }
     
     suspend fun getDbStatus(folderId: String): FolderDbStatus {
@@ -74,30 +74,30 @@ class SyncthingApiClient(
         }.body()
     }
 
-    suspend fun pauseDevice(deviceId: String): HttpStatusCode {
-        return client.post("$baseUrl/rest/system/pause") {
+    suspend fun pauseDevice(deviceId: String) {
+        client.post("$baseUrl/rest/system/pause") {
             header("X-API-Key", apiKey)
             parameter("device", deviceId)
-        }.status
+        }
     }
 
-    suspend fun resumeDevice(deviceId: String): HttpStatusCode {
-        return client.post("$baseUrl/rest/system/resume") {
+    suspend fun resumeDevice(deviceId: String) {
+        client.post("$baseUrl/rest/system/resume") {
             header("X-API-Key", apiKey)
             parameter("device", deviceId)
-        }.status
+        }
     }
     
-    suspend fun restart(): HttpStatusCode {
-        return client.post("$baseUrl/rest/system/restart") {
+    suspend fun restart() {
+        client.post("$baseUrl/rest/system/restart") {
             header("X-API-Key", apiKey)
-        }.status
+        }
     }
 
-    suspend fun shutdown(): HttpStatusCode {
-        return client.post("$baseUrl/rest/system/shutdown") {
+    suspend fun shutdown() {
+        client.post("$baseUrl/rest/system/shutdown") {
             header("X-API-Key", apiKey)
-        }.status
+        }
     }
 }
 
