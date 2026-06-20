@@ -39,6 +39,18 @@ fun main() {
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
+                },
+                openUrl = { url ->
+                    try {
+                        if (java.awt.Desktop.isDesktopSupported()) {
+                            java.awt.Desktop.getDesktop().browse(java.net.URI(url))
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                },
+                exitApp = {
+                    System.exit(0)
                 }
             )
         }

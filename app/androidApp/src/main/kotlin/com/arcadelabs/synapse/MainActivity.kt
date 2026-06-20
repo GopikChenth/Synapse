@@ -20,6 +20,8 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.arcadelabs.synapse.service.SyncthingService
 
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+
 class MainActivity : ComponentActivity() {
 
     private var onDirectorySelectedCallback: ((String) -> Unit)? = null
@@ -70,6 +72,33 @@ class MainActivity : ComponentActivity() {
                 selectDirectory = { onPathSelected ->
                     onDirectorySelectedCallback = onPathSelected
                     dirPickerLauncher.launch(null)
+                },
+                scanQrCode = { onQrScanned ->
+                    try {
+                        val scanner = GmsBarcodeScanning.getClient(this)
+                        scanner.startScan()
+                            .addOnSuccessListener { barcode ->
+                                barcode.rawValue?.let { onQrScanned(it) }
+                            }
+                            .addOnFailureListener { e ->
+                                e.printStackTrace()
+                            }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                },
+                openUrl = { url ->
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                },
+                exitApp = {
+                    finishAffinity()
                 }
             )
         }

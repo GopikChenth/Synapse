@@ -48,15 +48,7 @@ fun FoldersScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
 
-    Scaffold(
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onAddFolderClick,
-                icon = { Icon(Icons.Default.Add, contentDescription = "Add folder") },
-                text = { Text("Add folder") }
-            )
-        }
-    ) { paddingValues ->
+    Scaffold { paddingValues ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -372,7 +364,11 @@ fun CreateFolderDialog(
             }
 
             // 7. Pause Folder
-            FormField(icon = Icons.Default.Warning, title = "Pause Folder") {
+            FormField(
+                icon = Icons.Default.Warning,
+                title = "Pause Folder",
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -469,20 +465,21 @@ fun CreateFolderDialog(
 fun FormField(
     icon: ImageVector,
     title: String,
+    verticalAlignment: Alignment.Vertical = Alignment.Top,
     content: @Composable () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.Top
+        verticalAlignment = verticalAlignment
     ) {
         Icon(
             imageVector = icon,
             contentDescription = title,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier
-                .padding(top = 2.dp)
+                .padding(top = if (verticalAlignment == Alignment.Top) 2.dp else 0.dp)
                 .size(20.dp)
         )
         Spacer(modifier = Modifier.width(12.dp))
@@ -499,92 +496,41 @@ fun FolderCard(
     folder: com.arcadelabs.synapse.core.domain.models.Folder,
     onOpenClick: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        border = CardDefaults.outlinedCardBorder()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onOpenClick() }
+            .padding(vertical = 12.dp, horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = folder.label.ifEmpty { folder.id },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = folder.label.ifEmpty { folder.id },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    text = "❖ ",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
                 )
-                
-                Spacer(modifier = Modifier.height(6.dp))
-                
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = folder.path,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    val statusText = if (folder.paused) "Paused" else "Sharing"
-                    val statusColor = if (folder.paused) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                    
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = statusColor
-                    )
-                    Text(
-                        text = "•",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = folder.type,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            
-            Spacer(modifier = Modifier.width(16.dp))
-            
-            IconButton(
-                onClick = onOpenClick,
-                colors = IconButtonDefaults.iconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                ),
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(
-                    imageVector = FolderIcon,
-                    contentDescription = "Open in File Manager"
+                Text(
+                    text = folder.path,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
+        Spacer(modifier = Modifier.width(16.dp))
+        Icon(
+            imageVector = FolderIcon,
+            contentDescription = "Open in File Manager",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(24.dp)
+        )
     }
 }

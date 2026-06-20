@@ -7,5 +7,8 @@ data class Device(
     val deviceID: String,
     val name: String = "",
     val addresses: List<String> = emptyList(),
-    val paused: Boolean = false
+    val paused: Boolean = false,
+    val introducer: Boolean = false,
+    val autoAcceptFolders: Boolean = false,
+    val untrusted: Boolean = false
 )

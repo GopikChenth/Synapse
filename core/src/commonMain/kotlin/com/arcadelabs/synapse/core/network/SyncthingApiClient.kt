@@ -1,8 +1,6 @@
 package com.arcadelabs.synapse.core.network
 
-import com.arcadelabs.synapse.core.domain.models.SystemStatus
-import com.arcadelabs.synapse.core.domain.models.SystemVersion
-import com.arcadelabs.synapse.core.domain.models.SyncthingConfig
+import com.arcadelabs.synapse.core.domain.models.*
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
@@ -49,6 +47,47 @@ class SyncthingApiClient(
         }.status
     }
     
+    suspend fun getDbStatus(folderId: String): FolderDbStatus {
+        return client.get("$baseUrl/rest/db/status") {
+            header("X-API-Key", apiKey)
+            parameter("folder", folderId)
+        }.body()
+    }
+
+    suspend fun getConnections(): ConnectionsResponse {
+        return client.get("$baseUrl/rest/system/connections") {
+            header("X-API-Key", apiKey)
+        }.body()
+    }
+
+    suspend fun getDbCompletion(deviceId: String, folderId: String): DeviceCompletion {
+        return client.get("$baseUrl/rest/db/completion") {
+            header("X-API-Key", apiKey)
+            parameter("device", deviceId)
+            parameter("folder", folderId)
+        }.body()
+    }
+
+    suspend fun getSystemLog(): SystemLog {
+        return client.get("$baseUrl/rest/system/log") {
+            header("X-API-Key", apiKey)
+        }.body()
+    }
+
+    suspend fun pauseDevice(deviceId: String): HttpStatusCode {
+        return client.post("$baseUrl/rest/system/pause") {
+            header("X-API-Key", apiKey)
+            parameter("device", deviceId)
+        }.status
+    }
+
+    suspend fun resumeDevice(deviceId: String): HttpStatusCode {
+        return client.post("$baseUrl/rest/system/resume") {
+            header("X-API-Key", apiKey)
+            parameter("device", deviceId)
+        }.status
+    }
+    
     suspend fun restart(): HttpStatusCode {
         return client.post("$baseUrl/rest/system/restart") {
             header("X-API-Key", apiKey)
@@ -61,3 +100,4 @@ class SyncthingApiClient(
         }.status
     }
 }
+
