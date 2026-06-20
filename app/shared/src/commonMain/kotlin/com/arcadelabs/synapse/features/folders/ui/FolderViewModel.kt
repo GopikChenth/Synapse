@@ -7,9 +7,9 @@ import com.arcadelabs.synapse.core.domain.models.Folder
 import com.arcadelabs.synapse.core.domain.models.Device
 import com.arcadelabs.synapse.core.domain.models.FolderDeviceReference
 import com.arcadelabs.synapse.core.domain.models.FolderVersioning
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 
 class FolderViewModel(
     private val apiClient: SyncthingApiClient
@@ -29,6 +29,23 @@ class FolderViewModel(
 
     init {
         loadFolders()
+        startPolling()
+    }
+
+    private fun startPolling() {
+        viewModelScope.launch {
+            while (isActive) {
+                try {
+                    val config = apiClient.getConfig()
+                    _foldersState.value = config.folders
+                    _devicesState.value = config.devices
+                    _error.value = null
+                } catch (e: Exception) {
+                    // Ignore background network transient errors during startup
+                }
+                delay(3000)
+            }
+        }
     }
 
     fun loadFolders() {

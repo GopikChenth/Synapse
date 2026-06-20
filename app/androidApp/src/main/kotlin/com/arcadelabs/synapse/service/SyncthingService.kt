@@ -34,6 +34,8 @@ class SyncthingService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // Call startForeground immediately to prevent ForegroundServiceDidNotStartInTimeException
+        startForeground(NOTIFICATION_ID, createNotification("Synapse is starting..."))
         acquireLocks()
 
         runConditionMonitor = RunConditionMonitor(this) { isMet ->
@@ -57,7 +59,7 @@ class SyncthingService : Service() {
             val behaviorStr = prefs.getString("run_behavior", "FOLLOW")
             when (behaviorStr) {
                 "FORCE_START" -> {
-                    startForeground(NOTIFICATION_ID, createNotification("Syncthing is running"))
+                    updateNotification("Syncthing is running")
                     startSyncthingProcessOnly()
                 }
                 "FORCE_STOP" -> {
@@ -67,15 +69,15 @@ class SyncthingService : Service() {
                     val isWifiConnected = runConditionMonitor?.let { monitor ->
                         val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
                         val activeNetwork = connectivityManager.activeNetwork
-                        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
+                        val capabilities = activeNetwork?.let { connectivityManager.getNetworkCapabilities(it) }
                         capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
                     } ?: false
                     
                     if (isWifiConnected) {
-                        startForeground(NOTIFICATION_ID, createNotification("Syncthing is running"))
+                        updateNotification("Syncthing is running")
                         startSyncthingProcessOnly()
                     } else {
-                        startForeground(NOTIFICATION_ID, createNotification("Syncthing is waiting for run conditions"))
+                        updateNotification("Syncthing is waiting for run conditions")
                         stopSyncthingProcessOnly()
                     }
                 }
@@ -86,19 +88,22 @@ class SyncthingService : Service() {
         return START_NOT_STICKY
     }
 
+    private fun updateNotification(content: String) {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, createNotification(content))
+    }
+
     private fun startSyncthingProcessOnly() {
         if (runnable != null) return
 
-        // Update notification description
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, createNotification("Syncthing is running"))
+        updateNotification("Syncthing is running")
 
         runnable = SyncthingRunnable(this, SyncthingRunnable.CommandType.SERVE).apply {
             start { exitCode ->
                 Log.i(TAG, "Runnable exited with code $exitCode")
+                runnable?.stop()
+                runnable = null
                 if (exitCode == 3) {
-                    runnable?.stop()
-                    runnable = null
                     startSyncthingProcessOnly()
                 }
             }
@@ -109,9 +114,7 @@ class SyncthingService : Service() {
         runnable?.stop()
         runnable = null
 
-        // Update notification description
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, createNotification("Syncthing is waiting for run conditions"))
+        updateNotification("Syncthing is waiting for run conditions")
     }
 
     private fun stopSyncthing() {

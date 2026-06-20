@@ -56,7 +56,11 @@ class RunConditionMonitor(
     fun start() {
         // Register battery monitor
         val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        context.registerReceiver(batteryReceiver, filter)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(batteryReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(batteryReceiver, filter)
+        }
 
         // Register network monitor
         val request = NetworkRequest.Builder()
@@ -70,7 +74,7 @@ class RunConditionMonitor(
         isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
 
         val activeNetwork = connectivityManager.activeNetwork
-        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
+        val capabilities = activeNetwork?.let { connectivityManager.getNetworkCapabilities(it) }
         isWifiConnected = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
 
         checkConditions()

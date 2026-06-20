@@ -82,12 +82,6 @@ fun StatusScreen(
                     bottomEnd = bottomEnd
                 )
 
-                // Layout weight animation (selected expands, unselected contracts)
-                val weight by animateFloatAsState(
-                    targetValue = if (isSelected) 1.6f else 0.7f,
-                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
-                )
-
                 // Theme color sync matching the reference designs
                 val bgColor = if (isSelected) {
                     MaterialTheme.colorScheme.primary
@@ -102,14 +96,14 @@ fun StatusScreen(
 
                 Box(
                     modifier = Modifier
-                        .weight(weight)
+                        .weight(1f)
                         .fillMaxHeight()
                         .clip(buttonShape)
                         .background(bgColor)
                         .clickable {
                             viewModel.setRunBehavior(behavior, onRunBehaviorChanged)
                         }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(
@@ -120,28 +114,19 @@ fun StatusScreen(
                         Icon(
                             imageVector = icon,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(14.dp),
                             tint = contentColor
                         )
-
-                        AnimatedVisibility(
-                            visible = isSelected,
-                            enter = expandHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + fadeIn(),
-                            exit = shrinkHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + fadeOut()
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = text,
-                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                    color = contentColor,
-                                    fontSize = 8.sp,
-                                    lineHeight = 10.sp,
-                                    maxLines = 3,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            color = contentColor,
+                            fontSize = 8.sp,
+                            lineHeight = 10.sp,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
