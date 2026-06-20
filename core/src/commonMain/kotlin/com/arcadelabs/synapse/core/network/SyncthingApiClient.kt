@@ -14,9 +14,14 @@ class SyncthingApiClient(
 ) {
     private val baseUrl = "http://127.0.0.1:8384"
     
-    private val apiKey: String by lazy {
-        getApiKey(contextProvider)
-    }
+    private var cachedApiKey: String = ""
+    private val apiKey: String
+        get() {
+            if (cachedApiKey.isEmpty()) {
+                cachedApiKey = getApiKey(contextProvider)
+            }
+            return cachedApiKey
+        }
 
     suspend fun getSystemStatus(): SystemStatus {
         return client.get("$baseUrl/rest/system/status") {

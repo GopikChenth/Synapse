@@ -114,7 +114,7 @@ class SyncthingService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Synapse Sync Engine")
             .setContentText(content)
-            .setSmallIcon(android.R.drawable.ic_menu_sync)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }

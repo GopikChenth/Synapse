@@ -55,7 +55,7 @@ kotlin {
             api(libs.koin.core)
 
             // Ktor HttpClient
-            implementation(libs.ktor.client.core)
+            api(libs.ktor.client.core)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.kotlinx.json)
 

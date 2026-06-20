@@ -24,7 +24,39 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setContent {
-            App()
+            App(
+                openFolder = { path ->
+                    try {
+                        val docId = "primary:" + path.substringAfter("/storage/emulated/0/")
+                        val uri = Uri.parse("content://com.android.externalstorage.documents/document/" + Uri.encode(docId))
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, "vnd.android.document/directory")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                val uri = Uri.parse("file://$path")
+                                setDataAndType(uri, "resource/folder")
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(intent)
+                        } catch (ex: Exception) {
+                            try {
+                                val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                                    type = "*/*"
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                startActivity(intent)
+                            } catch (e3: Exception) {
+                                e3.printStackTrace()
+                            }
+                        }
+                    }
+                }
+            )
         }
 
         checkAndRequestPermissions()
@@ -90,7 +122,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST_CODE) {
             checkStoragePermissionAndStartService()

@@ -1,0 +1,89 @@
+package com.arcadelabs.synapse.features.folders.ui
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.domain.models.Folder
+import com.arcadelabs.synapse.core.domain.models.Device
+import com.arcadelabs.synapse.core.domain.models.FolderDeviceReference
+import com.arcadelabs.synapse.core.domain.models.FolderVersioning
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+
+class FolderViewModel(
+    private val apiClient: SyncthingApiClient
+) : ViewModel() {
+
+    private val _foldersState = MutableStateFlow<List<Folder>>(emptyList())
+    val foldersState: StateFlow<List<Folder>> = _foldersState
+
+    private val _devicesState = MutableStateFlow<List<Device>>(emptyList())
+    val devicesState: StateFlow<List<Device>> = _devicesState
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error
+
+    init {
+        loadFolders()
+    }
+
+    fun loadFolders() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
+            try {
+                val config = apiClient.getConfig()
+                _foldersState.value = config.folders
+                _devicesState.value = config.devices
+            } catch (e: Exception) {
+                _error.value = e.message ?: "Failed to load configuration"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun createFolder(
+        id: String,
+        label: String,
+        path: String,
+        type: String,
+        paused: Boolean,
+        watchForChanges: Boolean,
+        sharedDevices: List<String>,
+        versioningType: String,
+        onSuccess: () -> Unit
+    ) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
+            try {
+                val currentConfig = apiClient.getConfig()
+                val newFolder = Folder(
+                    id = id,
+                    label = label,
+                    path = path,
+                    type = type,
+                    paused = paused,
+                    fsWatcherEnabled = watchForChanges,
+                    devices = sharedDevices.map { FolderDeviceReference(it) },
+                    versioning = FolderVersioning(type = versioningType)
+                )
+                val updatedFolders = currentConfig.folders + newFolder
+                val updatedConfig = currentConfig.copy(folders = updatedFolders)
+                
+                apiClient.updateConfig(updatedConfig)
+                loadFolders() // Refresh our flows
+                onSuccess()
+            } catch (e: Exception) {
+                _error.value = e.message ?: "Failed to create folder"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+}
