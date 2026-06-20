@@ -116,6 +116,7 @@ fun FoldersScreen(
 @Composable
 fun CreateFolderDialog(
     onDismiss: () -> Unit,
+    selectDirectory: ((onPathSelected: (String) -> Unit) -> Unit)? = null,
     viewModel: FolderViewModel = koinInject()
 ) {
     val devices by viewModel.devicesState.collectAsState()
@@ -201,7 +202,7 @@ fun CreateFolderDialog(
                 )
             }
 
-            // 3. Directory Path
+            // 3. Directory Path (with trailing folder picker icon)
             FormField(icon = FolderIcon, title = "Directory") {
                 OutlinedTextField(
                     value = folderPath,
@@ -209,6 +210,15 @@ fun CreateFolderDialog(
                     label = { Text("Directory", style = MaterialTheme.typography.bodyMedium) },
                     textStyle = MaterialTheme.typography.bodyMedium,
                     singleLine = true,
+                    trailingIcon = {
+                        IconButton(onClick = {
+                            selectDirectory?.invoke { selectedPath ->
+                                folderPath = selectedPath
+                            }
+                        }) {
+                            Icon(FolderIcon, contentDescription = "Select Directory", modifier = Modifier.size(20.dp))
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth()
                 )
             }

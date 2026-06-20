@@ -25,6 +25,20 @@ fun main() {
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
+                },
+                selectDirectory = { onPathSelected ->
+                    try {
+                        val chooser = javax.swing.JFileChooser().apply {
+                            fileSelectionMode = javax.swing.JFileChooser.DIRECTORIES_ONLY
+                            dialogTitle = "Select Directory"
+                        }
+                        val result = chooser.showOpenDialog(null)
+                        if (result == javax.swing.JFileChooser.APPROVE_OPTION) {
+                            onPathSelected(chooser.selectedFile.absolutePath)
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
             )
         }

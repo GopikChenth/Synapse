@@ -27,7 +27,8 @@ enum class Screen(val title: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun App(
-    openFolder: ((String) -> Unit)? = null
+    openFolder: ((String) -> Unit)? = null,
+    selectDirectory: ((onPathSelected: (String) -> Unit) -> Unit)? = null
 ) {
     var isCreateFolderDialogOpen by remember { mutableStateOf(false) }
 
@@ -102,7 +103,8 @@ fun App(
                         .background(MaterialTheme.colorScheme.background)
                 ) {
                     CreateFolderDialog(
-                        onDismiss = { isCreateFolderDialogOpen = false }
+                        onDismiss = { isCreateFolderDialogOpen = false },
+                        selectDirectory = selectDirectory
                     )
                 }
             }

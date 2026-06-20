@@ -1,16 +1,19 @@
 package com.arcadelabs.synapse
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.app.ActivityCompat
@@ -18,6 +21,14 @@ import androidx.core.content.ContextCompat
 import com.arcadelabs.synapse.service.SyncthingService
 
 class MainActivity : ComponentActivity() {
+
+    private var onDirectorySelectedCallback: ((String) -> Unit)? = null
+    private val dirPickerLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let {
+            val path = convertUriToPath(this, it)
+            onDirectorySelectedCallback?.invoke(path)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -55,11 +66,32 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                },
+                selectDirectory = { onPathSelected ->
+                    onDirectorySelectedCallback = onPathSelected
+                    dirPickerLauncher.launch(null)
                 }
             )
         }
 
         checkAndRequestPermissions()
+    }
+
+    private fun convertUriToPath(context: Context, uri: Uri): String {
+        try {
+            val docId = DocumentsContract.getTreeDocumentId(uri)
+            val split = docId.split(":")
+            val type = split[0]
+            val path = split.getOrNull(1) ?: ""
+            return if ("primary".equals(type, ignoreCase = true)) {
+                Environment.getExternalStorageDirectory().absolutePath + "/" + path
+            } else {
+                "/storage/" + type + "/" + path
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return uri.path ?: ""
+        }
     }
 
     private fun checkAndRequestPermissions() {
