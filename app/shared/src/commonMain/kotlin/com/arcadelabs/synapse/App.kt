@@ -33,6 +33,7 @@ import com.arcadelabs.synapse.features.devices.ui.AddDeviceDialog
 import com.arcadelabs.synapse.features.folders.ui.CreateFolderDialog
 import com.arcadelabs.synapse.features.folders.ui.FoldersScreen
 import com.arcadelabs.synapse.features.status.ui.StatusScreen
+import com.arcadelabs.synapse.features.status.ui.RunBehavior
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -100,6 +101,7 @@ fun App(
     scanQrCode: ((onQrScanned: (String) -> Unit) -> Unit)? = null,
     openUrl: ((String) -> Unit)? = null,
     exitApp: (() -> Unit)? = null,
+    onRunBehaviorChanged: ((RunBehavior) -> Unit)? = null,
     apiClient: SyncthingApiClient = koinInject()
 ) {
     var isCreateFolderDialogOpen by remember { mutableStateOf(false) }
@@ -366,7 +368,7 @@ fun App(
                                 openFolder = openFolder
                             )
                             Screen.DEVICES -> DevicesScreen()
-                            Screen.STATUS -> StatusScreen()
+                            Screen.STATUS -> StatusScreen(onRunBehaviorChanged = onRunBehaviorChanged)
                         }
                     }
                 }

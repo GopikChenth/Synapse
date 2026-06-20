@@ -11,7 +11,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+enum class RunBehavior {
+    FOLLOW,
+    FORCE_START,
+    FORCE_STOP
+}
+
 data class StatusUiState(
+    val isRunning: Boolean = false,
     val myId: String = "",
     val uptime: Long = 0,
     val allocBytes: Long = 0,
@@ -30,6 +37,9 @@ class StatusViewModel(
 
     private val _statusState = MutableStateFlow(StatusUiState())
     val statusState: StateFlow<StatusUiState> = _statusState
+
+    private val _runBehavior = MutableStateFlow(RunBehavior.FOLLOW)
+    val runBehavior: StateFlow<RunBehavior> = _runBehavior
 
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs
@@ -80,40 +90,46 @@ class StatusViewModel(
     }
 
     private suspend fun updateStatus() {
-        val systemStatus = apiClient.getSystemStatus()
-        val version = apiClient.getSystemVersion()
-        val connectionsResp = apiClient.getConnections()
-        
-        val elapsed = lastMark.elapsedNow()
-        lastMark = timeSource.markNow()
-        val elapsedSeconds = elapsed.inWholeMilliseconds.toDouble() / 1000.0
+        try {
+            val systemStatus = apiClient.getSystemStatus()
+            val version = apiClient.getSystemVersion()
+            val connectionsResp = apiClient.getConnections()
+            
+            val elapsed = lastMark.elapsedNow()
+            lastMark = timeSource.markNow()
+            val elapsedSeconds = elapsed.inWholeMilliseconds.toDouble() / 1000.0
 
-        val total = connectionsResp.total
-        val currentIn = total.inBytesTotal
-        val currentOut = total.outBytesTotal
+            val total = connectionsResp.total
+            val currentIn = total.inBytesTotal
+            val currentOut = total.outBytesTotal
 
-        val dlSpeed = if (lastInBytes > 0 && elapsedSeconds > 0) {
-            ((currentIn - lastInBytes) / elapsedSeconds).toLong().coerceAtLeast(0)
-        } else 0
-        val ulSpeed = if (lastOutBytes > 0 && elapsedSeconds > 0) {
-            ((currentOut - lastOutBytes) / elapsedSeconds).toLong().coerceAtLeast(0)
-        } else 0
+            val dlSpeed = if (lastInBytes > 0 && elapsedSeconds > 0) {
+                ((currentIn - lastInBytes) / elapsedSeconds).toLong().coerceAtLeast(0)
+            } else 0
+            val ulSpeed = if (lastOutBytes > 0 && elapsedSeconds > 0) {
+                ((currentOut - lastOutBytes) / elapsedSeconds).toLong().coerceAtLeast(0)
+            } else 0
 
-        lastInBytes = currentIn
-        lastOutBytes = currentOut
+            lastInBytes = currentIn
+            lastOutBytes = currentOut
 
-        _statusState.value = StatusUiState(
-            myId = systemStatus.myID,
-            uptime = systemStatus.uptime,
-            allocBytes = systemStatus.alloc,
-            sysBytes = systemStatus.sys,
-            guiAddress = systemStatus.guiAddressUsed,
-            version = version.version,
-            downloadSpeed = dlSpeed,
-            uploadSpeed = ulSpeed,
-            totalDownload = currentIn,
-            totalUpload = currentOut
-        )
+            _statusState.value = StatusUiState(
+                isRunning = true,
+                myId = systemStatus.myID,
+                uptime = systemStatus.uptime,
+                allocBytes = systemStatus.alloc,
+                sysBytes = systemStatus.sys,
+                guiAddress = systemStatus.guiAddressUsed,
+                version = version.version,
+                downloadSpeed = dlSpeed,
+                uploadSpeed = ulSpeed,
+                totalDownload = currentIn,
+                totalUpload = currentOut
+            )
+        } catch (e: Exception) {
+            _statusState.value = _statusState.value.copy(isRunning = false)
+            throw e
+        }
     }
 
     fun loadLogs() {
@@ -144,6 +160,15 @@ class StatusViewModel(
             } catch (e: Exception) {
                 _error.value = "Failed to shutdown: ${e.message}"
             }
+        }
+    }
+
+    fun setRunBehavior(behavior: RunBehavior, onPlatformChange: ((RunBehavior) -> Unit)? = null) {
+        _runBehavior.value = behavior
+        onPlatformChange?.invoke(behavior)
+        
+        if (behavior == RunBehavior.FORCE_STOP) {
+            shutdownDaemon()
         }
     }
 }

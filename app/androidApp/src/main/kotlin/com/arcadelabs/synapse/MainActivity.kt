@@ -19,6 +19,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.arcadelabs.synapse.service.SyncthingService
+import com.arcadelabs.synapse.features.status.ui.RunBehavior
 
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 
@@ -99,6 +100,19 @@ class MainActivity : ComponentActivity() {
                 },
                 exitApp = {
                     finishAffinity()
+                },
+                onRunBehaviorChanged = { behavior ->
+                    val prefs = getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putString("run_behavior", behavior.name).apply()
+                    
+                    if (behavior == RunBehavior.FORCE_STOP) {
+                        val serviceIntent = Intent(this, SyncthingService::class.java).apply {
+                            action = SyncthingService.ACTION_STOP
+                        }
+                        startService(serviceIntent)
+                    } else {
+                        startSyncthingService()
+                    }
                 }
             )
         }

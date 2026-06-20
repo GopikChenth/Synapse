@@ -76,3 +76,7 @@ Do not hardcode specific hexadecimal colors inside UI layouts. Colors must be re
     *   **Spring Spec**: `spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)`
 *   **Page Swiping / Horizontal Pager**:
     *   Uses fast, responsive spatial scrolling with physics-based drag-to-settle.
+*   **Expressive Segmented Buttons**:
+    *   **Shape Morphing**: Animates corners from default segment boundaries (outer curves, flat inner borders) to fully rounded pill shape (`24.dp`) when active.
+    *   **Layout Weight Morphing**: Dynamically animates button weights (`1.6f` selected vs `0.7f` unselected) and toggles text visibility inside `AnimatedVisibility` so active selection expands smoothly while unselected options contract.
+    *   **Spring Spec**: Synchronized using `spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)`.

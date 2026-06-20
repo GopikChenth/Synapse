@@ -23,6 +23,7 @@ class SyncthingService : Service() {
     
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiMulticastLock: WifiManager.MulticastLock? = null
+    private var runConditionMonitor: RunConditionMonitor? = null
 
     inner class SyncthingBinder : Binder() {
         fun getService(): SyncthingService = this@SyncthingService
@@ -34,40 +35,83 @@ class SyncthingService : Service() {
         super.onCreate()
         createNotificationChannel()
         acquireLocks()
+
+        runConditionMonitor = RunConditionMonitor(this) { isMet ->
+            val prefs = getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
+            val behaviorStr = prefs.getString("run_behavior", "FOLLOW")
+            if (behaviorStr == "FOLLOW") {
+                if (isMet) {
+                    startSyncthingProcessOnly()
+                } else {
+                    stopSyncthingProcessOnly()
+                }
+            }
+        }
+        runConditionMonitor?.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         if (action == ACTION_START) {
-            startSyncthing()
+            val prefs = getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
+            val behaviorStr = prefs.getString("run_behavior", "FOLLOW")
+            when (behaviorStr) {
+                "FORCE_START" -> {
+                    startForeground(NOTIFICATION_ID, createNotification("Syncthing is running"))
+                    startSyncthingProcessOnly()
+                }
+                "FORCE_STOP" -> {
+                    stopSyncthing()
+                }
+                else -> { // FOLLOW
+                    val isWifiConnected = runConditionMonitor?.let { monitor ->
+                        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                        val activeNetwork = connectivityManager.activeNetwork
+                        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
+                        capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
+                    } ?: false
+                    
+                    if (isWifiConnected) {
+                        startForeground(NOTIFICATION_ID, createNotification("Syncthing is running"))
+                        startSyncthingProcessOnly()
+                    } else {
+                        startForeground(NOTIFICATION_ID, createNotification("Syncthing is waiting for run conditions"))
+                        stopSyncthingProcessOnly()
+                    }
+                }
+            }
         } else if (action == ACTION_STOP) {
             stopSyncthing()
         }
         return START_NOT_STICKY
     }
 
-    private fun startSyncthing() {
+    private fun startSyncthingProcessOnly() {
         if (runnable != null) return
 
-        startForeground(NOTIFICATION_ID, createNotification("Syncthing is running"))
+        // Update notification description
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, createNotification("Syncthing is running"))
 
         runnable = SyncthingRunnable(this, SyncthingRunnable.CommandType.SERVE).apply {
             start { exitCode ->
                 Log.i(TAG, "Runnable exited with code $exitCode")
                 if (exitCode == 3) {
-                    // Exit code 3: Syncthing REST API requested a restart.
-                    // Stop the old runnable first so its coroutine scope is cancelled
-                    // and stdout/stderr reader coroutines are cleaned up before we
-                    // create a new SyncthingRunnable.
                     runnable?.stop()
                     runnable = null
-                    startSyncthing()
-                } else {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+                    startSyncthingProcessOnly()
                 }
             }
         }
+    }
+
+    private fun stopSyncthingProcessOnly() {
+        runnable?.stop()
+        runnable = null
+
+        // Update notification description
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, createNotification("Syncthing is waiting for run conditions"))
     }
 
     private fun stopSyncthing() {
@@ -105,6 +149,7 @@ class SyncthingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        runConditionMonitor?.stop()
         stopSyncthing()
         releaseLocks()
         serviceScope.cancel()
