@@ -122,7 +122,7 @@ fun App(
     LaunchedEffect(isShowDeviceIdDialogOpen) {
         if (isShowDeviceIdDialogOpen) {
             try {
-                val status = apiClient.getSystemStatus()
+                val status = apiClient.systemStatus()
                 localDeviceId = status.myID
             } catch (e: Exception) {
                 localDeviceId = "Error retrieving ID"
@@ -462,9 +462,10 @@ fun App(
                     
                     LaunchedEffect(Unit) {
                         try {
-                            val currentConfig = apiClient.getConfig()
+                            val rawConfig = apiClient.rawSystemConfig()
                             val json = kotlinx.serialization.json.Json { prettyPrint = true }
-                            configJsonText = json.encodeToString(SyncthingConfig.serializer(), currentConfig)
+                            val jsonElement = json.parseToJsonElement(rawConfig)
+                            configJsonText = json.encodeToString(kotlinx.serialization.json.JsonElement.serializer(), jsonElement)
                         } catch(e: Exception) {
                             configJsonText = "Error loading config: ${e.message}"
                         }
@@ -502,16 +503,22 @@ fun App(
                                     onClick = {
                                         coroutineScope.launch {
                                             try {
-                                                val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-                                                val newConfig = json.decodeFromString(SyncthingConfig.serializer(), configJsonText)
-                                                val status = apiClient.updateConfig(newConfig)
-                                                if (status.value in 200..299) {
-                                                    isImportExportDialogOpen = false
-                                                } else {
-                                                    importError = "Failed to apply config: HTTP ${status.value}"
-                                                }
+                                                kotlinx.serialization.json.Json.parseToJsonElement(configJsonText)
+                                                apiClient.updateRawSystemConfig(configJsonText)
+                                                isImportExportDialogOpen = false
                                             } catch(e: Exception) {
-                                                importError = "Invalid config JSON: ${e.message}"
+                                                val msg = e.message ?: ""
+                                                importError = if (
+                                                    msg.contains("connect", ignoreCase = true) ||
+                                                    msg.contains("127.0.0.1") ||
+                                                    msg.contains("refused", ignoreCase = true) ||
+                                                    msg.contains("cert", ignoreCase = true) ||
+                                                    msg.contains("trust", ignoreCase = true)
+                                                ) {
+                                                    "Synapse is not started"
+                                                } else {
+                                                    "Failed to apply config: $msg"
+                                                }
                                             }
                                         }
                                     }

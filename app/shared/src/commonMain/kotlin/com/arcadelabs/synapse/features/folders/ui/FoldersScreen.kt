@@ -29,7 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arcadelabs.synapse.core.designsystem.FolderIcon
-import org.koin.compose.koinInject
+import org.koin.compose.viewmodel.koinViewModel
 
 fun generateRandomFolderId(): String {
     val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -42,7 +42,7 @@ fun generateRandomFolderId(): String {
 fun FoldersScreen(
     onAddFolderClick: () -> Unit,
     openFolder: ((String) -> Unit)? = null,
-    viewModel: FolderViewModel = koinInject()
+    viewModel: FolderViewModel = koinViewModel()
 ) {
     val folders by viewModel.foldersState.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
@@ -109,7 +109,7 @@ fun FoldersScreen(
 fun CreateFolderDialog(
     onDismiss: () -> Unit,
     selectDirectory: ((onPathSelected: (String) -> Unit) -> Unit)? = null,
-    viewModel: FolderViewModel = koinInject()
+    viewModel: FolderViewModel = koinViewModel()
 ) {
     val devices by viewModel.devicesState.collectAsState()
     val filteredDevices = remember(devices) {

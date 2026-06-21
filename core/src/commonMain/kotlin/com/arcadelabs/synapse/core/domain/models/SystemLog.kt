@@ -1,14 +1,18 @@
 package com.arcadelabs.synapse.core.domain.models
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
 data class LogEntry(
-    val `when`: String = "",
-    val message: String = ""
+    /**
+     * ISO-8601 formatted timestamp representing when the log entry was generated.
+     */
+    @SerialName("when") val timestamp: String = "",
+    @SerialName("message") val message: String = ""
 )
 
 @Serializable
 data class SystemLog(
-    val messages: List<LogEntry> = emptyList()
+    @SerialName("messages") val messages: List<LogEntry> = emptyList()
 )

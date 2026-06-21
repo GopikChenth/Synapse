@@ -1,102 +1,305 @@
 package com.arcadelabs.synapse.core.network
 
 import com.arcadelabs.synapse.core.domain.models.*
+import com.arcadelabs.synapse.core.prefs.PreferencesHelper
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.*
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.*
 
-class SyncthingApiClient(
+open class SyncthingException(message: String, cause: Throwable? = null) : Exception(message, cause)
+class ApiKeyNotConfiguredException(message: String) : SyncthingException(message)
+class SyncthingUnauthorizedException(message: String, cause: Throwable? = null) : SyncthingException(message, cause)
+class SyncthingNotFoundException(message: String, cause: Throwable? = null) : SyncthingException(message, cause)
+class SyncthingApiException(message: String, cause: Throwable? = null) : SyncthingException(message, cause)
+class SyncthingTimeoutException(message: String, cause: Throwable? = null) : SyncthingException(message, cause)
+
+/**
+ * Thread-safe API client interface for Syncthing.
+ * All functions are non-blocking and safe to be called from any coroutine context (including the Main dispatcher).
+ */
+interface SyncthingApiClient {
+    /**
+     * Retrieves the current system status and resource usage.
+     */
+    suspend fun systemStatus(): SystemStatus
+
+    /**
+     * Retrieves the running Syncthing version information.
+     */
+    suspend fun systemVersion(): SystemVersion
+
+    /**
+     * Retrieves the entire current Syncthing configuration.
+     */
+    suspend fun systemConfig(): SyncthingConfig
+
+    /**
+     * Retrieves the raw JSON configuration as a string.
+     */
+    suspend fun rawSystemConfig(): String
+
+    /**
+     * Overwrites the entire JSON configuration with the provided string.
+     */
+    suspend fun updateRawSystemConfig(configJson: String)
+
+    /**
+     * Updates the Syncthing configuration with the fields modeled in [SyncthingConfig].
+     * Preserves unmodeled fields from the current server configuration.
+     */
+    suspend fun updateSystemConfig(config: SyncthingConfig)
+
+    /**
+     * Retrieves database status metrics for the specified folder.
+     */
+    suspend fun dbStatus(folderId: String): FolderDbStatus
+
+    /**
+     * Retrieves connection status information for all configured devices.
+     */
+    suspend fun systemConnections(): ConnectionsResponse
+
+    /**
+     * Retrieves the synchronization completion status for a specific device and folder.
+     */
+    suspend fun dbCompletion(deviceId: String, folderId: String): DeviceCompletion
+
+    /**
+     * Retrieves the running log messages from the system.
+     */
+    suspend fun systemLog(): SystemLog
+
+    /**
+     * Pauses communication with the specified device.
+     * @return the [HttpResponse] from the server.
+     */
+    suspend fun pauseDevice(deviceId: String): HttpResponse
+
+    /**
+     * Resumes communication with the specified device.
+     * @return the [HttpResponse] from the server.
+     */
+    suspend fun resumeDevice(deviceId: String): HttpResponse
+    
+    /**
+     * Restarts the Syncthing daemon.
+     * @return the [HttpResponse] from the server.
+     */
+    suspend fun restart(): HttpResponse
+
+    /**
+     * Shuts down the Syncthing daemon.
+     * @return the [HttpResponse] from the server.
+     */
+    suspend fun shutdown(): HttpResponse
+}
+
+internal class SyncthingApiClientImpl(
     private val client: HttpClient,
-    private val contextProvider: Any? // Context passed from the platform app
-) {
-    private val baseUrl = "http://127.0.0.1:8384"
-    
-    private var cachedApiKey: String = ""
-    private val apiKey: String
+    private val apiKeyProvider: ApiKeyProvider,
+    private val preferencesHelper: PreferencesHelper
+) : SyncthingApiClient {
+    private val baseUrl: String
         get() {
-            if (cachedApiKey.isEmpty()) {
-                cachedApiKey = getApiKey(contextProvider)
+            val url = preferencesHelper.apiBaseUrl.trim()
+            return if (url.endsWith("/")) url.removeSuffix("/") else url
+        }
+    
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = false
+    }
+    
+    private val apiKeyMutex = kotlinx.coroutines.sync.Mutex()
+    private var cachedApiKey: String? = null
+
+    private suspend fun getOrResolveApiKey(): String {
+        val prefKey = preferencesHelper.apiKey.trim()
+        if (prefKey.isNotEmpty()) {
+            return prefKey
+        }
+        var key = cachedApiKey
+        if (key == null) {
+            apiKeyMutex.withLock {
+                key = cachedApiKey
+                if (key == null) {
+                    val resolved = apiKeyProvider.getApiKey()
+                    if (resolved.isNullOrEmpty()) {
+                        throw ApiKeyNotConfiguredException("Syncthing API key could not be resolved from configuration")
+                    }
+                    cachedApiKey = resolved
+                    preferencesHelper.apiKey = resolved
+                    key = resolved
+                }
             }
-            return cachedApiKey
         }
+        return key!!
+    }
 
-    suspend fun getSystemStatus(): SystemStatus {
+    override suspend fun systemStatus(): SystemStatus {
+        val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/system/status") {
-            header("X-API-Key", apiKey)
+            header("X-API-Key", key)
         }.body()
     }
 
-    suspend fun getSystemVersion(): SystemVersion {
+    override suspend fun systemVersion(): SystemVersion {
+        val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/system/version") {
-            header("X-API-Key", apiKey)
+            header("X-API-Key", key)
         }.body()
     }
 
-    suspend fun getConfig(): SyncthingConfig {
+    override suspend fun systemConfig(): SyncthingConfig {
+        val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/system/config") {
-            header("X-API-Key", apiKey)
+            header("X-API-Key", key)
         }.body()
     }
 
-    suspend fun updateConfig(config: SyncthingConfig) {
-        client.post("$baseUrl/rest/system/config") {
-            header("X-API-Key", apiKey)
+    override suspend fun rawSystemConfig(): String {
+        val key = getOrResolveApiKey()
+        return client.get("$baseUrl/rest/system/config") {
+            header("X-API-Key", key)
+        }.bodyAsText()
+    }
+
+    override suspend fun updateRawSystemConfig(configJson: String) {
+        val key = getOrResolveApiKey()
+        client.put("$baseUrl/rest/system/config") {
+            header("X-API-Key", key)
             contentType(ContentType.Application.Json)
-            setBody(config)
+            setBody(configJson)
         }
     }
+
+    override suspend fun updateSystemConfig(config: SyncthingConfig) {
+        val rawConfigString = rawSystemConfig()
+        val rawConfigJson = json.parseToJsonElement(rawConfigString).jsonObject
+
+        val folderKnownKeys = setOf(
+            "id", "label", "path", "type", "paused",
+            "rescanIntervalS", "fsWatcherEnabled", "devices", "versioning"
+        )
+        val deviceKnownKeys = setOf(
+            "deviceID", "name", "addresses", "paused",
+            "introducer", "autoAcceptFolders", "untrusted"
+        )
+
+        val existingFoldersMap = rawConfigJson["folders"]?.jsonArray?.associateBy {
+            it.jsonObject["id"]?.jsonPrimitive?.content ?: ""
+        } ?: emptyMap()
+
+        val existingDevicesMap = rawConfigJson["devices"]?.jsonArray?.associateBy {
+            it.jsonObject["deviceID"]?.jsonPrimitive?.content ?: ""
+        } ?: emptyMap()
+
+        val patchedFolders = config.folders.map { folder ->
+            val existing = existingFoldersMap[folder.id]
+            if (existing != null) {
+                val updatedFolderJson = json.encodeToJsonElement(Folder.serializer(), folder).jsonObject
+                val newMap = existing.jsonObject.toMutableMap()
+                for (key in folderKnownKeys) {
+                    val newVal = updatedFolderJson[key]
+                    if (newVal != null) {
+                        newMap[key] = newVal
+                    }
+                }
+                JsonObject(newMap)
+            } else {
+                json.encodeToJsonElement(Folder.serializer(), folder).jsonObject
+            }
+        }
+
+        val patchedDevices = config.devices.map { device ->
+            val existing = existingDevicesMap[device.deviceID]
+            if (existing != null) {
+                val updatedDeviceJson = json.encodeToJsonElement(Device.serializer(), device).jsonObject
+                val newMap = existing.jsonObject.toMutableMap()
+                for (key in deviceKnownKeys) {
+                    val newVal = updatedDeviceJson[key]
+                    if (newVal != null) {
+                        newMap[key] = newVal
+                    }
+                }
+                JsonObject(newMap)
+            } else {
+                json.encodeToJsonElement(Device.serializer(), device).jsonObject
+            }
+        }
+
+        val newRootMap = rawConfigJson.toMutableMap()
+        newRootMap["version"] = JsonPrimitive(config.version)
+        newRootMap["folders"] = JsonArray(patchedFolders)
+        newRootMap["devices"] = JsonArray(patchedDevices)
+
+        val patchedConfigJson = JsonObject(newRootMap)
+        updateRawSystemConfig(patchedConfigJson.toString())
+    }
     
-    suspend fun getDbStatus(folderId: String): FolderDbStatus {
+    override suspend fun dbStatus(folderId: String): FolderDbStatus {
+        val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/db/status") {
-            header("X-API-Key", apiKey)
+            header("X-API-Key", key)
             parameter("folder", folderId)
         }.body()
     }
 
-    suspend fun getConnections(): ConnectionsResponse {
+    override suspend fun systemConnections(): ConnectionsResponse {
+        val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/system/connections") {
-            header("X-API-Key", apiKey)
+            header("X-API-Key", key)
         }.body()
     }
 
-    suspend fun getDbCompletion(deviceId: String, folderId: String): DeviceCompletion {
+    override suspend fun dbCompletion(deviceId: String, folderId: String): DeviceCompletion {
+        val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/db/completion") {
-            header("X-API-Key", apiKey)
+            header("X-API-Key", key)
             parameter("device", deviceId)
             parameter("folder", folderId)
         }.body()
     }
 
-    suspend fun getSystemLog(): SystemLog {
+    override suspend fun systemLog(): SystemLog {
+        val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/system/log") {
-            header("X-API-Key", apiKey)
+            header("X-API-Key", key)
         }.body()
     }
 
-    suspend fun pauseDevice(deviceId: String) {
-        client.post("$baseUrl/rest/system/pause") {
-            header("X-API-Key", apiKey)
+    override suspend fun pauseDevice(deviceId: String): HttpResponse {
+        val key = getOrResolveApiKey()
+        return client.post("$baseUrl/rest/system/pause") {
+            header("X-API-Key", key)
             parameter("device", deviceId)
         }
     }
 
-    suspend fun resumeDevice(deviceId: String) {
-        client.post("$baseUrl/rest/system/resume") {
-            header("X-API-Key", apiKey)
+    override suspend fun resumeDevice(deviceId: String): HttpResponse {
+        val key = getOrResolveApiKey()
+        return client.post("$baseUrl/rest/system/resume") {
+            header("X-API-Key", key)
             parameter("device", deviceId)
         }
     }
     
-    suspend fun restart() {
-        client.post("$baseUrl/rest/system/restart") {
-            header("X-API-Key", apiKey)
+    override suspend fun restart(): HttpResponse {
+        val key = getOrResolveApiKey()
+        return client.post("$baseUrl/rest/system/restart") {
+            header("X-API-Key", key)
         }
     }
 
-    suspend fun shutdown() {
-        client.post("$baseUrl/rest/system/shutdown") {
-            header("X-API-Key", apiKey)
+    override suspend fun shutdown(): HttpResponse {
+        val key = getOrResolveApiKey()
+        return client.post("$baseUrl/rest/system/shutdown") {
+            header("X-API-Key", key)
         }
     }
 }

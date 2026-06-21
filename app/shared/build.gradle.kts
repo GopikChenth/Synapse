@@ -24,11 +24,13 @@ kotlin {
     
     js {
         browser()
+        nodejs()
     }
     
     @OptIn(ExperimentalWasmDsl::class)
     wasmJs {
         browser()
+        nodejs()
     }
     
     androidLibrary {
@@ -53,6 +55,8 @@ kotlin {
         }
         commonMain.dependencies {
             api(projects.core)
+            implementation(libs.koin.compose)
+            implementation(libs.koin.compose.viewmodel)
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.material3)
@@ -65,6 +69,7 @@ kotlin {
             // Koin for Compose
             implementation(libs.koin.compose)
             implementation(libs.kotlinx.serialization.json)
+            implementation(libs.qrcode)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

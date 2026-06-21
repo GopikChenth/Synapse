@@ -21,4 +21,7 @@ interface PreferencesHelper {
 
     /** Whether to accept incoming folder shares automatically */
     var autoAcceptFolders: Boolean
+
+    /** Path to Syncthing's config.xml file on disk (platform-dependent) */
+    var configFilePath: String
 }

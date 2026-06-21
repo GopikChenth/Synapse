@@ -17,7 +17,9 @@ class SynapseApp : Application() {
                 coreDiModule, 
                 appDiModule,
                 module {
-                    single<Any> { this@SynapseApp }
+                    single<com.arcadelabs.synapse.core.network.ApiKeyProvider> {
+                        com.arcadelabs.synapse.core.network.AndroidApiKeyProvider(get(), get())
+                    }
                 }
             )
         }

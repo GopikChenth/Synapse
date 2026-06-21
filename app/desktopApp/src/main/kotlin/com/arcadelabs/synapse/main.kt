@@ -8,7 +8,15 @@ import org.koin.core.context.startKoin
 
 fun main() {
     startKoin {
-        modules(coreDiModule, appDiModule)
+        modules(
+            coreDiModule, 
+            appDiModule,
+            org.koin.dsl.module {
+                single<com.arcadelabs.synapse.core.network.ApiKeyProvider> {
+                    com.arcadelabs.synapse.core.network.JvmApiKeyProvider(get())
+                }
+            }
+        )
     }
     application {
         Window(

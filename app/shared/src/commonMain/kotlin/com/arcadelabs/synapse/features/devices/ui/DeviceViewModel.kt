@@ -3,7 +3,7 @@ package com.arcadelabs.synapse.features.devices.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arcadelabs.synapse.core.domain.models.*
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.network.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,7 +51,27 @@ class DeviceViewModel(
             try {
                 updateDeviceStates()
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load devices"
+                _error.value = when (e) {
+                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
+                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+                    is SyncthingApiException -> "API Error: ${e.message}"
+                    else -> {
+                        val msg = e.message ?: ""
+                        if (
+                            msg.contains("connect", ignoreCase = true) ||
+                            msg.contains("127.0.0.1") ||
+                            msg.contains("refused", ignoreCase = true) ||
+                            msg.contains("cert", ignoreCase = true) ||
+                            msg.contains("trust", ignoreCase = true)
+                        ) {
+                            "Synapse is not started"
+                        } else {
+                            msg.ifEmpty { "Failed to load devices" }
+                        }
+                    }
+                }
             } finally {
                 _isLoading.value = false
             }
@@ -73,8 +93,8 @@ class DeviceViewModel(
     }
 
     private suspend fun updateDeviceStates() {
-        val config = apiClient.getConfig()
-        val connectionsResp = apiClient.getConnections()
+        val config = apiClient.systemConfig()
+        val connectionsResp = apiClient.systemConnections()
         val connections = connectionsResp.connections
 
         _folders.value = config.folders
@@ -107,7 +127,18 @@ class DeviceViewModel(
                 }
                 updateDeviceStates()
             } catch (e: Exception) {
-                _error.value = "Failed to update device state: ${e.message}"
+                val msg = e.message ?: ""
+                _error.value = if (
+                    msg.contains("connect", ignoreCase = true) ||
+                    msg.contains("127.0.0.1") ||
+                    msg.contains("refused", ignoreCase = true) ||
+                    msg.contains("cert", ignoreCase = true) ||
+                    msg.contains("trust", ignoreCase = true)
+                ) {
+                    "Synapse is not started"
+                } else {
+                    "Failed to update device state: $msg"
+                }
             }
         }
     }
@@ -127,7 +158,7 @@ class DeviceViewModel(
             _isLoading.value = true
             _error.value = null
             try {
-                val currentConfig = apiClient.getConfig()
+                val currentConfig = apiClient.systemConfig()
                 
                 val newDevice = Device(
                     deviceID = id,
@@ -157,11 +188,31 @@ class DeviceViewModel(
                     folders = updatedFolders
                 )
                 
-                apiClient.updateConfig(updatedConfig)
+                apiClient.updateSystemConfig(updatedConfig)
                 updateDeviceStates()
                 onSuccess()
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to add device"
+                _error.value = when (e) {
+                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
+                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+                    is SyncthingApiException -> "API Error: ${e.message}"
+                    else -> {
+                        val msg = e.message ?: ""
+                        if (
+                            msg.contains("connect", ignoreCase = true) ||
+                            msg.contains("127.0.0.1") ||
+                            msg.contains("refused", ignoreCase = true) ||
+                            msg.contains("cert", ignoreCase = true) ||
+                            msg.contains("trust", ignoreCase = true)
+                        ) {
+                            "Synapse is not started"
+                        } else {
+                            msg.ifEmpty { "Failed to add device" }
+                        }
+                    }
+                }
             } finally {
                 _isLoading.value = false
             }

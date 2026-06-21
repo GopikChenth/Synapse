@@ -23,12 +23,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.koin.compose.koinInject
+import org.koin.compose.viewmodel.koinViewModel
 
 @Composable
 fun StatusScreen(
     onRunBehaviorChanged: ((RunBehavior) -> Unit)? = null,
-    viewModel: StatusViewModel = koinInject()
+    viewModel: StatusViewModel = koinViewModel()
 ) {
     val uiState by viewModel.statusState.collectAsState()
     val runBehavior by viewModel.runBehavior.collectAsState()

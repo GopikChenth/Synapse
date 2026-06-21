@@ -1,27 +1,28 @@
 package com.arcadelabs.synapse.core.domain.models
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
 data class FolderDeviceReference(
-    val deviceID: String
+    @SerialName("deviceID") val deviceID: String
 )
 
 @Serializable
 data class FolderVersioning(
-    val type: String = "none",
-    val params: Map<String, String> = emptyMap()
+    @SerialName("type") val type: String = "none",
+    @SerialName("params") val params: Map<String, String> = emptyMap()
 )
 
 @Serializable
 data class Folder(
-    val id: String,
-    val label: String = "",
-    val path: String = "",
-    val type: String = "sendreceive",
-    val paused: Boolean = false,
-    val rescanIntervalS: Long = 3600,
-    val fsWatcherEnabled: Boolean = true,
-    val devices: List<FolderDeviceReference> = emptyList(),
-    val versioning: FolderVersioning = FolderVersioning()
+    @SerialName("id") val id: String,
+    @SerialName("label") val label: String = "",
+    @SerialName("path") val path: String = "",
+    @SerialName("type") val type: String = "sendreceive",
+    @SerialName("paused") val paused: Boolean = false,
+    @SerialName("rescanIntervalS") val rescanIntervalS: Int = 3600,
+    @SerialName("fsWatcherEnabled") val fsWatcherEnabled: Boolean = true,
+    @SerialName("devices") val devices: List<FolderDeviceReference> = emptyList(),
+    @SerialName("versioning") val versioning: FolderVersioning = FolderVersioning()
 )

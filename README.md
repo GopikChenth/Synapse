@@ -52,3 +52,14 @@ Learn more about [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-mu
 
 We would appreciate your feedback on Compose/Web and Kotlin/Wasm in the public Slack channel [#compose-web](https://slack-chats.kotlinlang.org/c/compose-web).
 If you face any issues, please report them on [YouTrack](https://youtrack.jetbrains.com/newIssue?project=CMP).
+
+---
+
+### Web Deployment Constraints (CORS & Mixed-Content)
+
+When building and running the JS/WasmJS web application, be aware of the following web browser security constraints:
+
+1. **CORS (Cross-Origin Resource Sharing)**: By default, the Syncthing daemon does not send CORS headers in its REST responses. This prevents browsers from making REST queries to Syncthing from a different origin (e.g. `http://localhost:8080` where Synapse runs).
+   - **Workaround**: You must either configure Syncthing to send CORS headers, run the Synapse web app as a browser extension with host permissions, or serve the web app behind a reverse proxy that matches Syncthing's origin.
+2. **Mixed-Content Rules**: Modern browsers block insecure HTTP requests (like local Syncthing `http://127.0.0.1:8384`) from pages served over secure HTTPS.
+   - **Workaround**: If Synapse is hosted on a secure site (HTTPS), you must configure Syncthing to use HTTPS (with a valid certificate, or accept the self-signed certificate warning in another tab first).

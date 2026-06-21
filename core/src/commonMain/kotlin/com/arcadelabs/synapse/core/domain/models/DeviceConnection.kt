@@ -1,26 +1,30 @@
 package com.arcadelabs.synapse.core.domain.models
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
 data class DeviceConnection(
-    val address: String = "",
-    val at: String = "",
-    val clientVersion: String = "",
-    val connected: Boolean = false,
-    val type: String = "",
-    val inBytesTotal: Long = 0,
-    val outBytesTotal: Long = 0
+    @SerialName("address") val address: String = "",
+    /**
+     * ISO-8601 formatted timestamp indicating when the connection status was last updated.
+     */
+    @SerialName("at") val at: String = "",
+    @SerialName("clientVersion") val clientVersion: String = "",
+    @SerialName("connected") val connected: Boolean = false,
+    @SerialName("type") val type: String = "",
+    @SerialName("inBytesTotal") val inBytesTotal: Long = 0,
+    @SerialName("outBytesTotal") val outBytesTotal: Long = 0
 )
 
 @Serializable
 data class TotalConnection(
-    val inBytesTotal: Long = 0,
-    val outBytesTotal: Long = 0
+    @SerialName("inBytesTotal") val inBytesTotal: Long = 0,
+    @SerialName("outBytesTotal") val outBytesTotal: Long = 0
 )
 
 @Serializable
 data class ConnectionsResponse(
-    val connections: Map<String, DeviceConnection> = emptyMap(),
-    val total: TotalConnection = TotalConnection()
+    @SerialName("connections") val connections: Map<String, DeviceConnection> = emptyMap(),
+    @SerialName("total") val total: TotalConnection = TotalConnection()
 )

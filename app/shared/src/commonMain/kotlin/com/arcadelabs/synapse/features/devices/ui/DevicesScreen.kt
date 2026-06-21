@@ -13,11 +13,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.arcadelabs.synapse.core.designsystem.DevicesIcon
-import org.koin.compose.koinInject
+import org.koin.compose.viewmodel.koinViewModel
 
 @Composable
 fun DevicesScreen(
-    viewModel: DeviceViewModel = koinInject()
+    viewModel: DeviceViewModel = koinViewModel()
 ) {
     val devices by viewModel.devices.collectAsState()
     val folders by viewModel.folders.collectAsState()

@@ -16,11 +16,13 @@ kotlin {
     
     js {
         browser()
+        nodejs()
     }
     
     @OptIn(ExperimentalWasmDsl::class)
     wasmJs {
         browser()
+        nodejs()
     }
     
     androidLibrary {
@@ -56,11 +58,19 @@ kotlin {
 
             // Ktor HttpClient
             api(libs.ktor.client.core)
+            implementation(libs.ktor.client.logging)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.kotlinx.json)
 
             // Serialization
             implementation(libs.kotlinx.serialization.json)
+
+            // Coroutines
+            implementation(libs.kotlinx.coroutines.core)
+
+            // Settings / Preferences
+            implementation("com.russhwolf:multiplatform-settings:1.3.0")
+            implementation("com.russhwolf:multiplatform-settings-no-arg:1.3.0")
         }
         androidMain.dependencies {
             // Ktor engine for Android/JVM

@@ -2,7 +2,7 @@ package com.arcadelabs.synapse.features.folders.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.network.*
 import com.arcadelabs.synapse.core.domain.models.Folder
 import com.arcadelabs.synapse.core.domain.models.Device
 import com.arcadelabs.synapse.core.domain.models.FolderDeviceReference
@@ -36,7 +36,7 @@ class FolderViewModel(
         viewModelScope.launch {
             while (isActive) {
                 try {
-                    val config = apiClient.getConfig()
+                    val config = apiClient.systemConfig()
                     _foldersState.value = config.folders
                     _devicesState.value = config.devices
                     _error.value = null
@@ -53,11 +53,31 @@ class FolderViewModel(
             _isLoading.value = true
             _error.value = null
             try {
-                val config = apiClient.getConfig()
+                val config = apiClient.systemConfig()
                 _foldersState.value = config.folders
                 _devicesState.value = config.devices
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load configuration"
+                _error.value = when (e) {
+                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
+                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+                    is SyncthingApiException -> "API Error: ${e.message}"
+                    else -> {
+                        val msg = e.message ?: ""
+                        if (
+                            msg.contains("connect", ignoreCase = true) ||
+                            msg.contains("127.0.0.1") ||
+                            msg.contains("refused", ignoreCase = true) ||
+                            msg.contains("cert", ignoreCase = true) ||
+                            msg.contains("trust", ignoreCase = true)
+                        ) {
+                            "Synapse is not started"
+                        } else {
+                            msg.ifEmpty { "Failed to load configuration" }
+                        }
+                    }
+                }
             } finally {
                 _isLoading.value = false
             }
@@ -79,7 +99,7 @@ class FolderViewModel(
             _isLoading.value = true
             _error.value = null
             try {
-                val currentConfig = apiClient.getConfig()
+                val currentConfig = apiClient.systemConfig()
                 val newFolder = Folder(
                     id = id,
                     label = label,
@@ -93,11 +113,31 @@ class FolderViewModel(
                 val updatedFolders = currentConfig.folders + newFolder
                 val updatedConfig = currentConfig.copy(folders = updatedFolders)
                 
-                apiClient.updateConfig(updatedConfig)
+                apiClient.updateSystemConfig(updatedConfig)
                 loadFolders() // Refresh our flows
                 onSuccess()
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to create folder"
+                _error.value = when (e) {
+                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
+                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+                    is SyncthingApiException -> "API Error: ${e.message}"
+                    else -> {
+                        val msg = e.message ?: ""
+                        if (
+                            msg.contains("connect", ignoreCase = true) ||
+                            msg.contains("127.0.0.1") ||
+                            msg.contains("refused", ignoreCase = true) ||
+                            msg.contains("cert", ignoreCase = true) ||
+                            msg.contains("trust", ignoreCase = true)
+                        ) {
+                            "Synapse is not started"
+                        } else {
+                            msg.ifEmpty { "Failed to create folder" }
+                        }
+                    }
+                }
             } finally {
                 _isLoading.value = false
             }

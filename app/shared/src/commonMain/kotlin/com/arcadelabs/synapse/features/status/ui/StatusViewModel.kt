@@ -3,7 +3,7 @@ package com.arcadelabs.synapse.features.status.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arcadelabs.synapse.core.domain.models.*
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.network.*
 import kotlin.time.TimeSource
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,7 +68,27 @@ class StatusViewModel(
                 updateStatus()
                 loadLogs()
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load system status"
+                _error.value = when (e) {
+                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
+                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+                    is SyncthingApiException -> "API Error: ${e.message}"
+                    else -> {
+                        val msg = e.message ?: ""
+                        if (
+                            msg.contains("connect", ignoreCase = true) ||
+                            msg.contains("127.0.0.1") ||
+                            msg.contains("refused", ignoreCase = true) ||
+                            msg.contains("cert", ignoreCase = true) ||
+                            msg.contains("trust", ignoreCase = true)
+                        ) {
+                            "Synapse is not started"
+                        } else {
+                            msg.ifEmpty { "Failed to load system status" }
+                        }
+                    }
+                }
             } finally {
                 _isLoading.value = false
             }
@@ -91,9 +111,9 @@ class StatusViewModel(
 
     private suspend fun updateStatus() {
         try {
-            val systemStatus = apiClient.getSystemStatus()
-            val version = apiClient.getSystemVersion()
-            val connectionsResp = apiClient.getConnections()
+            val systemStatus = apiClient.systemStatus()
+            val version = apiClient.systemVersion()
+            val connectionsResp = apiClient.systemConnections()
             
             val elapsed = lastMark.elapsedNow()
             lastMark = timeSource.markNow()
@@ -120,7 +140,7 @@ class StatusViewModel(
                 allocBytes = systemStatus.alloc,
                 sysBytes = systemStatus.sys,
                 guiAddress = systemStatus.guiAddressUsed,
-                version = version.version,
+                version = version.currentVersion,
                 downloadSpeed = dlSpeed,
                 uploadSpeed = ulSpeed,
                 totalDownload = currentIn,
@@ -135,7 +155,7 @@ class StatusViewModel(
     fun loadLogs() {
         viewModelScope.launch {
             try {
-                val systemLog = apiClient.getSystemLog()
+                val systemLog = apiClient.systemLog()
                 _logs.value = systemLog.messages
             } catch (e: Exception) {
                 // Ignore log load issues
@@ -148,7 +168,27 @@ class StatusViewModel(
             try {
                 apiClient.restart()
             } catch (e: Exception) {
-                _error.value = "Failed to restart: ${e.message}"
+                _error.value = when (e) {
+                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
+                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+                    is SyncthingApiException -> "API Error: ${e.message}"
+                    else -> {
+                        val msg = e.message ?: ""
+                        if (
+                            msg.contains("connect", ignoreCase = true) ||
+                            msg.contains("127.0.0.1") ||
+                            msg.contains("refused", ignoreCase = true) ||
+                            msg.contains("cert", ignoreCase = true) ||
+                            msg.contains("trust", ignoreCase = true)
+                        ) {
+                            "Synapse is not started"
+                        } else {
+                            "Failed to restart: $msg"
+                        }
+                    }
+                }
             }
         }
     }
@@ -158,7 +198,27 @@ class StatusViewModel(
             try {
                 apiClient.shutdown()
             } catch (e: Exception) {
-                _error.value = "Failed to shutdown: ${e.message}"
+                _error.value = when (e) {
+                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
+                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+                    is SyncthingApiException -> "API Error: ${e.message}"
+                    else -> {
+                        val msg = e.message ?: ""
+                        if (
+                            msg.contains("connect", ignoreCase = true) ||
+                            msg.contains("127.0.0.1") ||
+                            msg.contains("refused", ignoreCase = true) ||
+                            msg.contains("cert", ignoreCase = true) ||
+                            msg.contains("trust", ignoreCase = true)
+                        ) {
+                            "Synapse is not started"
+                        } else {
+                            "Failed to shutdown: $msg"
+                        }
+                    }
+                }
             }
         }
     }

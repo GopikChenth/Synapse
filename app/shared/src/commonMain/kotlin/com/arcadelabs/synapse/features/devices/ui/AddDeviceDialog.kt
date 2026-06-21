@@ -25,14 +25,14 @@ import androidx.compose.ui.unit.sp
 import com.arcadelabs.synapse.core.designsystem.DevicesIcon
 import com.arcadelabs.synapse.core.designsystem.FolderIcon
 import com.arcadelabs.synapse.core.designsystem.QrCodeIcon
-import org.koin.compose.koinInject
+import org.koin.compose.viewmodel.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddDeviceDialog(
     onDismiss: () -> Unit,
     scanQrCode: ((onQrScanned: (String) -> Unit) -> Unit)? = null,
-    viewModel: DeviceViewModel = koinInject()
+    viewModel: DeviceViewModel = koinViewModel()
 ) {
     val folders by viewModel.folders.collectAsState()
 
