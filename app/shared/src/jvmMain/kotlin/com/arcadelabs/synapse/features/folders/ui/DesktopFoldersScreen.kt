@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import com.arcadelabs.synapse.core.designsystem.FolderIcon
 import com.arcadelabs.synapse.features.status.ui.StatusViewModel
 import org.koin.compose.viewmodel.koinViewModel
+import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 
 private fun generateRandomFolderId(): String {
     val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -117,6 +118,9 @@ fun DesktopFoldersScreen(
 fun DesktopCreateFolderDialog(
     onDismiss: () -> Unit,
     selectDirectory: ((onPathSelected: (String) -> Unit) -> Unit)? = null,
+    prefilledFolderId: String = "",
+    prefilledFolderLabel: String = "",
+    prefilledSharedDevices: List<String> = emptyList(),
     viewModel: FolderViewModel = koinViewModel(),
     statusViewModel: StatusViewModel = koinViewModel()
 ) {
@@ -128,16 +132,16 @@ fun DesktopCreateFolderDialog(
     // Only show remote devices — exclude this device itself and localhost
     val myId = statusState.myId
     val remoteDevices = allDevices.filter { device ->
-        device.deviceID != myId &&
+        device.deviceID.normalizeDeviceId() != myId.normalizeDeviceId() &&
         !device.name.equals("localhost", ignoreCase = true) &&
         !device.name.equals("this device", ignoreCase = true)
     }
 
     // Form States
-    var folderLabel by remember { mutableStateOf("") }
-    var folderId by remember { mutableStateOf(generateRandomFolderId()) }
+    var folderLabel by remember { mutableStateOf(prefilledFolderLabel) }
+    var folderId by remember { mutableStateOf(prefilledFolderId.ifEmpty { generateRandomFolderId() }) }
     var folderPath by remember { mutableStateOf("") }
-    val selectedDevices = remember { mutableStateListOf<String>() }
+    val selectedDevices = remember { mutableStateListOf<String>().apply { addAll(prefilledSharedDevices.map { it.normalizeDeviceId() }) } }
     var folderType by remember { mutableStateOf("sendreceive") }
     var watchForChanges by remember { mutableStateOf(true) }
     var pauseFolder by remember { mutableStateOf(false) }
@@ -273,13 +277,13 @@ fun DesktopCreateFolderDialog(
                         color = MaterialTheme.colorScheme.primary
                     )
                     remoteDevices.forEach { device ->
-                        val isChecked = selectedDevices.contains(device.deviceID)
+                        val isChecked = selectedDevices.contains(device.deviceID.normalizeDeviceId())
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    if (isChecked) selectedDevices.remove(device.deviceID)
-                                    else selectedDevices.add(device.deviceID)
+                                    if (isChecked) selectedDevices.remove(device.deviceID.normalizeDeviceId())
+                                    else selectedDevices.add(device.deviceID.normalizeDeviceId())
                                 }
                                 .padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -293,8 +297,8 @@ fun DesktopCreateFolderDialog(
                             Switch(
                                 checked = isChecked,
                                 onCheckedChange = { checked ->
-                                    if (checked) selectedDevices.add(device.deviceID)
-                                    else selectedDevices.remove(device.deviceID)
+                                    if (checked) selectedDevices.add(device.deviceID.normalizeDeviceId())
+                                    else selectedDevices.remove(device.deviceID.normalizeDeviceId())
                                 },
                                 modifier = Modifier.scale(0.8f)
                             )

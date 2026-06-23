@@ -22,3 +22,4 @@ syncthing-main/
 *.zip
 **/bin/
 **/out/
+reference_syncthing_fork

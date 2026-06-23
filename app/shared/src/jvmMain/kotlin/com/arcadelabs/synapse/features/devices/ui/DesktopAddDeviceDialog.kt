@@ -27,6 +27,7 @@ import com.arcadelabs.synapse.core.designsystem.DevicesIcon
 import com.arcadelabs.synapse.core.designsystem.FolderIcon
 import com.arcadelabs.synapse.core.designsystem.QrCodeIcon
 import org.koin.compose.viewmodel.koinViewModel
+import com.arcadelabs.synapse.core.domain.models.parseSyncthingQr
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -118,7 +119,7 @@ fun DesktopAddDeviceDialog(
                         if (scanQrCode != null) {
                             IconButton(onClick = {
                                 scanQrCode.invoke { scannedId ->
-                                    deviceId = scannedId
+                                    deviceId = scannedId.parseSyncthingQr()
                                 }
                             }) {
                                 Icon(

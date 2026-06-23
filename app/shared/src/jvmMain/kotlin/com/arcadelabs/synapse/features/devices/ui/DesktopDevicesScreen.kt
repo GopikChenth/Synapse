@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import com.arcadelabs.synapse.core.designsystem.DevicesIcon
 import org.koin.compose.viewmodel.koinViewModel
+import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 
 @Composable
 fun DesktopDevicesScreen(
@@ -143,7 +144,7 @@ fun DesktopDeviceItemCard(
 ) {
     val sharedFolders = remember(device.id, folders) {
         folders.filter { folder ->
-            folder.devices.any { it.deviceID == device.id }
+            folder.devices.any { it.deviceID.normalizeDeviceId() == device.id.normalizeDeviceId() }
         }.map { it.label.ifEmpty { it.id } }
     }
 

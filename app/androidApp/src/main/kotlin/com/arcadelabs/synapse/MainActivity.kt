@@ -21,9 +21,17 @@ import androidx.core.content.ContextCompat
 import com.arcadelabs.synapse.service.SyncthingService
 import com.arcadelabs.synapse.features.status.ui.RunBehavior
 
-import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 
 class MainActivity : ComponentActivity() {
+
+    private var onQrScannedCallback: ((String) -> Unit)? = null
+    private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
+        if (result.contents != null) {
+            onQrScannedCallback?.invoke(result.contents)
+        }
+    }
 
     private var onDirectorySelectedCallback: ((String) -> Unit)? = null
     private val dirPickerLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -75,18 +83,17 @@ class MainActivity : ComponentActivity() {
                     dirPickerLauncher.launch(null)
                 },
                 scanQrCode = { onQrScanned ->
-                    try {
-                        val scanner = GmsBarcodeScanning.getClient(this)
-                        scanner.startScan()
-                            .addOnSuccessListener { barcode ->
-                                barcode.rawValue?.let { onQrScanned(it) }
-                            }
-                            .addOnFailureListener { e ->
-                                e.printStackTrace()
-                            }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                    onQrScannedCallback = onQrScanned
+                    val options = ScanOptions().apply {
+                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        setPrompt("Scan a Syncthing QR Code")
+                        setCameraId(0)
+                        setBeepEnabled(false)
+                        setBarcodeImageEnabled(true)
+                        setOrientationLocked(true)
+                        setCaptureActivity(PortraitCaptureActivity::class.java)
                     }
+                    qrScanLauncher.launch(options)
                 },
                 openUrl = { url ->
                     try {

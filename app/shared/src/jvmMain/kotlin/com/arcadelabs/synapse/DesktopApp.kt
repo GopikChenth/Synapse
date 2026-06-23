@@ -20,6 +20,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arcadelabs.synapse.core.designsystem.*
+import com.arcadelabs.synapse.core.domain.models.PendingFolder
+import com.arcadelabs.synapse.core.domain.models.PendingFolderOffer
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
 import com.arcadelabs.synapse.features.devices.ui.DesktopDevicesScreen
 import com.arcadelabs.synapse.features.devices.ui.DesktopAddDeviceDialog
@@ -99,6 +101,9 @@ fun DesktopApp(
     var prefilledDeviceName by remember { mutableStateOf("") }
     var isRestartConfirmOpen by remember { mutableStateOf(false) }
     var isShutdownConfirmOpen by remember { mutableStateOf(false) }
+    var prefilledFolderId by remember { mutableStateOf("") }
+    var prefilledFolderLabel by remember { mutableStateOf("") }
+    var prefilledFolderSharedDevices by remember { mutableStateOf<List<String>>(emptyList()) }
 
     var localDeviceId by remember { mutableStateOf("") }
     val coroutineScope = rememberCoroutineScope()
@@ -221,8 +226,16 @@ fun DesktopApp(
             // Create Folder Dialog
             if (isCreateFolderDialogOpen) {
                 DesktopCreateFolderDialog(
-                    onDismiss = { isCreateFolderDialogOpen = false },
-                    selectDirectory = selectDirectory
+                    onDismiss = {
+                        isCreateFolderDialogOpen = false
+                        prefilledFolderId = ""
+                        prefilledFolderLabel = ""
+                        prefilledFolderSharedDevices = emptyList()
+                    },
+                    selectDirectory = selectDirectory,
+                    prefilledFolderId = prefilledFolderId,
+                    prefilledFolderLabel = prefilledFolderLabel,
+                    prefilledSharedDevices = prefilledFolderSharedDevices
                 )
             }
 
@@ -344,6 +357,50 @@ fun DesktopApp(
                         TextButton(
                             onClick = {
                                 deviceViewModel.dismissPendingDevice(pendingId)
+                            }
+                        ) {
+                            Text("Dismiss", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                )
+            }
+
+            // Incoming Folder Request Dialog Overlay
+            val pendingFolders by deviceViewModel.pendingFolders.collectAsState()
+            if (pendingFolders.isNotEmpty() && !isCreateFolderDialogOpen) {
+                val (folderId, pendingOffer) = pendingFolders.entries.first()
+                val offeringDeviceId = pendingOffer.offeredBy.keys.firstOrNull() ?: ""
+                val folderDetails = pendingOffer.offeredBy[offeringDeviceId] ?: PendingFolder()
+                AlertDialog(
+                    onDismissRequest = { /* Keep open until action taken */ },
+                    title = { Text("Folder Share Offered") },
+                    text = {
+                        Column {
+                            Text("A remote device wants to share a folder with you:")
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text("Folder Label: ${folderDetails.label.ifEmpty { "Unnamed Folder" }}", fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Folder ID: $folderId", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Offered By Device ID: ${offeringDeviceId.chunked(4).joinToString(" ")}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                prefilledFolderId = folderId
+                                prefilledFolderLabel = folderDetails.label
+                                prefilledFolderSharedDevices = listOf(offeringDeviceId)
+                                isCreateFolderDialogOpen = true
+                            }
+                        ) {
+                            Text("Add Folder")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                deviceViewModel.dismissPendingFolder(folderId)
                             }
                         ) {
                             Text("Dismiss", color = MaterialTheme.colorScheme.error)

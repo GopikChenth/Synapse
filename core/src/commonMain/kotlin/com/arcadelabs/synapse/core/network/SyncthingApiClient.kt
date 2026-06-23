@@ -124,6 +124,16 @@ interface SyncthingApiClient {
      * Dismisses the pending connection request from the specified device.
      */
     suspend fun dismissPendingDevice(deviceId: String): HttpResponse
+
+    /**
+     * Retrieves the map of pending folder shares offered by remote devices.
+     */
+    suspend fun getPendingFolders(): Map<String, PendingFolderOffer>
+
+    /**
+     * Dismisses/rejects the pending folder share request.
+     */
+    suspend fun dismissPendingFolder(folderId: String): HttpResponse
 }
 
 internal class SyncthingApiClientImpl(
@@ -336,12 +346,17 @@ internal class SyncthingApiClientImpl(
 
     override suspend fun scan(folderId: String?): HttpResponse {
         val key = getOrResolveApiKey()
-        return client.post("$baseUrl/rest/db/scan") {
+        val response = client.post("$baseUrl/rest/db/scan") {
             header("X-API-Key", key)
             if (folderId != null) {
                 parameter("folder", folderId)
             }
         }
+        if (response.status.value !in 200..299) {
+            val errorText = try { response.bodyAsText() } catch (_: Exception) { "" }
+            throw SyncthingApiException("Failed to scan folder: HTTP ${response.status.value} - ${errorText.trim()}")
+        }
+        return response
     }
 
     override suspend fun deleteFolder(folderId: String) {
@@ -376,6 +391,21 @@ internal class SyncthingApiClientImpl(
         return client.delete("$baseUrl/rest/cluster/pending/devices") {
             header("X-API-Key", key)
             parameter("device", deviceId)
+        }
+    }
+
+    override suspend fun getPendingFolders(): Map<String, PendingFolderOffer> {
+        val key = getOrResolveApiKey()
+        return client.get("$baseUrl/rest/cluster/pending/folders") {
+            header("X-API-Key", key)
+        }.body()
+    }
+
+    override suspend fun dismissPendingFolder(folderId: String): HttpResponse {
+        val key = getOrResolveApiKey()
+        return client.delete("$baseUrl/rest/cluster/pending/folders") {
+            header("X-API-Key", key)
+            parameter("folder", folderId)
         }
     }
 }

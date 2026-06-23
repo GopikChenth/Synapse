@@ -31,6 +31,19 @@ class MockSyncthingApiClient(
         )
     )
 
+    private val pendingFoldersMap = mutableMapOf<String, PendingFolderOffer>(
+        "mock-folder-id-abc" to PendingFolderOffer(
+            offeredBy = mapOf(
+                "PENDING-DEVICE-ID-99999-88888-ZZZZZ-YYYYY-XXXXX" to PendingFolder(
+                    label = "Mock Shared Folder",
+                    time = "2026-06-23T22:07:16Z",
+                    receiveEncrypted = false,
+                    remoteType = "sendreceive"
+                )
+            )
+        )
+    )
+
     init {
         devicesList.add(
             Device(
@@ -175,6 +188,15 @@ class MockSyncthingApiClient(
 
     override suspend fun dismissPendingDevice(deviceId: String): HttpResponse {
         pendingDevicesMap.remove(deviceId)
+        return dummyResponse()
+    }
+
+    override suspend fun getPendingFolders(): Map<String, PendingFolderOffer> {
+        return pendingFoldersMap.toMap()
+    }
+
+    override suspend fun dismissPendingFolder(folderId: String): HttpResponse {
+        pendingFoldersMap.remove(folderId)
         return dummyResponse()
     }
 

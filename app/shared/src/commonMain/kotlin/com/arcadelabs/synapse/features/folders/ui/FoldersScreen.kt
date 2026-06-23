@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.arcadelabs.synapse.core.designsystem.FolderIcon
 import org.koin.compose.viewmodel.koinViewModel
+import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 
 fun generateRandomFolderId(): String {
     val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -117,7 +119,8 @@ fun FoldersScreen(
                             FolderCard(
                                 folder = folder,
                                 onOpenClick = { openFolder?.invoke(folder.path) },
-                                onDeleteFolder = { viewModel.deleteFolder(it) }
+                                onDeleteFolder = { viewModel.deleteFolder(it) },
+                                onRescanFolder = { viewModel.rescanFolder(it) }
                             )
                         }
                     }
@@ -132,16 +135,19 @@ fun FoldersScreen(
 fun CreateFolderSheet(
     onDismiss: () -> Unit,
     selectDirectory: ((onPathSelected: (String) -> Unit) -> Unit)? = null,
+    prefilledFolderId: String = "",
+    prefilledFolderLabel: String = "",
+    prefilledSharedDevices: List<String> = emptyList(),
     viewModel: FolderViewModel = koinViewModel()
 ) {
     val devices by viewModel.devicesState.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
 
-    var folderLabel by remember { mutableStateOf("") }
-    var folderId by remember { mutableStateOf(generateRandomFolderId()) }
+    var folderLabel by remember { mutableStateOf(prefilledFolderLabel) }
+    var folderId by remember { mutableStateOf(prefilledFolderId.ifEmpty { generateRandomFolderId() }) }
     var folderPath by remember { mutableStateOf("") }
-    val selectedDevices = remember { mutableStateListOf<String>() }
+    val selectedDevices = remember { mutableStateListOf<String>().apply { addAll(prefilledSharedDevices.map { it.normalizeDeviceId() }) } }
     var folderType by remember { mutableStateOf("sendreceive") }
     var watchForChanges by remember { mutableStateOf(true) }
     var pauseFolder by remember { mutableStateOf(false) }
@@ -322,13 +328,13 @@ fun CreateFolderSheet(
                         color = MaterialTheme.colorScheme.primary
                     )
                     devices.forEach { device ->
-                        val isChecked = selectedDevices.contains(device.deviceID)
+                        val isChecked = selectedDevices.contains(device.deviceID.normalizeDeviceId())
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    if (isChecked) selectedDevices.remove(device.deviceID)
-                                    else selectedDevices.add(device.deviceID)
+                                    if (isChecked) selectedDevices.remove(device.deviceID.normalizeDeviceId())
+                                    else selectedDevices.add(device.deviceID.normalizeDeviceId())
                                 }
                                 .padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -342,8 +348,8 @@ fun CreateFolderSheet(
                             Switch(
                                 checked = isChecked,
                                 onCheckedChange = { checked ->
-                                    if (checked) selectedDevices.add(device.deviceID)
-                                    else selectedDevices.remove(device.deviceID)
+                                    if (checked) selectedDevices.add(device.deviceID.normalizeDeviceId())
+                                    else selectedDevices.remove(device.deviceID.normalizeDeviceId())
                                 },
                                 modifier = Modifier.scale(0.85f)
                             )
@@ -451,8 +457,18 @@ fun CreateFolderSheet(
 fun CreateFolderDialog(
     onDismiss: () -> Unit,
     selectDirectory: ((onPathSelected: (String) -> Unit) -> Unit)? = null,
+    prefilledFolderId: String = "",
+    prefilledFolderLabel: String = "",
+    prefilledSharedDevices: List<String> = emptyList(),
     viewModel: FolderViewModel = koinViewModel()
-) = CreateFolderSheet(onDismiss = onDismiss, selectDirectory = selectDirectory, viewModel = viewModel)
+) = CreateFolderSheet(
+    onDismiss = onDismiss,
+    selectDirectory = selectDirectory,
+    prefilledFolderId = prefilledFolderId,
+    prefilledFolderLabel = prefilledFolderLabel,
+    prefilledSharedDevices = prefilledSharedDevices,
+    viewModel = viewModel
+)
 
 @Composable
 fun FormField(
@@ -486,7 +502,8 @@ fun FormField(
 fun FolderCard(
     folder: com.arcadelabs.synapse.core.domain.models.Folder,
     onOpenClick: () -> Unit,
-    onDeleteFolder: (String) -> Unit = {}
+    onDeleteFolder: (String) -> Unit = {},
+    onRescanFolder: (String) -> Unit = {}
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -629,6 +646,25 @@ fun FolderCard(
                         },
                         onClick = {},
                         enabled = false
+                    )
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                "Rescan Folder",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Rescan"
+                            )
+                        },
+                        onClick = {
+                            showMenu = false
+                            onRescanFolder(folder.id)
+                        }
                     )
                     HorizontalDivider()
                     // Delete

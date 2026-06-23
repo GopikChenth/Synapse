@@ -13,3 +13,17 @@ data class Device(
     @SerialName("autoAcceptFolders") val autoAcceptFolders: Boolean = false,
     @SerialName("untrusted") val untrusted: Boolean = false
 )
+
+fun String.normalizeDeviceId(): String {
+    return this.replace("-", "").replace(" ", "").uppercase()
+}
+
+fun String.parseSyncthingQr(): String {
+    val cleaned = this.trim()
+    if (cleaned.startsWith("syncthing://", ignoreCase = true)) {
+        val uriPart = cleaned.substring("syncthing://".length)
+        return uriPart.substringBefore("?").substringBefore("/").normalizeDeviceId()
+    }
+    return cleaned.normalizeDeviceId()
+}
+

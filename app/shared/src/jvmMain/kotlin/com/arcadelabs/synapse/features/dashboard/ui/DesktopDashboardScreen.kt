@@ -32,6 +32,7 @@ import com.arcadelabs.synapse.features.status.ui.StatusViewModel
 import com.arcadelabs.synapse.core.domain.models.PendingDevice
 import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
+import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 
@@ -502,7 +503,7 @@ fun ThisDeviceSection(
 ) {
     // Find local device in devices list to resolve its name
     val myId = statusState.myId
-    val localDevice = devices.find { it.id == myId }
+    val localDevice = devices.find { it.id.normalizeDeviceId() == myId.normalizeDeviceId() }
     val localDeviceName = localDevice?.name?.ifEmpty { "This Device" } ?: "This Device"
 
     Card(
@@ -604,7 +605,7 @@ fun RemoteDevicesSection(
 ) {
     val myId = statusState.myId
     val remoteDevices = remember(devices, myId) {
-        devices.filter { it.id != myId && it.name.lowercase() != "localhost" }
+        devices.filter { it.id.normalizeDeviceId() != myId.normalizeDeviceId() && it.name.lowercase() != "localhost" }
     }
     val allPaused = remoteDevices.isNotEmpty() && remoteDevices.all { it.paused }
     val coroutineScope = rememberCoroutineScope()
@@ -642,7 +643,7 @@ fun RemoteDevicesSection(
                     val isExpanded = expandedDeviceId == device.id
                     val sharedFolders = remember(device.id, folders) {
                         folders.filter { folder ->
-                            folder.devices.any { it.deviceID == device.id }
+                            folder.devices.any { it.deviceID.normalizeDeviceId() == device.id.normalizeDeviceId() }
                         }.map { it.label.ifEmpty { it.id } }
                     }
 
@@ -787,7 +788,7 @@ fun RemoteDevicesSection(
                             try {
                                 val current = apiClient.systemConfig()
                                 val updated = current.devices.map {
-                                    if (it.deviceID != myId) it.copy(paused = !allPaused) else it
+                                    if (it.deviceID.normalizeDeviceId() != myId.normalizeDeviceId()) it.copy(paused = !allPaused) else it
                                 }
                                 apiClient.updateSystemConfig(current.copy(devices = updated))
                             } catch (_: Exception) {}

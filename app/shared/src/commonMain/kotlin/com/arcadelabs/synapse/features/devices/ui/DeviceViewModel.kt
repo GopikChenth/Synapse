@@ -39,6 +39,9 @@ class DeviceViewModel(
     private val _pendingDevices = MutableStateFlow<Map<String, PendingDevice>>(emptyMap())
     val pendingDevices: StateFlow<Map<String, PendingDevice>> = _pendingDevices
 
+    private val _pendingFolders = MutableStateFlow<Map<String, PendingFolderOffer>>(emptyMap())
+    val pendingFolders: StateFlow<Map<String, PendingFolderOffer>> = _pendingFolders
+
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
 
@@ -116,6 +119,12 @@ class DeviceViewModel(
             _pendingDevices.value = emptyMap()
         }
 
+        try {
+            _pendingFolders.value = apiClient.getPendingFolders()
+        } catch (e: Exception) {
+            _pendingFolders.value = emptyMap()
+        }
+
         val uiDevices = config.devices.map { device ->
             val conn = connections[device.deviceID]
             DeviceUiModel(
@@ -177,8 +186,9 @@ class DeviceViewModel(
             try {
                 val currentConfig = apiClient.systemConfig()
                 
+                val normalizedId = id.normalizeDeviceId()
                 val newDevice = Device(
-                    deviceID = id,
+                    deviceID = normalizedId,
                     name = name,
                     addresses = addresses,
                     paused = paused,
@@ -189,17 +199,17 @@ class DeviceViewModel(
                 
                 val updatedFolders = currentConfig.folders.map { folder ->
                     if (sharedFolders.contains(folder.id)) {
-                        if (folder.devices.none { it.deviceID == id }) {
-                            folder.copy(devices = folder.devices + FolderDeviceReference(id))
+                        if (folder.devices.none { it.deviceID.normalizeDeviceId() == normalizedId }) {
+                            folder.copy(devices = folder.devices + FolderDeviceReference(normalizedId))
                         } else {
                             folder
                         }
                     } else {
-                        folder.copy(devices = folder.devices.filter { it.deviceID != id })
+                        folder.copy(devices = folder.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId })
                     }
                 }
                 
-                val updatedDevices = currentConfig.devices.filter { it.deviceID != id } + newDevice
+                val updatedDevices = currentConfig.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId } + newDevice
                 val updatedConfig = currentConfig.copy(
                     devices = updatedDevices,
                     folders = updatedFolders
@@ -258,15 +268,38 @@ class DeviceViewModel(
         }
     }
 
+    fun dismissPendingFolder(folderId: String) {
+        viewModelScope.launch {
+            try {
+                apiClient.dismissPendingFolder(folderId)
+                updateDeviceStates()
+            } catch (e: Exception) {
+                val msg = e.message ?: ""
+                _error.value = if (
+                    msg.contains("connect", ignoreCase = true) ||
+                    msg.contains("127.0.0.1") ||
+                    msg.contains("refused", ignoreCase = true) ||
+                    msg.contains("cert", ignoreCase = true) ||
+                    msg.contains("trust", ignoreCase = true)
+                ) {
+                    "Synapse is not started"
+                } else {
+                    "Failed to dismiss pending folder: $msg"
+                }
+            }
+        }
+    }
+
     fun deleteDevice(deviceId: String) {
         viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
             try {
+                val normalizedId = deviceId.normalizeDeviceId()
                 val currentConfig = apiClient.systemConfig()
-                val updatedDevices = currentConfig.devices.filter { it.deviceID != deviceId }
+                val updatedDevices = currentConfig.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId }
                 val updatedFolders = currentConfig.folders.map { folder ->
-                    folder.copy(devices = folder.devices.filter { it.deviceID != deviceId })
+                    folder.copy(devices = folder.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId })
                 }
                 val updatedConfig = currentConfig.copy(
                     devices = updatedDevices,
