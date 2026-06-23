@@ -226,25 +226,14 @@ fun DesktopApp(
                 )
             }
 
-            // Root level Full-screen Add Device Dialog Overlay
-            AnimatedVisibility(
-                visible = isAddDeviceDialogOpen,
-                enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
-                exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background)
-                ) {
-                    DesktopAddDeviceDialog(
-                        onDismiss = { isAddDeviceDialogOpen = false },
-                        scanQrCode = scanQrCode,
-                        prefilledDeviceId = prefilledDeviceId,
-                        prefilledDeviceName = prefilledDeviceName
-                    )
-                }
+            // Add Device Dialog
+            if (isAddDeviceDialogOpen) {
+                DesktopAddDeviceDialog(
+                    onDismiss = { isAddDeviceDialogOpen = false },
+                    scanQrCode = scanQrCode,
+                    prefilledDeviceId = prefilledDeviceId,
+                    prefilledDeviceName = prefilledDeviceName
+                )
             }
 
             // Restart Confirmation Dialog

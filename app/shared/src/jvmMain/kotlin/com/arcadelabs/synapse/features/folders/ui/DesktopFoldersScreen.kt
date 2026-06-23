@@ -597,7 +597,8 @@ fun FolderDetailDialog(
                 })
                 DetailRow("Rescan Interval", "${livFolder.rescanIntervalS}s")
                 DetailRow("File Watcher", if (livFolder.fsWatcherEnabled) "Enabled" else "Disabled")
-                DetailRow("Versioning", livFolder.versioning?.type?.ifEmpty { "none" }?.replaceFirstChar { it.uppercase() } ?: "None")
+                DetailRow("Versioning", livFolder.versioning.type.ifEmpty { "none" }.replaceFirstChar { it.uppercase() })
+
 
                 DetailRow("Shared With", "${livFolder.devices.size} device${if (livFolder.devices.size != 1) "s" else ""}")
                 DetailRow("Status",

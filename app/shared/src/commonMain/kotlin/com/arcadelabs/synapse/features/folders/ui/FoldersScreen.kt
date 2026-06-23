@@ -8,9 +8,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,6 +18,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.arcadelabs.synapse.core.designsystem.FolderIcon
+import com.arcadelabs.synapse.features.devices.ui.DeviceViewModel
+import com.arcadelabs.synapse.features.status.ui.StatusViewModel
 import org.koin.compose.viewmodel.koinViewModel
 
 fun generateRandomFolderId(): String {
@@ -34,92 +34,132 @@ fun FoldersScreen(
     onAddFolderClick: () -> Unit,
     onAddDeviceClick: (String, String) -> Unit = { _, _ -> },
     openFolder: ((String) -> Unit)? = null,
-    viewModel: FolderViewModel = koinViewModel()
+    viewModel: FolderViewModel = koinViewModel(),
+    deviceViewModel: DeviceViewModel = koinViewModel()
 ) {
     val folders by viewModel.foldersState.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
+    val pendingDevices by deviceViewModel.pendingDevices.collectAsState()
 
-    Scaffold(
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = onAddFolderClick,
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Add Folder")
+    Box(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        when {
+            isLoading && folders.isEmpty() -> {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
             }
-        }
-    ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            when {
-                isLoading && folders.isEmpty() -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center)
+            error != null && folders.isEmpty() -> {
+                Column(
+                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = error ?: "An error occurred",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(onClick = { viewModel.loadFolders() }) { Text("Retry") }
+                }
+            }
+            folders.isEmpty() -> {
+                Column(
+                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = FolderIcon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "No folders shared",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Tap + to add your first folder",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     )
                 }
-                error != null && folders.isEmpty() -> {
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = error ?: "An error occurred",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(onClick = { viewModel.loadFolders() }) {
-                            Text("Retry")
+            }
+            else -> {
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    // Pending connection requests banner
+                    if (pendingDevices.isNotEmpty()) {
+                        item {
+                            Surface(
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        "Pending Connection Requests",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                    pendingDevices.forEach { (id, pending) ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    pending.name.ifEmpty { id.take(14) + "\u2026" },
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                )
+                                                Text(
+                                                    id.take(18) + "\u2026",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.6f)
+                                                )
+                                            }
+                                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                TextButton(
+                                                    onClick = { onAddDeviceClick(id, pending.name) },
+                                                    colors = ButtonDefaults.textButtonColors(
+                                                        contentColor = MaterialTheme.colorScheme.primary
+                                                    )
+                                                ) { Text("Accept") }
+                                                TextButton(
+                                                    onClick = { deviceViewModel.dismissPendingDevice(id) },
+                                                    colors = ButtonDefaults.textButtonColors(
+                                                        contentColor = MaterialTheme.colorScheme.error
+                                                    )
+                                                ) { Text("Dismiss") }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                }
-                folders.isEmpty() -> {
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Icon(
-                            imageVector = FolderIcon,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                            modifier = Modifier.size(64.dp)
+
+                    // Folder cards
+                    items(folders) { folder ->
+                        FolderCard(
+                            folder = folder,
+                            onOpenClick = { openFolder?.invoke(folder.path) },
+                            onDeleteFolder = { viewModel.deleteFolder(it) },
+                            viewModel = viewModel
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "No folders shared",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Tap + to add your first folder",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                        )
-                    }
-                }
-                else -> {
-                    LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(folders) { folder ->
-                            FolderCard(
-                                folder = folder,
-                                onOpenClick = { openFolder?.invoke(folder.path) },
-                                onDeleteFolder = { viewModel.deleteFolder(it) }
-                            )
-                        }
                     }
                 }
             }
@@ -127,16 +167,30 @@ fun FoldersScreen(
     }
 }
 
+// ─── Add Folder Bottom Sheet ──────────────────────────────────────────────────
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateFolderSheet(
     onDismiss: () -> Unit,
     selectDirectory: ((onPathSelected: (String) -> Unit) -> Unit)? = null,
-    viewModel: FolderViewModel = koinViewModel()
+    viewModel: FolderViewModel = koinViewModel(),
+    statusViewModel: StatusViewModel = koinViewModel()
 ) {
-    val devices by viewModel.devicesState.collectAsState()
+    val allDevices by viewModel.devicesState.collectAsState()
+    val statusState by statusViewModel.statusState.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
+
+    // Filter out the local device and localhost
+    val myId = statusState.myId
+    val remoteDevices = remember(allDevices, myId) {
+        allDevices.filter { device ->
+            device.deviceID != myId &&
+            !device.name.equals("localhost", ignoreCase = true) &&
+            !device.name.equals("this device", ignoreCase = true)
+        }
+    }
 
     var folderLabel by remember { mutableStateOf("") }
     var folderId by remember { mutableStateOf(generateRandomFolderId()) }
@@ -148,7 +202,6 @@ fun CreateFolderSheet(
     var versioningType by remember { mutableStateOf("none") }
 
     val canSave = folderId.isNotBlank() && folderPath.isNotBlank()
-
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -161,7 +214,7 @@ fun CreateFolderSheet(
                 .fillMaxWidth()
                 .navigationBarsPadding()
         ) {
-            // Header
+            // Header row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -211,10 +264,9 @@ fun CreateFolderSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Error banner
                 if (error != null) {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
@@ -230,7 +282,6 @@ fun CreateFolderSheet(
                     }
                 }
 
-                // Folder Label
                 OutlinedTextField(
                     value = folderLabel,
                     onValueChange = { folderLabel = it },
@@ -240,7 +291,6 @@ fun CreateFolderSheet(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Folder ID
                 OutlinedTextField(
                     value = folderId,
                     onValueChange = { folderId = it },
@@ -250,7 +300,6 @@ fun CreateFolderSheet(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Directory Path
                 OutlinedTextField(
                     value = folderPath,
                     onValueChange = { folderPath = it },
@@ -258,22 +307,16 @@ fun CreateFolderSheet(
                     singleLine = true,
                     trailingIcon = {
                         IconButton(onClick = {
-                            selectDirectory?.invoke { selectedPath ->
-                                folderPath = selectedPath
-                            }
+                            selectDirectory?.invoke { selectedPath -> folderPath = selectedPath }
                         }) {
-                            Icon(
-                                FolderIcon,
-                                contentDescription = "Browse",
-                                modifier = Modifier.size(20.dp)
-                            )
+                            Icon(FolderIcon, contentDescription = "Browse", modifier = Modifier.size(20.dp))
                         }
                     },
                     placeholder = { Text("/sdcard/Documents") },
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Folder Type
+                // Folder Type dropdown
                 var showTypeDropdown by remember { mutableStateOf(false) }
                 val typeLabel = when (folderType) {
                     "sendreceive" -> "Send & Receive"
@@ -281,47 +324,34 @@ fun CreateFolderSheet(
                     "receiveonly" -> "Receive Only"
                     else          -> "Send & Receive"
                 }
-                ExposedDropdownMenuBox(
-                    expanded = showTypeDropdown,
-                    onExpandedChange = { showTypeDropdown = it }
-                ) {
+                ExposedDropdownMenuBox(expanded = showTypeDropdown, onExpandedChange = { showTypeDropdown = it }) {
                     OutlinedTextField(
                         value = typeLabel,
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Folder Type") },
-                        trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = showTypeDropdown)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showTypeDropdown) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                     )
-                    ExposedDropdownMenu(
-                        expanded = showTypeDropdown,
-                        onDismissRequest = { showTypeDropdown = false }
-                    ) {
+                    ExposedDropdownMenu(expanded = showTypeDropdown, onDismissRequest = { showTypeDropdown = false }) {
                         listOf(
                             "sendreceive" to "Send & Receive",
                             "sendonly"    to "Send Only",
                             "receiveonly" to "Receive Only"
                         ).forEach { (value, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = { folderType = value; showTypeDropdown = false }
-                            )
+                            DropdownMenuItem(text = { Text(label) }, onClick = { folderType = value; showTypeDropdown = false })
                         }
                     }
                 }
 
-                // Share with Devices
-                if (devices.isNotEmpty()) {
+                // Share with Devices — only remote devices
+                if (remoteDevices.isNotEmpty()) {
                     Text(
                         text = "Share with Devices",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    devices.forEach { device ->
+                    remoteDevices.forEach { device ->
                         val isChecked = selectedDevices.contains(device.deviceID)
                         Row(
                             modifier = Modifier
@@ -330,7 +360,7 @@ fun CreateFolderSheet(
                                     if (isChecked) selectedDevices.remove(device.deviceID)
                                     else selectedDevices.add(device.deviceID)
                                 }
-                                .padding(vertical = 6.dp),
+                                .padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -341,8 +371,8 @@ fun CreateFolderSheet(
                             )
                             Switch(
                                 checked = isChecked,
-                                onCheckedChange = { checked ->
-                                    if (checked) selectedDevices.add(device.deviceID)
+                                onCheckedChange = {
+                                    if (it) selectedDevices.add(device.deviceID)
                                     else selectedDevices.remove(device.deviceID)
                                 },
                                 modifier = Modifier.scale(0.85f)
@@ -351,51 +381,34 @@ fun CreateFolderSheet(
                     }
                 }
 
-                // Watch for Changes
+                // Watch for Changes toggle
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Watch for Changes",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        Text("Watch for Changes", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                         Text(
                             "Auto-detect file changes without manual rescanning",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Switch(
-                        checked = watchForChanges,
-                        onCheckedChange = { watchForChanges = it },
-                        modifier = Modifier.scale(0.85f)
-                    )
+                    Switch(checked = watchForChanges, onCheckedChange = { watchForChanges = it }, modifier = Modifier.scale(0.85f))
                 }
 
-                // Pause Folder
+                // Pause Folder toggle
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        "Pause Folder",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Switch(
-                        checked = pauseFolder,
-                        onCheckedChange = { pauseFolder = it },
-                        modifier = Modifier.scale(0.85f)
-                    )
+                    Text("Pause Folder", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Switch(checked = pauseFolder, onCheckedChange = { pauseFolder = it }, modifier = Modifier.scale(0.85f))
                 }
 
-                // File Versioning
+                // File Versioning dropdown
                 var showVersioningDropdown by remember { mutableStateOf(false) }
                 val versioningLabel = when (versioningType) {
                     "none"      -> "No File Versioning"
@@ -404,48 +417,34 @@ fun CreateFolderSheet(
                     "staggered" -> "Staggered File Versioning"
                     else        -> "No File Versioning"
                 }
-                ExposedDropdownMenuBox(
-                    expanded = showVersioningDropdown,
-                    onExpandedChange = { showVersioningDropdown = it }
-                ) {
+                ExposedDropdownMenuBox(expanded = showVersioningDropdown, onExpandedChange = { showVersioningDropdown = it }) {
                     OutlinedTextField(
                         value = versioningLabel,
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("File Versioning") },
-                        trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = showVersioningDropdown)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showVersioningDropdown) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                     )
-                    ExposedDropdownMenu(
-                        expanded = showVersioningDropdown,
-                        onDismissRequest = { showVersioningDropdown = false }
-                    ) {
+                    ExposedDropdownMenu(expanded = showVersioningDropdown, onDismissRequest = { showVersioningDropdown = false }) {
                         listOf(
                             "none"      to "No File Versioning",
                             "trashcan"  to "Trashcan File Versioning",
                             "simple"    to "Simple File Versioning",
                             "staggered" to "Staggered File Versioning"
                         ).forEach { (value, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = { versioningType = value; showVersioningDropdown = false }
-                            )
+                            DropdownMenuItem(text = { Text(label) }, onClick = { versioningType = value; showVersioningDropdown = false })
                         }
                     }
                 }
 
-                // Bottom spacing
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
             }
         }
     }
 }
 
-// Keep old name as alias for backward compatibility with App.kt
+// Alias kept for backward compat
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateFolderDialog(
@@ -454,73 +453,31 @@ fun CreateFolderDialog(
     viewModel: FolderViewModel = koinViewModel()
 ) = CreateFolderSheet(onDismiss = onDismiss, selectDirectory = selectDirectory, viewModel = viewModel)
 
-@Composable
-fun FormField(
-    icon: ImageVector,
-    title: String,
-    verticalAlignment: Alignment.Vertical = Alignment.Top,
-    content: @Composable () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        verticalAlignment = verticalAlignment
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = title,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier
-                .padding(top = if (verticalAlignment == Alignment.Top) 2.dp else 0.dp)
-                .size(20.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            content()
-        }
-    }
-}
+// ─── Folder Card ──────────────────────────────────────────────────────────────
 
 @Composable
 fun FolderCard(
     folder: com.arcadelabs.synapse.core.domain.models.Folder,
     onOpenClick: () -> Unit,
-    onDeleteFolder: (String) -> Unit = {}
+    onDeleteFolder: (String) -> Unit = {},
+    viewModel: FolderViewModel = koinViewModel()
 ) {
-    var showMenu by remember { mutableStateOf(false) }
-    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showDetail by remember { mutableStateOf(false) }
 
-    // Delete confirmation
-    if (showDeleteDialog) {
-        AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Delete Folder?") },
-            text = {
-                Text(
-                            "Remove \"${folder.label.ifEmpty { folder.id }}\" from Syncthing?\n\nThis will stop syncing but will NOT delete the files on disk."
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onDeleteFolder(folder.id)
-                        showDeleteDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
-                ) { Text("Delete") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") }
-            }
+    if (showDetail) {
+        FolderDetailSheet(
+            folder = folder,
+            onDismiss = { showDetail = false },
+            onOpenInExplorer = { onOpenClick(); showDetail = false },
+            onDelete = { onDeleteFolder(folder.id); showDetail = false },
+            viewModel = viewModel
         )
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showDetail = true },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
@@ -530,8 +487,7 @@ fun FolderCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onOpenClick() }
-                .padding(start = 16.dp, top = 14.dp, bottom = 14.dp, end = 4.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Folder icon in tinted circle
@@ -571,91 +527,233 @@ fun FolderCard(
             Spacer(modifier = Modifier.width(8.dp))
 
             // Status chip
-            val statusColor = if (folder.paused)
-                MaterialTheme.colorScheme.tertiary
-            else
-                MaterialTheme.colorScheme.primary
-
+            val statusColor = if (folder.paused) MaterialTheme.colorScheme.tertiary
+                              else MaterialTheme.colorScheme.primary
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = statusColor.copy(alpha = 0.12f)
             ) {
                 Text(
-                    text = if (folder.paused) "Paused" else "Synced",
+                    text = if (folder.paused) "Paused" else "Active",
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = statusColor,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                 )
             }
-
-            // 3-dot menu
-            Box {
-                IconButton(onClick = { showMenu = true }) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "More options",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false }
-                ) {
-                    // Info header
-                    Text(
-                        text = "Folder Info",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                    HorizontalDivider()
-                    DropdownMenuItem(
-                        text = {
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text("ID: ${folder.id}", style = MaterialTheme.typography.bodySmall)
-                                Text(
-                                    "Type: ${when(folder.type) {
-                                        "sendreceive" -> "Send & Receive"
-                                        "sendonly" -> "Send Only"
-                                        "receiveonly" -> "Receive Only"
-                                        else -> folder.type
-                                    }}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Text("Rescan: ${folder.rescanIntervalS}s", style = MaterialTheme.typography.bodySmall)
-                                Text("Devices: ${folder.devices.size}", style = MaterialTheme.typography.bodySmall)
-                            }
-                        },
-                        onClick = {},
-                        enabled = false
-                    )
-                    HorizontalDivider()
-                    // Delete
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                "Delete Folder",
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        },
-                        onClick = {
-                            showMenu = false
-                            showDeleteDialog = true
-                        }
-                    )
-                }
-            }
         }
     }
 }
 
+// ─── Folder Detail Bottom Sheet ───────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FolderDetailSheet(
+    folder: com.arcadelabs.synapse.core.domain.models.Folder,
+    onDismiss: () -> Unit,
+    onOpenInExplorer: () -> Unit,
+    onDelete: () -> Unit,
+    viewModel: FolderViewModel = koinViewModel()
+) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    val folders by viewModel.foldersState.collectAsState()
+    val liveFolder = folders.find { it.id == folder.id } ?: folder
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Folder?") },
+            text = {
+                Text("Remove \"${liveFolder.label.ifEmpty { liveFolder.id }}\" from Syncthing?\n\nThis will stop syncing but will NOT delete the files on disk.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showDeleteConfirm = false; onDelete() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
+            }
+        )
+        return
+    }
+
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp)
+        ) {
+            // Title
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(FolderIcon, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = liveFolder.label.ifEmpty { liveFolder.id },
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (liveFolder.paused) "Paused" else "Active",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (liveFolder.paused) MaterialTheme.colorScheme.tertiary
+                                else MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(8.dp))
+
+            // Info rows
+            DetailInfoRow("Folder ID", liveFolder.id, monospace = true)
+            DetailInfoRow("Path", liveFolder.path)
+            DetailInfoRow("Type", when (liveFolder.type) {
+                "sendreceive" -> "Send & Receive"
+                "sendonly"    -> "Send Only"
+                "receiveonly" -> "Receive Only"
+                else          -> liveFolder.type.ifEmpty { "Send & Receive" }
+            })
+            DetailInfoRow("Rescan Interval", "${liveFolder.rescanIntervalS}s")
+            DetailInfoRow("File Watcher", if (liveFolder.fsWatcherEnabled) "Enabled" else "Disabled")
+            DetailInfoRow("Versioning",
+                liveFolder.versioning.type.ifEmpty { "none" }
+                    .replaceFirstChar { it.uppercase() }
+            )
+            DetailInfoRow("Shared With", "${liveFolder.devices.size} device${if (liveFolder.devices.size != 1) "s" else ""}")
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(12.dp))
+
+            // Action buttons row 1
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { viewModel.pauseFolder(liveFolder.id, !liveFolder.paused) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(if (liveFolder.paused) "Resume" else "Pause")
+                }
+                OutlinedButton(
+                    onClick = { viewModel.rescanFolder(liveFolder.id) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Rescan")
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // Action buttons row 2
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onOpenInExplorer,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Open Folder")
+                }
+                Button(
+                    onClick = { showDeleteConfirm = true },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Delete")
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun DetailInfoRow(label: String, value: String, monospace: Boolean = false) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(0.4f)
+        )
+        Text(
+            text = value,
+            style = if (monospace)
+                MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+            else
+                MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(0.6f),
+            maxLines = 2,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
+    }
+}
+
+// ─── Form Field helper (kept for any callers) ─────────────────────────────────
+
+@Composable
+fun FormField(
+    icon: ImageVector,
+    title: String,
+    verticalAlignment: Alignment.Vertical = Alignment.Top,
+    content: @Composable () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = verticalAlignment
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = title,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .padding(top = if (verticalAlignment == Alignment.Top) 2.dp else 0.dp)
+                .size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) { content() }
+    }
+}

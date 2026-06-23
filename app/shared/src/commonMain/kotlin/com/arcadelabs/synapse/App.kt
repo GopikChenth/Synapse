@@ -396,25 +396,14 @@ fun App(
                     )
                 }
 
-                // Root level Full-screen Add Device Dialog Overlay
-                AnimatedVisibility(
-                    visible = isAddDeviceDialogOpen,
-                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
-                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.background)
-                    ) {
-                        AddDeviceDialog(
-                            onDismiss = { isAddDeviceDialogOpen = false },
-                            scanQrCode = scanQrCode,
-                            prefilledDeviceId = prefilledDeviceId,
-                            prefilledDeviceName = prefilledDeviceName
-                        )
-                    }
+                // Add Device Bottom Sheet
+                if (isAddDeviceDialogOpen) {
+                    AddDeviceDialog(
+                        onDismiss = { isAddDeviceDialogOpen = false },
+                        scanQrCode = scanQrCode,
+                        prefilledDeviceId = prefilledDeviceId,
+                        prefilledDeviceName = prefilledDeviceName
+                    )
                 }
 
                 // Show Device ID Dialog
@@ -545,48 +534,6 @@ fun App(
                     )
                 }
 
-                // Incoming Connection Request Dialog Overlay
-                val pendingDevices by deviceViewModel.pendingDevices.collectAsState()
-                if (pendingDevices.isNotEmpty() && !isAddDeviceDialogOpen) {
-                    val (pendingId, pendingDevice) = pendingDevices.entries.first()
-                    AlertDialog(
-                        onDismissRequest = { /* Keep open until action taken */ },
-                        title = { Text("Incoming Connection Request") },
-                        text = {
-                            Column {
-                                Text("A remote device wants to pair with you:")
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text("Name: ${pendingDevice.name.ifEmpty { "Unnamed Device" }}", fontWeight = FontWeight.Bold)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("ID: ${pendingId.chunked(4).joinToString(" ")}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                                if (pendingDevice.address.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text("Address: ${pendingDevice.address}", fontSize = 12.sp)
-                                }
-                            }
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    prefilledDeviceId = pendingId
-                                    prefilledDeviceName = pendingDevice.name
-                                    isAddDeviceDialogOpen = true
-                                }
-                            ) {
-                                Text("Add Device")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = {
-                                    deviceViewModel.dismissPendingDevice(pendingId)
-                                }
-                            ) {
-                                Text("Dismiss", color = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    )
-                }
             }
         }
     }

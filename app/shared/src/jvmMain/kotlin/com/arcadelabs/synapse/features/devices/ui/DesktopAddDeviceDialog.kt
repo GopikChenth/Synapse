@@ -1,4 +1,3 @@
-@file:Suppress("DEPRECATION")
 package com.arcadelabs.synapse.features.devices.ui
 
 import androidx.compose.foundation.clickable
@@ -6,8 +5,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
@@ -19,6 +18,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,8 +39,11 @@ fun DesktopAddDeviceDialog(
     viewModel: DeviceViewModel = koinViewModel()
 ) {
     val folders by viewModel.folders.collectAsState()
+    val error by viewModel.error.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val pendingDevices by viewModel.pendingDevices.collectAsState()
 
-    // Form States
+    // Form State
     var deviceId by remember { mutableStateOf(prefilledDeviceId) }
     var deviceName by remember { mutableStateOf(prefilledDeviceName) }
     var deviceAddresses by remember { mutableStateOf("dynamic") }
@@ -49,293 +53,231 @@ fun DesktopAddDeviceDialog(
     var isPaused by remember { mutableStateOf(false) }
     var isUntrusted by remember { mutableStateOf(false) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Add Device", style = MaterialTheme.typography.titleMedium) },
-                navigationIcon = {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(
-                        onClick = {
-                            if (deviceId.isNotEmpty()) {
-                                val addressList = deviceAddresses.split(",")
-                                    .map { it.trim() }
-                                    .filter { it.isNotEmpty() }
-                                viewModel.createDevice(
-                                    id = deviceId,
-                                    name = deviceName,
-                                    addresses = addressList,
-                                    introducer = isIntroducer,
-                                    autoAccept = isAutoAccept,
-                                    paused = isPaused,
-                                    untrusted = isUntrusted,
-                                    sharedFolders = selectedFolders.toList(),
-                                    onSuccess = onDismiss
-                                )
-                            }
-                        },
-                        enabled = deviceId.isNotEmpty()
-                    ) {
-                        Icon(Icons.Default.Check, contentDescription = "Save")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            )
-        }
-    ) { innerPadding ->
-        val error by viewModel.error.collectAsState()
+    val canSave = deviceId.isNotBlank()
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-        ) {
-            if (error != null) {
-                Text(
-                    text = error ?: "",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(DevicesIcon, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(10.dp))
+                Text("Add Device", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             }
-            // 1. Device ID (with trailing QR code scanner icon)
-            DesktopDeviceFormField(icon = Icons.Default.Info, title = "Device ID") {
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Error banner
+                if (error != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = error ?: "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+
+                // Pending devices banner
+                if (pendingDevices.isNotEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "Pending Requests",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.secondary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            pendingDevices.forEach { (id, pending) ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            pending.name.ifEmpty { id.take(12) + "…" },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                        Text(
+                                            id.take(20) + "…",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                    Row {
+                                        // Accept — prefills form
+                                        IconButton(onClick = {
+                                            deviceId = id
+                                            deviceName = pending.name
+                                        }, modifier = Modifier.size(32.dp)) {
+                                            Icon(Icons.Default.Check, contentDescription = "Accept",
+                                                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                        }
+                                        // Dismiss
+                                        IconButton(onClick = { viewModel.dismissPendingDevice(id) },
+                                            modifier = Modifier.size(32.dp)) {
+                                            Icon(Icons.Default.Close, contentDescription = "Dismiss",
+                                                tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider()
+
+                // Device ID
                 OutlinedTextField(
                     value = deviceId,
                     onValueChange = { deviceId = it },
-                    label = { Text("Device ID", style = MaterialTheme.typography.bodyMedium) },
-                    textStyle = MaterialTheme.typography.bodyMedium,
+                    label = { Text("Device ID") },
                     singleLine = true,
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                    supportingText = { Text("The unique ID of the remote device") },
                     trailingIcon = {
                         if (scanQrCode != null) {
-                            IconButton(onClick = {
-                                scanQrCode.invoke { scannedId ->
-                                    deviceId = scannedId
-                                }
-                            }) {
-                                Icon(
-                                    imageVector = QrCodeIcon,
-                                    contentDescription = "Scan QR Code",
-                                    modifier = Modifier.size(20.dp)
-                                )
+                            IconButton(onClick = { scanQrCode { scanned -> deviceId = scanned } }) {
+                                Icon(QrCodeIcon, contentDescription = "Scan QR", modifier = Modifier.size(20.dp))
                             }
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth()
+                    }
                 )
-            }
 
-            // 2. Name
-            DesktopDeviceFormField(icon = Icons.Default.Edit, title = "Name") {
+                // Name
                 OutlinedTextField(
                     value = deviceName,
                     onValueChange = { deviceName = it },
-                    label = { Text("Name", style = MaterialTheme.typography.bodyMedium) },
-                    textStyle = MaterialTheme.typography.bodyMedium,
+                    label = { Text("Device Name (optional)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-            }
 
-            // 3. Addresses
-            DesktopDeviceFormField(icon = Icons.Default.Share, title = "Addresses") {
+                // Addresses
                 OutlinedTextField(
                     value = deviceAddresses,
                     onValueChange = { deviceAddresses = it },
-                    label = { Text("Addresses", style = MaterialTheme.typography.bodyMedium) },
-                    textStyle = MaterialTheme.typography.bodyMedium,
+                    label = { Text("Addresses") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    supportingText = { Text("Use 'dynamic' or enter IP:port") }
                 )
-            }
 
-            // 4. Folders Checklist
-            DesktopDeviceFormField(icon = FolderIcon, title = "Folders") {
-                Text(
-                    text = "Folders",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                if (folders.isEmpty()) {
+                // Share folders
+                if (folders.isNotEmpty()) {
                     Text(
-                        text = "No folders available to share",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        "Share Folders",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
                     )
-                } else {
                     folders.forEach { folder ->
                         val isChecked = selectedFolders.contains(folder.id)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    if (isChecked) {
-                                        selectedFolders.remove(folder.id)
-                                    } else {
-                                        selectedFolders.add(folder.id)
-                                    }
+                                    if (isChecked) selectedFolders.remove(folder.id)
+                                    else selectedFolders.add(folder.id)
                                 }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = folder.label.ifEmpty { folder.id },
+                                folder.label.ifEmpty { folder.id },
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.weight(1f)
                             )
                             Switch(
                                 checked = isChecked,
-                                onCheckedChange = { checked ->
-                                    if (checked) {
-                                        selectedFolders.add(folder.id)
-                                    } else {
-                                        selectedFolders.remove(folder.id)
-                                    }
-                                },
+                                onCheckedChange = { if (it) selectedFolders.add(folder.id) else selectedFolders.remove(folder.id) },
                                 modifier = Modifier.scale(0.8f)
                             )
                         }
                     }
                 }
-            }
 
-            // 5. Introducer
-            DesktopDeviceFormField(
-                icon = DevicesIcon,
-                title = "Introducer",
-                verticalAlignment = Alignment.CenterVertically
+                HorizontalDivider()
+
+                // Toggles
+                ToggleRow("Introducer", isIntroducer) { isIntroducer = it }
+                ToggleRow("Auto Accept Folders", isAutoAccept) { isAutoAccept = it }
+                ToggleRow("Pause Device", isPaused) { isPaused = it }
+                ToggleRow("Untrusted Device", isUntrusted) { isUntrusted = it }
+
+                if (isUntrusted) {
+                    Text(
+                        "All folders shared with this device must be protected by a password.",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (canSave) {
+                        val addressList = deviceAddresses.split(",")
+                            .map { it.trim() }.filter { it.isNotEmpty() }
+                        viewModel.createDevice(
+                            id = deviceId.trim(),
+                            name = deviceName.trim(),
+                            addresses = addressList,
+                            introducer = isIntroducer,
+                            autoAccept = isAutoAccept,
+                            paused = isPaused,
+                            untrusted = isUntrusted,
+                            sharedFolders = selectedFolders.toList(),
+                            onSuccess = onDismiss
+                        )
+                    }
+                },
+                enabled = canSave && !isLoading
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Introducer",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Switch(
-                        checked = isIntroducer,
-                        onCheckedChange = { isIntroducer = it },
-                        modifier = Modifier.scale(0.8f)
-                    )
+                if (isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
                 }
+                Text("Add Device")
             }
-
-            // 6. Auto Accept
-            DesktopDeviceFormField(
-                icon = Icons.Default.Refresh,
-                title = "Auto Accept",
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Auto Accept",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Switch(
-                        checked = isAutoAccept,
-                        onCheckedChange = { isAutoAccept = it },
-                        modifier = Modifier.scale(0.8f)
-                    )
-                }
-            }
-
-            // 7. Pause Device
-            DesktopDeviceFormField(
-                icon = Icons.Default.Warning,
-                title = "Pause Device",
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Pause Device",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Switch(
-                        checked = isPaused,
-                        onCheckedChange = { isPaused = it },
-                        modifier = Modifier.scale(0.8f)
-                    )
-                }
-            }
-
-            // 8. Untrusted Device
-            DesktopDeviceFormField(icon = Icons.Default.Lock, title = "Untrusted Device") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Untrusted Device",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Switch(
-                        checked = isUntrusted,
-                        onCheckedChange = { isUntrusted = it },
-                        modifier = Modifier.scale(0.8f)
-                    )
-                }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "All folders shared with this device must be protected by a password, such that all sent data is unreadable without the given password.",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         }
-    }
+    )
 }
 
 @Composable
-private fun DesktopDeviceFormField(
-    icon: ImageVector,
-    title: String,
-    verticalAlignment: Alignment.Vertical = Alignment.Top,
-    content: @Composable () -> Unit
-) {
+private fun ToggleRow(label: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        verticalAlignment = verticalAlignment
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = title,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier
-                .padding(top = if (verticalAlignment == Alignment.Top) 2.dp else 0.dp)
-                .size(20.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(
-            modifier = Modifier.weight(1f)
-        ) {
-            content()
-        }
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onToggle, modifier = Modifier.scale(0.8f))
     }
 }
