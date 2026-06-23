@@ -8,6 +8,7 @@ import com.arcadelabs.synapse.core.domain.models.Device
 import com.arcadelabs.synapse.core.domain.models.FolderDeviceReference
 import com.arcadelabs.synapse.core.domain.models.FolderVersioning
 import com.arcadelabs.synapse.core.domain.models.PendingDevice
+import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -122,7 +123,7 @@ class FolderViewModel(
             type = type,
             paused = paused,
             fsWatcherEnabled = watchForChanges,
-            devices = sharedDevices.map { FolderDeviceReference(it) },
+            devices = sharedDevices.map { FolderDeviceReference(it.normalizeDeviceId()) },
             versioning = FolderVersioning(type = versioningType)
         )
 
@@ -219,8 +220,14 @@ class FolderViewModel(
     }
 
     fun rescanFolder(folderId: String) {
+        println("[FolderViewModel] Triggering rescan for folder: $folderId")
         viewModelScope.launch {
-            try { apiClient.scan(folderId) } catch (e: Exception) {
+            try {
+                val response = apiClient.scan(folderId)
+                println("[FolderViewModel] Rescan succeeded with status: ${response.status}")
+                _error.value = null
+            } catch (e: Exception) {
+                println("[FolderViewModel] Rescan failed with exception: ${e.message}")
                 _error.value = e.message ?: "Rescan failed"
             }
         }

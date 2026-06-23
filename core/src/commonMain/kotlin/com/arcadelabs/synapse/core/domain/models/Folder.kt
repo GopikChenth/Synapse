@@ -21,7 +21,7 @@ data class Folder(
     @SerialName("path") val path: String = "",
     @SerialName("type") val type: String = "sendreceive",
     @SerialName("paused") val paused: Boolean = false,
-    @SerialName("rescanIntervalS") val rescanIntervalS: Int = 3600,
+    @SerialName("rescanIntervalS") val rescanIntervalS: Int = 60,
     @SerialName("fsWatcherEnabled") val fsWatcherEnabled: Boolean = true,
     @SerialName("devices") val devices: List<FolderDeviceReference> = emptyList(),
     @SerialName("versioning") val versioning: FolderVersioning = FolderVersioning()

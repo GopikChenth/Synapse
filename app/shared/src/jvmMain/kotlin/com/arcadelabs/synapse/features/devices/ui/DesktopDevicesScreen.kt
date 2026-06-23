@@ -17,7 +17,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import com.arcadelabs.synapse.core.designsystem.DevicesIcon
 import org.koin.compose.viewmodel.koinViewModel
-
+import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 
 @Composable
 fun DesktopDevicesScreen(
@@ -29,7 +29,6 @@ fun DesktopDevicesScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val myId by viewModel.myId.collectAsState()
-    val pendingDevices by viewModel.pendingDevices.collectAsState()
 
     var deviceToDelete by remember { mutableStateOf<DeviceUiModel?>(null) }
 
@@ -91,57 +90,6 @@ fun DesktopDevicesScreen(
                         contentPadding = PaddingValues(vertical = 8.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        // Pending device requests
-                        if (pendingDevices.isNotEmpty()) {
-                            item {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.secondaryContainer,
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                                    shape = MaterialTheme.shapes.medium
-                                ) {
-                                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Text(
-                                            "Pending Connection Requests",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.secondary
-                                        )
-                                        pendingDevices.forEach { (id, device) ->
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween
-                                            ) {
-                                                Column(modifier = Modifier.weight(1f)) {
-                                                    Text(
-                                                        device.name.ifEmpty { id.take(14) + "…" },
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        color = MaterialTheme.colorScheme.onSecondaryContainer
-                                                    )
-                                                    Text(
-                                                        id.chunked(7).take(2).joinToString("-") + "…",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
-                                                    )
-                                                }
-                                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                                    TextButton(
-                                                        onClick = { onAddDeviceClick(id, device.name) },
-                                                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.primary)
-                                                    ) { Text("Accept") }
-                                                    TextButton(
-                                                        onClick = { viewModel.dismissPendingDevice(id) },
-                                                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                                                    ) { Text("Dismiss") }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
                         items(filteredDevices) { device ->
                             DesktopDeviceItemCard(
                                 device = device,
@@ -152,7 +100,6 @@ fun DesktopDevicesScreen(
                         }
                     }
                 }
-
             }
         }
 
@@ -197,7 +144,7 @@ fun DesktopDeviceItemCard(
 ) {
     val sharedFolders = remember(device.id, folders) {
         folders.filter { folder ->
-            folder.devices.any { it.deviceID == device.id }
+            folder.devices.any { it.deviceID.normalizeDeviceId() == device.id.normalizeDeviceId() }
         }.map { it.label.ifEmpty { it.id } }
     }
 

@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arcadelabs.synapse.core.designsystem.*
 import com.arcadelabs.synapse.core.domain.models.SyncthingConfig
+import com.arcadelabs.synapse.core.domain.models.PendingFolder
+import com.arcadelabs.synapse.core.domain.models.PendingFolderOffer
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
 import com.arcadelabs.synapse.features.devices.ui.DevicesScreen
 import com.arcadelabs.synapse.features.devices.ui.AddDeviceDialog
@@ -113,6 +115,9 @@ fun App(
     var prefilledDeviceName by remember { mutableStateOf("") }
     var isShowDeviceIdDialogOpen by remember { mutableStateOf(false) }
     var isImportExportDialogOpen by remember { mutableStateOf(false) }
+    var prefilledFolderId by remember { mutableStateOf("") }
+    var prefilledFolderLabel by remember { mutableStateOf("") }
+    var prefilledFolderSharedDevices by remember { mutableStateOf<List<String>>(emptyList()) }
 
     var localDeviceId by remember { mutableStateOf("") }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -391,19 +396,38 @@ fun App(
                 // Create Folder Bottom Sheet
                 if (isCreateFolderDialogOpen) {
                     CreateFolderDialog(
-                        onDismiss = { isCreateFolderDialogOpen = false },
-                        selectDirectory = selectDirectory
+                        onDismiss = {
+                            isCreateFolderDialogOpen = false
+                            prefilledFolderId = ""
+                            prefilledFolderLabel = ""
+                            prefilledFolderSharedDevices = emptyList()
+                        },
+                        selectDirectory = selectDirectory,
+                        prefilledFolderId = prefilledFolderId,
+                        prefilledFolderLabel = prefilledFolderLabel,
+                        prefilledSharedDevices = prefilledFolderSharedDevices
                     )
                 }
 
-                // Add Device Bottom Sheet
-                if (isAddDeviceDialogOpen) {
-                    AddDeviceDialog(
-                        onDismiss = { isAddDeviceDialogOpen = false },
-                        scanQrCode = scanQrCode,
-                        prefilledDeviceId = prefilledDeviceId,
-                        prefilledDeviceName = prefilledDeviceName
-                    )
+                // Root level Full-screen Add Device Dialog Overlay
+                AnimatedVisibility(
+                    visible = isAddDeviceDialogOpen,
+                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
+                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    ) {
+                        AddDeviceDialog(
+                            onDismiss = { isAddDeviceDialogOpen = false },
+                            scanQrCode = scanQrCode,
+                            prefilledDeviceId = prefilledDeviceId,
+                            prefilledDeviceName = prefilledDeviceName
+                        )
+                    }
                 }
 
                 // Show Device ID Dialog
@@ -534,6 +558,92 @@ fun App(
                     )
                 }
 
+                // Incoming Connection Request Dialog Overlay
+                val pendingDevices by deviceViewModel.pendingDevices.collectAsState()
+                if (pendingDevices.isNotEmpty() && !isAddDeviceDialogOpen) {
+                    val (pendingId, pendingDevice) = pendingDevices.entries.first()
+                    AlertDialog(
+                        onDismissRequest = { /* Keep open until action taken */ },
+                        title = { Text("Incoming Connection Request") },
+                        text = {
+                            Column {
+                                Text("A remote device wants to pair with you:")
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text("Name: ${pendingDevice.name.ifEmpty { "Unnamed Device" }}", fontWeight = FontWeight.Bold)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("ID: ${pendingId.chunked(4).joinToString(" ")}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                if (pendingDevice.address.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text("Address: ${pendingDevice.address}", fontSize = 12.sp)
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    prefilledDeviceId = pendingId
+                                    prefilledDeviceName = pendingDevice.name
+                                    isAddDeviceDialogOpen = true
+                                }
+                            ) {
+                                Text("Add Device")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = {
+                                    deviceViewModel.dismissPendingDevice(pendingId)
+                                }
+                            ) {
+                                Text("Dismiss", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    )
+                }
+
+                // Incoming Folder Request Dialog Overlay
+                val pendingFolders by deviceViewModel.pendingFolders.collectAsState()
+                if (pendingFolders.isNotEmpty() && !isCreateFolderDialogOpen) {
+                    val (folderId, pendingOffer) = pendingFolders.entries.first()
+                    val offeringDeviceId = pendingOffer.offeredBy.keys.firstOrNull() ?: ""
+                    val folderDetails = pendingOffer.offeredBy[offeringDeviceId] ?: PendingFolder()
+                    AlertDialog(
+                        onDismissRequest = { /* Keep open until action taken */ },
+                        title = { Text("Folder Share Offered") },
+                        text = {
+                            Column {
+                                Text("A remote device wants to share a folder with you:")
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text("Folder Label: ${folderDetails.label.ifEmpty { "Unnamed Folder" }}", fontWeight = FontWeight.Bold)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("Folder ID: $folderId", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("Offered By Device ID: ${offeringDeviceId.chunked(4).joinToString(" ")}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    prefilledFolderId = folderId
+                                    prefilledFolderLabel = folderDetails.label
+                                    prefilledFolderSharedDevices = listOf(offeringDeviceId)
+                                    isCreateFolderDialogOpen = true
+                                }
+                            ) {
+                                Text("Add Folder")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = {
+                                    deviceViewModel.dismissPendingFolder(folderId)
+                                }
+                            ) {
+                                Text("Dismiss", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    )
+                }
             }
         }
     }

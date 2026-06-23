@@ -39,17 +39,14 @@ class DeviceViewModel(
     private val _pendingDevices = MutableStateFlow<Map<String, PendingDevice>>(emptyMap())
     val pendingDevices: StateFlow<Map<String, PendingDevice>> = _pendingDevices
 
+    private val _pendingFolders = MutableStateFlow<Map<String, PendingFolderOffer>>(emptyMap())
+    val pendingFolders: StateFlow<Map<String, PendingFolderOffer>> = _pendingFolders
+
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
-
-    // Device IDs being deleted — excluded from poll results so they can't be resurrected
-    private val pendingDeletions = mutableSetOf<String>()
-
-    // Pending device IDs the user has dismissed locally — filtered from all future polls
-    private val localDismissed = mutableSetOf<String>()
 
     init {
         loadInitial()
@@ -117,10 +114,15 @@ class DeviceViewModel(
         } catch (_: Exception) {}
 
         try {
-            val all = apiClient.getPendingDevices()
-            _pendingDevices.value = all.filter { (id, _) -> id !in localDismissed }
+            _pendingDevices.value = apiClient.getPendingDevices()
         } catch (e: Exception) {
             _pendingDevices.value = emptyMap()
+        }
+
+        try {
+            _pendingFolders.value = apiClient.getPendingFolders()
+        } catch (e: Exception) {
+            _pendingFolders.value = emptyMap()
         }
 
         val uiDevices = config.devices.map { device ->
@@ -138,7 +140,7 @@ class DeviceViewModel(
                 outBytesTotal = conn?.outBytesTotal ?: 0
             )
         }
-        _devices.value = uiDevices.filter { it.id !in pendingDeletions }
+        _devices.value = uiDevices
     }
 
     fun toggleDevicePause(deviceId: String, currentlyPaused: Boolean) {
@@ -178,49 +180,64 @@ class DeviceViewModel(
         sharedFolders: List<String>,
         onSuccess: () -> Unit
     ) {
-        // Optimistic update — show immediately in UI
-        val optimistic = DeviceUiModel(id = id, name = name.ifEmpty { id.take(7) }, addresses = addresses, paused = paused)
-        _devices.value = _devices.value.filter { it.id != id } + optimistic
-
         viewModelScope.launch {
+            _isLoading.value = true
             _error.value = null
             try {
                 val currentConfig = apiClient.systemConfig()
+                
+                val normalizedId = id.normalizeDeviceId()
                 val newDevice = Device(
-                    deviceID = id, name = name, addresses = addresses,
-                    paused = paused, introducer = introducer,
-                    autoAcceptFolders = autoAccept, untrusted = untrusted
+                    deviceID = normalizedId,
+                    name = name,
+                    addresses = addresses,
+                    paused = paused,
+                    introducer = introducer,
+                    autoAcceptFolders = autoAccept,
+                    untrusted = untrusted
                 )
+                
                 val updatedFolders = currentConfig.folders.map { folder ->
                     if (sharedFolders.contains(folder.id)) {
-                        if (folder.devices.none { it.deviceID == id })
-                            folder.copy(devices = folder.devices + FolderDeviceReference(id))
-                        else folder
+                        if (folder.devices.none { it.deviceID.normalizeDeviceId() == normalizedId }) {
+                            folder.copy(devices = folder.devices + FolderDeviceReference(normalizedId))
+                        } else {
+                            folder
+                        }
                     } else {
-                        folder.copy(devices = folder.devices.filter { it.deviceID != id })
+                        folder.copy(devices = folder.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId })
                     }
                 }
-                val updatedDevices = currentConfig.devices.filter { it.deviceID != id } + newDevice
-                val updatedConfig = currentConfig.copy(devices = updatedDevices, folders = updatedFolders)
+                
+                val updatedDevices = currentConfig.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId } + newDevice
+                val updatedConfig = currentConfig.copy(
+                    devices = updatedDevices,
+                    folders = updatedFolders
+                )
+                
                 apiClient.updateSystemConfig(updatedConfig)
                 updateDeviceStates()
                 onSuccess()
             } catch (e: Exception) {
-                // Rollback optimistic add
-                _devices.value = _devices.value.filter { it.id != id }
                 _error.value = when (e) {
-                    is ApiKeyNotConfiguredException  -> "Syncthing API key is missing or not configured."
+                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
                     is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-                    is SyncthingNotFoundException    -> "Endpoint not found. Check the base URL."
-                    is SyncthingTimeoutException     -> "Connection timed out. Is Syncthing running?"
-                    is SyncthingApiException         -> "API Error: ${e.message}"
+                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+                    is SyncthingApiException -> "API Error: ${e.message}"
                     else -> {
                         val msg = e.message ?: ""
-                        if (msg.contains("connect", ignoreCase = true) ||
+                        if (
+                            msg.contains("connect", ignoreCase = true) ||
                             msg.contains("127.0.0.1") ||
-                            msg.contains("refused", ignoreCase = true))
+                            msg.contains("refused", ignoreCase = true) ||
+                            msg.contains("cert", ignoreCase = true) ||
+                            msg.contains("trust", ignoreCase = true)
+                        ) {
                             "Synapse is not started"
-                        else msg.ifEmpty { "Failed to add device" }
+                        } else {
+                            msg.ifEmpty { "Failed to add device" }
+                        }
                     }
                 }
             } finally {
@@ -230,42 +247,89 @@ class DeviceViewModel(
     }
 
     fun dismissPendingDevice(deviceId: String) {
-        // Immediately hide from UI and block from future polls
-        localDismissed.add(deviceId)
-        _pendingDevices.value = _pendingDevices.value.filter { (id, _) -> id !in localDismissed }
-        // Also tell the API (best-effort)
         viewModelScope.launch {
             try {
                 apiClient.dismissPendingDevice(deviceId)
-            } catch (_: Exception) { /* silent — local dismiss already applied */ }
+                updateDeviceStates()
+            } catch (e: Exception) {
+                val msg = e.message ?: ""
+                _error.value = if (
+                    msg.contains("connect", ignoreCase = true) ||
+                    msg.contains("127.0.0.1") ||
+                    msg.contains("refused", ignoreCase = true) ||
+                    msg.contains("cert", ignoreCase = true) ||
+                    msg.contains("trust", ignoreCase = true)
+                ) {
+                    "Synapse is not started"
+                } else {
+                    "Failed to dismiss pending device: $msg"
+                }
+            }
+        }
+    }
+
+    fun dismissPendingFolder(folderId: String) {
+        viewModelScope.launch {
+            try {
+                apiClient.dismissPendingFolder(folderId)
+                updateDeviceStates()
+            } catch (e: Exception) {
+                val msg = e.message ?: ""
+                _error.value = if (
+                    msg.contains("connect", ignoreCase = true) ||
+                    msg.contains("127.0.0.1") ||
+                    msg.contains("refused", ignoreCase = true) ||
+                    msg.contains("cert", ignoreCase = true) ||
+                    msg.contains("trust", ignoreCase = true)
+                ) {
+                    "Synapse is not started"
+                } else {
+                    "Failed to dismiss pending folder: $msg"
+                }
+            }
         }
     }
 
     fun deleteDevice(deviceId: String) {
-        // Optimistic update + block polling from resurrecting it
-        pendingDeletions.add(deviceId)
-        _devices.value = _devices.value.filter { it.id != deviceId }
-
         viewModelScope.launch {
+            _isLoading.value = true
             _error.value = null
             try {
-                // Use targeted DELETE endpoint — no full config replace, no restart
-                apiClient.deleteDevice(deviceId)
+                val normalizedId = deviceId.normalizeDeviceId()
+                val currentConfig = apiClient.systemConfig()
+                val updatedDevices = currentConfig.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId }
+                val updatedFolders = currentConfig.folders.map { folder ->
+                    folder.copy(devices = folder.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId })
+                }
+                val updatedConfig = currentConfig.copy(
+                    devices = updatedDevices,
+                    folders = updatedFolders
+                )
+                apiClient.updateSystemConfig(updatedConfig)
                 updateDeviceStates()
             } catch (e: Exception) {
-                // Rollback
-                pendingDeletions.remove(deviceId)
-                updateDeviceStates()
                 _error.value = when (e) {
-                    is ApiKeyNotConfiguredException  -> "Syncthing API key is missing or not configured."
+                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
                     is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-                    is SyncthingNotFoundException    -> "Endpoint not found. Check the base URL."
-                    is SyncthingTimeoutException     -> "Connection timed out. Is Syncthing running?"
-                    is SyncthingApiException         -> "API Error: ${e.message}"
-                    else -> e.message?.ifEmpty { "Failed to delete device" } ?: "Failed to delete device"
+                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+                    is SyncthingApiException -> "API Error: ${e.message}"
+                    else -> {
+                        val msg = e.message ?: ""
+                        if (
+                            msg.contains("connect", ignoreCase = true) ||
+                            msg.contains("127.0.0.1") ||
+                            msg.contains("refused", ignoreCase = true) ||
+                            msg.contains("cert", ignoreCase = true) ||
+                            msg.contains("trust", ignoreCase = true)
+                        ) {
+                            "Synapse is not started"
+                        } else {
+                            msg.ifEmpty { "Failed to delete device" }
+                        }
+                    }
                 }
             } finally {
-                pendingDeletions.remove(deviceId)
                 _isLoading.value = false
             }
         }
