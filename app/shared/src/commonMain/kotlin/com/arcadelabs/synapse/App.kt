@@ -40,6 +40,7 @@ import com.arcadelabs.synapse.features.status.ui.RunBehavior
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
+import qrcode.raw.QRCodeProcessor
 
 enum class Screen(val title: String) {
     FOLDERS("Folders"),
@@ -49,48 +50,35 @@ enum class Screen(val title: String) {
 
 @Composable
 fun QrCodeView(text: String, modifier: Modifier = Modifier) {
-    val size = 21
     val grid = remember(text) {
-        val mat = Array(size) { BooleanArray(size) }
-        val random = kotlin.random.Random(text.hashCode())
-        for (r in 0 until size) {
-            for (c in 0 until size) {
-                val isTopLeft = r in 0..6 && c in 0..6
-                val isTopRight = r in 0..6 && c in 14..20
-                val isBottomLeft = r in 14..20 && c in 0..6
-                if (isTopLeft || isTopRight || isBottomLeft) {
-                    val localR = when {
-                        isTopLeft -> r
-                        isTopRight -> r
-                        else -> r - 14
-                    }
-                    val localC = when {
-                        isTopLeft -> c
-                        isTopRight -> c - 14
-                        else -> c
-                    }
-                    val isOuter = localR == 0 || localR == 6 || localC == 0 || localC == 6
-                    val isCenter = localR in 2..4 && localC in 2..4
-                    mat[r][c] = isOuter || isCenter
-                } else {
-                    mat[r][c] = random.nextBoolean()
+        try {
+            val qr = QRCodeProcessor(text)
+            val matrix = qr.encode()
+            val size = matrix.size
+            Array(size) { r ->
+                BooleanArray(size) { c ->
+                    matrix[r][c].dark
                 }
             }
+        } catch (e: Exception) {
+            Array(0) { BooleanArray(0) }
         }
-        mat
     }
 
-    Canvas(modifier = modifier) {
-        val cellW = this.size.width / size
-        val cellH = this.size.height / size
-        for (r in 0 until size) {
-            for (c in 0 until size) {
-                if (grid[r][c]) {
-                    drawRect(
-                        color = Color.Black,
-                        topLeft = androidx.compose.ui.geometry.Offset(c * cellW, r * cellH),
-                        size = androidx.compose.ui.geometry.Size(cellW + 0.5f, cellH + 0.5f)
-                    )
+    if (grid.isNotEmpty()) {
+        val size = grid.size
+        Canvas(modifier = modifier) {
+            val cellW = this.size.width / size
+            val cellH = this.size.height / size
+            for (r in 0 until size) {
+                for (c in 0 until size) {
+                    if (grid[r][c]) {
+                        drawRect(
+                            color = Color.Black,
+                            topLeft = androidx.compose.ui.geometry.Offset(c * cellW, r * cellH),
+                            size = androidx.compose.ui.geometry.Size(cellW + 0.5f, cellH + 0.5f)
+                        )
+                    }
                 }
             }
         }
