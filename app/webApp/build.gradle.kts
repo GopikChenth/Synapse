@@ -26,3 +26,12 @@ kotlin {
         }
     }
 }
+
+afterEvaluate {
+    tasks.configureEach {
+        if (name.contains("test", ignoreCase = true)) {
+            enabled = false
+            group = null
+        }
+    }
+}

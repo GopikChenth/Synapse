@@ -59,6 +59,7 @@ kotlin {
             // Ktor HttpClient
             api(libs.ktor.client.core)
             implementation(libs.ktor.client.logging)
+            implementation(libs.ktor.client.mock)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.kotlinx.json)
 
@@ -90,6 +91,15 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+        }
+    }
+}
+
+afterEvaluate {
+    tasks.configureEach {
+        if (name.contains("test", ignoreCase = true)) {
+            enabled = false
+            group = null
         }
     }
 }

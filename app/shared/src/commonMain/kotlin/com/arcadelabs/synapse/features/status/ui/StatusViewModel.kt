@@ -54,6 +54,9 @@ class StatusViewModel(
     private var lastMark = timeSource.markNow()
     private var lastInBytes: Long = 0
     private var lastOutBytes: Long = 0
+    // Only mark disconnected after this many consecutive poll failures (~6s at 2s interval)
+    private var consecutiveFailures = 0
+    private val failureThreshold = 3
 
     init {
         loadInitial()
@@ -100,9 +103,13 @@ class StatusViewModel(
             while (isActive) {
                 try {
                     updateStatus()
+                    consecutiveFailures = 0
                     _error.value = null
                 } catch (e: Exception) {
-                    // Ignore background transience
+                    consecutiveFailures++
+                    if (consecutiveFailures >= failureThreshold) {
+                        _statusState.value = _statusState.value.copy(isRunning = false)
+                    }
                 }
                 delay(2000)
             }
@@ -147,7 +154,7 @@ class StatusViewModel(
                 totalUpload = currentOut
             )
         } catch (e: Exception) {
-            _statusState.value = _statusState.value.copy(isRunning = false)
+            // Don't flip isRunning here — let the polling failure counter handle it
             throw e
         }
     }

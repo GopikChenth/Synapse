@@ -13,13 +13,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import com.arcadelabs.synapse.core.designsystem.DevicesIcon
 import org.koin.compose.viewmodel.koinViewModel
 
 @Composable
-fun DevicesScreen(
-    onAddDeviceClick: (String, String) -> Unit = { _, _ -> },
+fun DesktopDevicesScreen(
+    onAddDeviceClick: (String, String) -> Unit,
     viewModel: DeviceViewModel = koinViewModel()
 ) {
     val devices by viewModel.devices.collectAsState()
@@ -34,55 +35,68 @@ fun DevicesScreen(
         devices.filter { it.id != myId && it.name.lowercase() != "localhost" }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        when {
-            isLoading && filteredDevices.isEmpty() -> {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center)
-                )
+    Scaffold(
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { onAddDeviceClick("", "") },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Add Device")
             }
-            error != null && filteredDevices.isEmpty() -> {
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = error ?: "An error occurred",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium
+        }
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .background(MaterialTheme.colorScheme.background)
+        ) {
+            when {
+                isLoading && filteredDevices.isEmpty() -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.align(Alignment.Center)
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Button(onClick = { viewModel.loadInitial() }) {
-                        Text("Retry")
+                }
+                error != null && filteredDevices.isEmpty() -> {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = error ?: "An error occurred",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(onClick = { viewModel.loadInitial() }) {
+                            Text("Retry")
+                        }
                     }
                 }
-            }
-            filteredDevices.isEmpty() -> {
-                Text(
-                    text = "No devices connected",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.Center)
-                )
-            }
-            else -> {
-                LazyColumn(
-                    contentPadding = PaddingValues(vertical = 8.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(filteredDevices) { device ->
-                        DeviceItemCard(
-                            device = device,
-                            folders = folders,
-                            onOpenClick = { viewModel.toggleDevicePause(device.id, device.paused) },
-                            onDeleteClick = { deviceToDelete = device }
-                        )
+                filteredDevices.isEmpty() -> {
+                    Text(
+                        text = "No devices connected",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+                else -> {
+                    LazyColumn(
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(filteredDevices) { device ->
+                            DesktopDeviceItemCard(
+                                device = device,
+                                folders = folders,
+                                onOpenClick = { viewModel.toggleDevicePause(device.id, device.paused) },
+                                onDeleteClick = { deviceToDelete = device }
+                            )
+                        }
                     }
                 }
             }
@@ -121,7 +135,7 @@ fun DevicesScreen(
 }
 
 @Composable
-fun DeviceItemCard(
+fun DesktopDeviceItemCard(
     device: DeviceUiModel,
     folders: List<com.arcadelabs.synapse.core.domain.models.Folder>,
     onOpenClick: () -> Unit,
@@ -209,70 +223,6 @@ fun DeviceItemCard(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(24.dp)
             )
-        }
-    }
-}
-
-@Composable
-fun PendingDeviceCard(
-    deviceId: String,
-    pendingDevice: com.arcadelabs.synapse.core.domain.models.PendingDevice,
-    onAddClick: () -> Unit,
-    onDismissClick: () -> Unit
-) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            Text(
-                text = "Incoming Connection Request",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = pendingDevice.name.ifEmpty { "Unnamed Device" },
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "ID: ${deviceId.chunked(4).joinToString(" ")}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (pendingDevice.address.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "Address: ${pendingDevice.address}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                TextButton(onClick = onDismissClick) {
-                    Text("Dismiss", color = MaterialTheme.colorScheme.error)
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(onClick = onAddClick) {
-                    Text("Add Device")
-                }
-            }
         }
     }
 }

@@ -30,8 +30,14 @@ class DeviceViewModel(
     private val _devices = MutableStateFlow<List<DeviceUiModel>>(emptyList())
     val devices: StateFlow<List<DeviceUiModel>> = _devices
 
+    private val _myId = MutableStateFlow("")
+    val myId: StateFlow<String> = _myId
+
     private val _folders = MutableStateFlow<List<Folder>>(emptyList())
     val folders: StateFlow<List<Folder>> = _folders
+
+    private val _pendingDevices = MutableStateFlow<Map<String, PendingDevice>>(emptyMap())
+    val pendingDevices: StateFlow<Map<String, PendingDevice>> = _pendingDevices
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
@@ -98,6 +104,17 @@ class DeviceViewModel(
         val connections = connectionsResp.connections
 
         _folders.value = config.folders
+
+        try {
+            val status = apiClient.systemStatus()
+            _myId.value = status.myID
+        } catch (_: Exception) {}
+
+        try {
+            _pendingDevices.value = apiClient.getPendingDevices()
+        } catch (e: Exception) {
+            _pendingDevices.value = emptyMap()
+        }
 
         val uiDevices = config.devices.map { device ->
             val conn = connections[device.deviceID]
@@ -210,6 +227,72 @@ class DeviceViewModel(
                             "Synapse is not started"
                         } else {
                             msg.ifEmpty { "Failed to add device" }
+                        }
+                    }
+                }
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun dismissPendingDevice(deviceId: String) {
+        viewModelScope.launch {
+            try {
+                apiClient.dismissPendingDevice(deviceId)
+                updateDeviceStates()
+            } catch (e: Exception) {
+                val msg = e.message ?: ""
+                _error.value = if (
+                    msg.contains("connect", ignoreCase = true) ||
+                    msg.contains("127.0.0.1") ||
+                    msg.contains("refused", ignoreCase = true) ||
+                    msg.contains("cert", ignoreCase = true) ||
+                    msg.contains("trust", ignoreCase = true)
+                ) {
+                    "Synapse is not started"
+                } else {
+                    "Failed to dismiss pending device: $msg"
+                }
+            }
+        }
+    }
+
+    fun deleteDevice(deviceId: String) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
+            try {
+                val currentConfig = apiClient.systemConfig()
+                val updatedDevices = currentConfig.devices.filter { it.deviceID != deviceId }
+                val updatedFolders = currentConfig.folders.map { folder ->
+                    folder.copy(devices = folder.devices.filter { it.deviceID != deviceId })
+                }
+                val updatedConfig = currentConfig.copy(
+                    devices = updatedDevices,
+                    folders = updatedFolders
+                )
+                apiClient.updateSystemConfig(updatedConfig)
+                updateDeviceStates()
+            } catch (e: Exception) {
+                _error.value = when (e) {
+                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
+                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+                    is SyncthingApiException -> "API Error: ${e.message}"
+                    else -> {
+                        val msg = e.message ?: ""
+                        if (
+                            msg.contains("connect", ignoreCase = true) ||
+                            msg.contains("127.0.0.1") ||
+                            msg.contains("refused", ignoreCase = true) ||
+                            msg.contains("cert", ignoreCase = true) ||
+                            msg.contains("trust", ignoreCase = true)
+                        ) {
+                            "Synapse is not started"
+                        } else {
+                            msg.ifEmpty { "Failed to delete device" }
                         }
                     }
                 }

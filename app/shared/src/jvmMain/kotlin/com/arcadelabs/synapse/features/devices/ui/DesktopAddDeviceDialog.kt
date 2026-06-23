@@ -30,7 +30,7 @@ import org.koin.compose.viewmodel.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddDeviceDialog(
+fun DesktopAddDeviceDialog(
     onDismiss: () -> Unit,
     scanQrCode: ((onQrScanned: (String) -> Unit) -> Unit)? = null,
     prefilledDeviceId: String = "",
@@ -107,7 +107,7 @@ fun AddDeviceDialog(
                 )
             }
             // 1. Device ID (with trailing QR code scanner icon)
-            FormField(icon = Icons.Default.Info, title = "Device ID") {
+            DesktopDeviceFormField(icon = Icons.Default.Info, title = "Device ID") {
                 OutlinedTextField(
                     value = deviceId,
                     onValueChange = { deviceId = it },
@@ -134,7 +134,7 @@ fun AddDeviceDialog(
             }
 
             // 2. Name
-            FormField(icon = Icons.Default.Edit, title = "Name") {
+            DesktopDeviceFormField(icon = Icons.Default.Edit, title = "Name") {
                 OutlinedTextField(
                     value = deviceName,
                     onValueChange = { deviceName = it },
@@ -146,7 +146,7 @@ fun AddDeviceDialog(
             }
 
             // 3. Addresses
-            FormField(icon = Icons.Default.Share, title = "Addresses") {
+            DesktopDeviceFormField(icon = Icons.Default.Share, title = "Addresses") {
                 OutlinedTextField(
                     value = deviceAddresses,
                     onValueChange = { deviceAddresses = it },
@@ -158,7 +158,7 @@ fun AddDeviceDialog(
             }
 
             // 4. Folders Checklist
-            FormField(icon = FolderIcon, title = "Folders") {
+            DesktopDeviceFormField(icon = FolderIcon, title = "Folders") {
                 Text(
                     text = "Folders",
                     style = MaterialTheme.typography.bodyMedium,
@@ -209,7 +209,7 @@ fun AddDeviceDialog(
             }
 
             // 5. Introducer
-            FormField(
+            DesktopDeviceFormField(
                 icon = DevicesIcon,
                 title = "Introducer",
                 verticalAlignment = Alignment.CenterVertically
@@ -233,7 +233,7 @@ fun AddDeviceDialog(
             }
 
             // 6. Auto Accept
-            FormField(
+            DesktopDeviceFormField(
                 icon = Icons.Default.Refresh,
                 title = "Auto Accept",
                 verticalAlignment = Alignment.CenterVertically
@@ -257,7 +257,7 @@ fun AddDeviceDialog(
             }
 
             // 7. Pause Device
-            FormField(
+            DesktopDeviceFormField(
                 icon = Icons.Default.Warning,
                 title = "Pause Device",
                 verticalAlignment = Alignment.CenterVertically
@@ -281,7 +281,7 @@ fun AddDeviceDialog(
             }
 
             // 8. Untrusted Device
-            FormField(icon = Icons.Default.Lock, title = "Untrusted Device") {
+            DesktopDeviceFormField(icon = Icons.Default.Lock, title = "Untrusted Device") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -311,7 +311,7 @@ fun AddDeviceDialog(
 }
 
 @Composable
-private fun FormField(
+private fun DesktopDeviceFormField(
     icon: ImageVector,
     title: String,
     verticalAlignment: Alignment.Vertical = Alignment.Top,

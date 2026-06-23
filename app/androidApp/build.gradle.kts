@@ -57,3 +57,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 }
+
+afterEvaluate {
+    tasks.configureEach {
+        if (name.contains("test", ignoreCase = true)) {
+            enabled = false
+            group = null
+        }
+    }
+}

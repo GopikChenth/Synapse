@@ -26,7 +26,7 @@ import androidx.compose.ui.unit.sp
 import org.koin.compose.viewmodel.koinViewModel
 
 @Composable
-fun StatusScreen(
+fun DesktopStatusScreen(
     onRunBehaviorChanged: ((RunBehavior) -> Unit)? = null,
     viewModel: StatusViewModel = koinViewModel()
 ) {
@@ -155,16 +155,14 @@ fun StatusScreen(
         val reasons = remember(runBehavior, isRunning) {
             if (isRunning) {
                 listOf(
-                    "Syncthing is not configured to run on mobile data connection.",
-                    "Syncthing is allowed to run on WiFi and WiFi is currently connected.",
-                    "Syncthing is allowed to run on non-metered WiFi connections. The active WiFi connection is non-metered.",
-                    "Syncthing is allowed to run on the current WiFi network."
+                    "Syncthing is running normally.",
+                    "Syncthing is allowed to run on local connection."
                 )
             } else {
                 if (runBehavior == RunBehavior.FORCE_STOP) {
-                    listOf("Syncthing is not running because you forced it to stop regardless of the run conditions.")
+                    listOf("Syncthing is not running because you forced it to stop.")
                 } else {
-                    listOf("Syncthing is not running because Wi-Fi is disconnected or run conditions are not met.")
+                    listOf("Syncthing is not running. Check connection or startup config.")
                 }
             }
         }

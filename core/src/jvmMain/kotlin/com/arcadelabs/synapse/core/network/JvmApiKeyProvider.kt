@@ -16,7 +16,11 @@ class JvmApiKeyProvider(
             File(customPath)
         } else {
             val localAppData = System.getenv("LOCALAPPDATA") ?: return@withContext null
-            File(localAppData, "Syncthing/config.xml")
+            // Primary: Synapse-managed Syncthing home (set by DesktopDaemonManager)
+            val synapseConfig = File(localAppData, "Synapse/syncthing-home/config.xml")
+            if (synapseConfig.exists()) synapseConfig
+            // Fallback: standalone Syncthing installation
+            else File(localAppData, "Syncthing/config.xml")
         }
         if (!configFile.exists()) return@withContext null
         val content = configFile.readText()

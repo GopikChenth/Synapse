@@ -97,6 +97,33 @@ interface SyncthingApiClient {
      * @return the [HttpResponse] from the server.
      */
     suspend fun shutdown(): HttpResponse
+
+    /**
+     * Rescans the specified folder, or all folders if null.
+     */
+    suspend fun scan(folderId: String? = null): HttpResponse
+
+    /**
+     * Removes a single folder from the Syncthing configuration by ID.
+     * Uses DELETE /rest/config/folders/{id} — no restart required.
+     */
+    suspend fun deleteFolder(folderId: String)
+
+    /**
+     * Removes a single device from the Syncthing configuration by ID.
+     * Uses DELETE /rest/config/devices/{id} — no restart required.
+     */
+    suspend fun deleteDevice(deviceId: String)
+
+    /**
+     * Retrieves the map of pending remote devices that have requested a connection.
+     */
+    suspend fun getPendingDevices(): Map<String, PendingDevice>
+
+    /**
+     * Dismisses the pending connection request from the specified device.
+     */
+    suspend fun dismissPendingDevice(deviceId: String): HttpResponse
 }
 
 internal class SyncthingApiClientImpl(
@@ -171,10 +198,13 @@ internal class SyncthingApiClientImpl(
 
     override suspend fun updateRawSystemConfig(configJson: String) {
         val key = getOrResolveApiKey()
-        client.put("$baseUrl/rest/system/config") {
+        val response = client.post("$baseUrl/rest/system/config") {
             header("X-API-Key", key)
             contentType(ContentType.Application.Json)
             setBody(configJson)
+        }
+        if (response.status.value !in 200..299) {
+            throw Exception("Failed to update configuration: HTTP ${response.status.value}")
         }
     }
 
@@ -240,6 +270,7 @@ internal class SyncthingApiClientImpl(
 
         val patchedConfigJson = JsonObject(newRootMap)
         updateRawSystemConfig(patchedConfigJson.toString())
+        // No restart needed — Syncthing v1.12+ applies config changes hot via the REST API.
     }
     
     override suspend fun dbStatus(folderId: String): FolderDbStatus {
@@ -300,6 +331,51 @@ internal class SyncthingApiClientImpl(
         val key = getOrResolveApiKey()
         return client.post("$baseUrl/rest/system/shutdown") {
             header("X-API-Key", key)
+        }
+    }
+
+    override suspend fun scan(folderId: String?): HttpResponse {
+        val key = getOrResolveApiKey()
+        return client.post("$baseUrl/rest/db/scan") {
+            header("X-API-Key", key)
+            if (folderId != null) {
+                parameter("folder", folderId)
+            }
+        }
+    }
+
+    override suspend fun deleteFolder(folderId: String) {
+        val key = getOrResolveApiKey()
+        val response = client.delete("$baseUrl/rest/config/folders/$folderId") {
+            header("X-API-Key", key)
+        }
+        if (response.status.value !in 200..299) {
+            throw SyncthingApiException("Failed to delete folder: HTTP ${response.status.value}")
+        }
+    }
+
+    override suspend fun deleteDevice(deviceId: String) {
+        val key = getOrResolveApiKey()
+        val response = client.delete("$baseUrl/rest/config/devices/$deviceId") {
+            header("X-API-Key", key)
+        }
+        if (response.status.value !in 200..299) {
+            throw SyncthingApiException("Failed to delete device: HTTP ${response.status.value}")
+        }
+    }
+
+    override suspend fun getPendingDevices(): Map<String, PendingDevice> {
+        val key = getOrResolveApiKey()
+        return client.get("$baseUrl/rest/cluster/pending/devices") {
+            header("X-API-Key", key)
+        }.body()
+    }
+
+    override suspend fun dismissPendingDevice(deviceId: String): HttpResponse {
+        val key = getOrResolveApiKey()
+        return client.delete("$baseUrl/rest/cluster/pending/devices") {
+            header("X-API-Key", key)
+            parameter("device", deviceId)
         }
     }
 }
