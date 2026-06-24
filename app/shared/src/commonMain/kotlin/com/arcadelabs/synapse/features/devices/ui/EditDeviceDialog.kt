@@ -82,6 +82,9 @@ fun EditDeviceDialog(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showDeleteConfirm = true }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete Device")
+                    }
                     IconButton(
                         onClick = {
                             val addressList = deviceAddresses.split(",")
@@ -115,9 +118,6 @@ fun EditDeviceDialog(
                         } else {
                             Icon(Icons.Default.Check, contentDescription = "Save")
                         }
-                    }
-                    IconButton(onClick = { showDeleteConfirm = true }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete Device")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

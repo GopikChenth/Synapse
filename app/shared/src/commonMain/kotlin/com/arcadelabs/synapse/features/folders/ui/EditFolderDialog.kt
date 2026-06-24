@@ -71,6 +71,9 @@ fun EditFolderDialog(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showDeleteConfirm = true }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete Folder")
+                    }
                     IconButton(
                         onClick = {
                             if (canSave) {
@@ -392,22 +395,6 @@ fun EditFolderDialog(
                         }
                     }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Delete Folder Button
-            Button(
-                onClick = { showDeleteConfirm = true },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Delete, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Delete Folder")
             }
 
             Spacer(modifier = Modifier.height(24.dp))
