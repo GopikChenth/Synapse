@@ -129,12 +129,10 @@ fun DesktopCreateFolderDialog(
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
 
-    // Only show remote devices — exclude this device itself and localhost
+    // Only show remote devices — exclude this device itself
     val myId = statusState.myId
     val remoteDevices = allDevices.filter { device ->
-        device.deviceID.normalizeDeviceId() != myId.normalizeDeviceId() &&
-        !device.name.equals("localhost", ignoreCase = true) &&
-        !device.name.equals("this device", ignoreCase = true)
+        device.deviceID.normalizeDeviceId() != myId.normalizeDeviceId()
     }
 
     // Form States
@@ -269,7 +267,7 @@ fun DesktopCreateFolderDialog(
                     }
                 }
 
-                // Share with Devices — only remote devices, not self or localhost
+                // Share with Devices — only remote devices, not self
                 if (remoteDevices.isNotEmpty()) {
                     Text(
                         text = "Share with Devices",

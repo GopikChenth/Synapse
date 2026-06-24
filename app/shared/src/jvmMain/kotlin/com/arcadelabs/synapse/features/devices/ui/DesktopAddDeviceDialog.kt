@@ -28,6 +28,7 @@ import com.arcadelabs.synapse.core.designsystem.FolderIcon
 import com.arcadelabs.synapse.core.designsystem.QrCodeIcon
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.parseSyncthingQr
+import com.arcadelabs.synapse.core.domain.models.parseSyncthingQrDetails
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -111,7 +112,17 @@ fun DesktopAddDeviceDialog(
             DesktopDeviceFormField(icon = Icons.Default.Info, title = "Device ID") {
                 OutlinedTextField(
                     value = deviceId,
-                    onValueChange = { deviceId = it },
+                    onValueChange = { input ->
+                        if (input.startsWith("syncthing://", ignoreCase = true)) {
+                            val (parsedId, parsedName) = input.parseSyncthingQrDetails()
+                            deviceId = parsedId
+                            if (parsedName.isNotEmpty()) {
+                                deviceName = parsedName
+                            }
+                        } else {
+                            deviceId = input
+                        }
+                    },
                     label = { Text("Device ID", style = MaterialTheme.typography.bodyMedium) },
                     textStyle = MaterialTheme.typography.bodyMedium,
                     singleLine = true,
@@ -119,7 +130,11 @@ fun DesktopAddDeviceDialog(
                         if (scanQrCode != null) {
                             IconButton(onClick = {
                                 scanQrCode.invoke { scannedId ->
-                                    deviceId = scannedId.parseSyncthingQr()
+                                    val (parsedId, parsedName) = scannedId.parseSyncthingQrDetails()
+                                    deviceId = parsedId
+                                    if (parsedName.isNotEmpty()) {
+                                        deviceName = parsedName
+                                    }
                                 }
                             }) {
                                 Icon(

@@ -9,6 +9,7 @@ import com.arcadelabs.synapse.core.domain.models.FolderDeviceReference
 import com.arcadelabs.synapse.core.domain.models.FolderVersioning
 import com.arcadelabs.synapse.core.domain.models.PendingDevice
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
+import com.arcadelabs.synapse.core.domain.models.DeviceConnection
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +23,33 @@ class FolderViewModel(
 
     private val _devicesState = MutableStateFlow<List<Device>>(emptyList())
     val devicesState: StateFlow<List<Device>> = _devicesState
+
+    private var cachedMyId: String = ""
+    private var cachedConnections: Map<String, DeviceConnection> = emptyMap()
+
+    private suspend fun fetchMyIdAndConnections() {
+        try {
+            if (cachedMyId.isEmpty()) {
+                val status = apiClient.systemStatus()
+                cachedMyId = status.myID
+            }
+        } catch (_: Exception) {}
+        try {
+            val connResp = apiClient.systemConnections()
+            cachedConnections = connResp.connections
+        } catch (_: Exception) {}
+    }
+
+    private fun updateDevicesState(devices: List<Device>) {
+        val remotePairedDevices = devices.filter { device ->
+            val devId = device.deviceID.normalizeDeviceId()
+            val isSelf = devId == cachedMyId.normalizeDeviceId()
+            val conn = cachedConnections[device.deviceID]
+            val isPaired = conn != null && (conn.connected || conn.clientVersion.isNotEmpty() || conn.inBytesTotal > 0 || conn.outBytesTotal > 0)
+            !isSelf && isPaired
+        }
+        _devicesState.value = remotePairedDevices
+    }
 
     private val _pendingDevices = MutableStateFlow<Map<String, PendingDevice>>(emptyMap())
     val pendingDevices: StateFlow<Map<String, PendingDevice>> = _pendingDevices
@@ -53,7 +81,8 @@ class FolderViewModel(
                     val serverIds = filtered.map { it.id }.toSet()
                     val unconfirmedCreations = pendingCreations.filter { it.id !in serverIds }
                     _foldersState.value = filtered + unconfirmedCreations
-                    _devicesState.value = config.devices
+                    fetchMyIdAndConnections()
+                    updateDevicesState(config.devices)
                     try {
                         _pendingDevices.value = apiClient.getPendingDevices()
                     } catch (_: Exception) {}
@@ -71,7 +100,8 @@ class FolderViewModel(
             try {
                 val config = apiClient.systemConfig()
                 _foldersState.value = config.folders
-                _devicesState.value = config.devices
+                fetchMyIdAndConnections()
+                updateDevicesState(config.devices)
                 try {
                     _pendingDevices.value = apiClient.getPendingDevices()
                 } catch (_: Exception) {
@@ -144,7 +174,8 @@ class FolderViewModel(
                 val confirmed = apiClient.systemConfig()
                 pendingCreations.removeAll { it.id == newFolder.id }
                 _foldersState.value = confirmed.folders.filter { it.id !in pendingDeletions }
-                _devicesState.value = confirmed.devices
+                fetchMyIdAndConnections()
+                updateDevicesState(confirmed.devices)
 
                 onSuccess()
             } catch (e: Exception) {
@@ -187,7 +218,8 @@ class FolderViewModel(
                 // Confirm from server
                 val confirmed = apiClient.systemConfig()
                 _foldersState.value = confirmed.folders.filter { it.id !in pendingDeletions }
-                _devicesState.value = confirmed.devices
+                fetchMyIdAndConnections()
+                updateDevicesState(confirmed.devices)
             } catch (e: Exception) {
                 // Rollback on failure
                 _foldersState.value = snapshot

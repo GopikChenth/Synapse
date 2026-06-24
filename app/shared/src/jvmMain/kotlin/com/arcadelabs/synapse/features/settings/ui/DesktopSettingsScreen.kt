@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.arcadelabs.synapse.DesktopQrCodeView
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import kotlinx.coroutines.launch
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -28,6 +29,7 @@ fun DesktopSettingsScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
     var localDeviceId by remember { mutableStateOf("") }
+    var localDeviceName by remember { mutableStateOf("") }
     var configJsonText by remember { mutableStateOf("") }
     var importStatusMessage by remember { mutableStateOf<String?>(null) }
     var isImportSuccess by remember { mutableStateOf(false) }
@@ -38,8 +40,11 @@ fun DesktopSettingsScreen(
         try {
             val status = apiClient.systemStatus()
             localDeviceId = status.myID
+            val config = apiClient.systemConfig()
+            localDeviceName = config.devices.find { it.deviceID.normalizeDeviceId() == status.myID.normalizeDeviceId() }?.name ?: ""
         } catch (e: Exception) {
             localDeviceId = "Error retrieving ID"
+            localDeviceName = ""
         }
 
         try {
@@ -95,8 +100,13 @@ fun DesktopSettingsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (localDeviceId.isNotEmpty() && localDeviceId != "Error retrieving ID") {
+                        val qrText = if (localDeviceName.isNotEmpty()) {
+                            "syncthing://$localDeviceId?name=${localDeviceName}"
+                        } else {
+                            localDeviceId
+                        }
                         DesktopQrCodeView(
-                            text = localDeviceId,
+                            text = qrText,
                             modifier = Modifier
                                 .size(120.dp)
                                 .background(Color.White, shape = RoundedCornerShape(8.dp))

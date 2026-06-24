@@ -216,7 +216,9 @@ class DeviceViewModel(
                 )
                 
                 apiClient.updateSystemConfig(updatedConfig)
-                updateDeviceStates()
+                try {
+                    updateDeviceStates()
+                } catch (_: Exception) {}
                 onSuccess()
             } catch (e: Exception) {
                 _error.value = when (e) {

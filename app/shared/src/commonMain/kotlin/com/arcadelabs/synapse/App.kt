@@ -29,6 +29,7 @@ import com.arcadelabs.synapse.core.designsystem.*
 import com.arcadelabs.synapse.core.domain.models.SyncthingConfig
 import com.arcadelabs.synapse.core.domain.models.PendingFolder
 import com.arcadelabs.synapse.core.domain.models.PendingFolderOffer
+import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
 import com.arcadelabs.synapse.features.devices.ui.DevicesScreen
 import com.arcadelabs.synapse.features.devices.ui.AddDeviceDialog
@@ -94,9 +95,47 @@ fun App(
     openUrl: ((String) -> Unit)? = null,
     exitApp: (() -> Unit)? = null,
     onRunBehaviorChanged: ((RunBehavior) -> Unit)? = null,
+    showNotification: ((title: String, message: String) -> Unit)? = null,
+    deviceModelName: String = "",
     apiClient: SyncthingApiClient = koinInject(),
     deviceViewModel: DeviceViewModel = koinViewModel()
 ) {
+    val pendingDevices by deviceViewModel.pendingDevices.collectAsState()
+    val shownNotifications = remember { mutableSetOf<String>() }
+    LaunchedEffect(pendingDevices) {
+        if (pendingDevices.isNotEmpty()) {
+            pendingDevices.forEach { (pendingId, pendingDevice) ->
+                if (!shownNotifications.contains(pendingId)) {
+                    shownNotifications.add(pendingId)
+                    showNotification?.invoke(
+                        "Incoming Pairing Request",
+                        "Device: ${pendingDevice.name.ifEmpty { "Unnamed" }} wants to pair"
+                    )
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(deviceModelName) {
+        if (deviceModelName.isNotEmpty()) {
+            try {
+                val status = apiClient.systemStatus()
+                val config = apiClient.systemConfig()
+                val localDevice = config.devices.find { it.deviceID.normalizeDeviceId() == status.myID.normalizeDeviceId() }
+                if (localDevice != null && (localDevice.name.isEmpty() || localDevice.name.lowercase() == "localhost" || localDevice.name.lowercase() == "this device")) {
+                    val updatedDevices = config.devices.map {
+                        if (it.deviceID.normalizeDeviceId() == status.myID.normalizeDeviceId()) {
+                            it.copy(name = deviceModelName)
+                        } else {
+                            it
+                        }
+                    }
+                    apiClient.updateSystemConfig(config.copy(devices = updatedDevices))
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
     var isCreateFolderDialogOpen by remember { mutableStateOf(false) }
     var isAddDeviceDialogOpen by remember { mutableStateOf(false) }
     var prefilledDeviceId by remember { mutableStateOf("") }
@@ -108,6 +147,7 @@ fun App(
     var prefilledFolderSharedDevices by remember { mutableStateOf<List<String>>(emptyList()) }
 
     var localDeviceId by remember { mutableStateOf("") }
+    var localDeviceName by remember { mutableStateOf("") }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
 
@@ -122,8 +162,11 @@ fun App(
             try {
                 val status = apiClient.systemStatus()
                 localDeviceId = status.myID
+                val config = apiClient.systemConfig()
+                localDeviceName = config.devices.find { it.deviceID.normalizeDeviceId() == status.myID.normalizeDeviceId() }?.name ?: ""
             } catch (e: Exception) {
                 localDeviceId = "Error retrieving ID"
+                localDeviceName = ""
             }
         }
     }
@@ -431,8 +474,13 @@ fun App(
                                 val localId = localDeviceId.ifEmpty { "Loading..." }
                                 
                                 if (localId.isNotEmpty() && localId != "Loading..." && localId != "Error retrieving ID") {
+                                    val qrText = if (localDeviceName.isNotEmpty()) {
+                                        "syncthing://$localId?name=${localDeviceName}"
+                                    } else {
+                                        localId
+                                    }
                                     QrCodeView(
-                                        text = localId,
+                                        text = qrText,
                                         modifier = Modifier
                                             .size(200.dp)
                                             .background(Color.White)
@@ -547,7 +595,6 @@ fun App(
                 }
 
                 // Incoming Connection Request Dialog Overlay
-                val pendingDevices by deviceViewModel.pendingDevices.collectAsState()
                 if (pendingDevices.isNotEmpty() && !isAddDeviceDialogOpen) {
                     val (pendingId, pendingDevice) = pendingDevices.entries.first()
                     AlertDialog(

@@ -113,11 +113,48 @@ class MainActivity : ComponentActivity() {
                     } else {
                         startSyncthingService()
                     }
+                },
+                showNotification = { title, message ->
+                    showSystemNotification(this, title, message)
+                },
+                deviceModelName = run {
+                    val manufacturer = android.os.Build.MANUFACTURER
+                    val model = android.os.Build.MODEL
+                    if (model.startsWith(manufacturer, ignoreCase = true)) {
+                        model.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+                    } else {
+                        manufacturer.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() } + " " + model
+                    }
                 }
             )
         }
 
         checkAndRequestPermissions()
+    }
+
+    private var notificationIdCounter = 2000
+
+    private fun showSystemNotification(context: Context, title: String, message: String) {
+        val channelId = "synapse_alert_channel"
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                channelId,
+                "Synapse Alerts",
+                android.app.NotificationManager.IMPORTANCE_DEFAULT
+            )
+            manager.createNotificationChannel(channel)
+        }
+        
+        val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setAutoCancel(true)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
+            
+        manager.notify(notificationIdCounter++, builder.build())
     }
 
     private fun convertUriToPath(context: Context, uri: Uri): String {

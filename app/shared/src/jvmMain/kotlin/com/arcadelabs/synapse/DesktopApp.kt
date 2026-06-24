@@ -23,6 +23,7 @@ import com.arcadelabs.synapse.core.designsystem.*
 import com.arcadelabs.synapse.core.domain.models.PendingFolder
 import com.arcadelabs.synapse.core.domain.models.PendingFolderOffer
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import com.arcadelabs.synapse.features.devices.ui.DesktopDevicesScreen
 import com.arcadelabs.synapse.features.devices.ui.DesktopAddDeviceDialog
 import com.arcadelabs.synapse.features.devices.ui.DeviceViewModel
@@ -106,6 +107,29 @@ fun DesktopApp(
     var prefilledFolderSharedDevices by remember { mutableStateOf<List<String>>(emptyList()) }
 
     var localDeviceId by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        try {
+            val status = apiClient.systemStatus()
+            val config = apiClient.systemConfig()
+            val localDevice = config.devices.find { it.deviceID.normalizeDeviceId() == status.myID.normalizeDeviceId() }
+            if (localDevice != null && (localDevice.name.isEmpty() || localDevice.name.lowercase() == "localhost")) {
+                val hostName = try {
+                    java.net.InetAddress.getLocalHost().hostName
+                } catch (_: Exception) {
+                    System.getProperty("user.name") + "-PC"
+                }
+                val nameToSet = hostName.ifEmpty { System.getProperty("user.name") + "-PC" }
+                val updatedDevices = config.devices.map {
+                    if (it.deviceID.normalizeDeviceId() == status.myID.normalizeDeviceId()) {
+                        it.copy(name = nameToSet)
+                    } else {
+                        it
+                    }
+                }
+                apiClient.updateSystemConfig(config.copy(devices = updatedDevices))
+            }
+        } catch (_: Exception) {}
+    }
     val coroutineScope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf(DesktopScreen.DASHBOARD) }
 

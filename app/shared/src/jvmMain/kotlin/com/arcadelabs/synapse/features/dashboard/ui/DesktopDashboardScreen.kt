@@ -18,6 +18,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.Canvas
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -494,6 +498,196 @@ fun FolderInfoRow(
 }
 
 @Composable
+fun SpeedGraph(
+    label: String,
+    currentSpeed: Long,
+    totalBytes: Long,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val history = remember { mutableStateListOf<Float>() }
+    
+    // Add current speed to history when it updates
+    LaunchedEffect(currentSpeed) {
+        history.add(currentSpeed.toFloat())
+        if (history.size > 40) {
+            history.removeAt(0)
+        }
+    }
+    
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                )
+                Text(
+                    text = formatSpeed(currentSpeed),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold,
+                    color = color
+                )
+            }
+            
+            Spacer(modifier = Modifier.height(2.dp))
+            
+            Text(
+                text = "Total: ${formatBytes(totalBytes)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            )
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(60.dp)
+            ) {
+                val width = size.width
+                val height = size.height
+                
+                if (history.size > 1) {
+                    val maxVal = history.maxOrNull()?.coerceAtLeast(1024f) ?: 1024f
+                    val path = Path()
+                    val fillPath = Path()
+                    
+                    val stepX = width / (history.size - 1)
+                    
+                    history.forEachIndexed { index, value ->
+                        val x = index * stepX
+                        val normalizedY = value / maxVal
+                        val y = height - (normalizedY * (height - 4f)) - 2f
+                        
+                        if (index == 0) {
+                            path.moveTo(x, y)
+                            fillPath.moveTo(x, height)
+                            fillPath.lineTo(x, y)
+                        } else {
+                            path.lineTo(x, y)
+                            fillPath.lineTo(x, y)
+                        }
+                        
+                        if (index == history.size - 1) {
+                            fillPath.lineTo(x, height)
+                            fillPath.close()
+                        }
+                    }
+                    
+                    drawPath(
+                        path = fillPath,
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                color.copy(alpha = 0.25f),
+                                color.copy(alpha = 0.0f)
+                            )
+                        )
+                    )
+                    
+                    drawPath(
+                        path = path,
+                        color = color,
+                        style = Stroke(width = 2.dp.toPx())
+                    )
+                } else {
+                    drawLine(
+                        color = color.copy(alpha = 0.2f),
+                        start = androidx.compose.ui.geometry.Offset(0f, height / 2),
+                        end = androidx.compose.ui.geometry.Offset(width, height / 2),
+                        strokeWidth = 1.5.dp.toPx()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DonutChart(
+    label: String,
+    value: Int,
+    max: Int,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val ratio = if (max > 0) value.toFloat() / max.toFloat() else 0f
+    
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = modifier
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(56.dp)
+        ) {
+            val outlineColor = MaterialTheme.colorScheme.outlineVariant
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val strokeWidth = 5.dp.toPx()
+                val radius = (size.minDimension - strokeWidth) / 2
+                
+                // Background circle
+                drawCircle(
+                    color = outlineColor,
+                    radius = radius,
+                    style = Stroke(width = strokeWidth)
+                )
+                
+                // Foreground arc (progress)
+                if (ratio > 0f) {
+                    drawArc(
+                        color = color,
+                        startAngle = -90f,
+                        sweepAngle = ratio * 360f,
+                        useCenter = false,
+                        style = Stroke(
+                            width = strokeWidth,
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    )
+                }
+            }
+            
+            // Value text inside donut hole
+            Text(
+                text = "$value/$max",
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 10.sp
+                ),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        
+        Spacer(modifier = Modifier.height(4.dp))
+        
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
 fun ThisDeviceSection(
     statusState: com.arcadelabs.synapse.features.status.ui.StatusUiState,
     folders: List<com.arcadelabs.synapse.core.domain.models.Folder>,
@@ -508,15 +702,21 @@ fun ThisDeviceSection(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant
+        )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
                 text = "This Device",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
@@ -527,49 +727,99 @@ fun ThisDeviceSection(
                 modifier = Modifier.padding(bottom = 12.dp)
             )
 
-            // Stats grid
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThisDeviceStatRow("Download Rate", "${formatSpeed(statusState.downloadSpeed)} (${formatBytes(statusState.totalDownload)})")
-                ThisDeviceStatRow("Upload Rate", "${formatSpeed(statusState.uploadSpeed)} (${formatBytes(statusState.totalUpload)})")
-                
-                // Local State Size
-                val totalBytes = folders.size * 50_000_000L // mock multiplier or sum
-                ThisDeviceStatRow("Local State (Total)", "~${formatBytes(totalBytes)}")
-                
-                ThisDeviceStatRow("Listeners", if (statusState.isRunning) "3/3" else "0/0")
-                ThisDeviceStatRow("Discovery", if (statusState.isRunning) "3/5" else "0/0")
-                ThisDeviceStatRow("Uptime", formatUptime(statusState.uptime))
-                
-                // Device ID with Copy Icon
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "Identification",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                    )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onCopyClick(myId) }
-                            .padding(vertical = 2.dp)
-                    ) {
+            // Side-by-Side Speed Graphs
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                SpeedGraph(
+                    label = "Download",
+                    currentSpeed = statusState.downloadSpeed,
+                    totalBytes = statusState.totalDownload,
+                    color = Color(0xFF10B981), // Emerald
+                    modifier = Modifier.weight(1f)
+                )
+                SpeedGraph(
+                    label = "Upload",
+                    currentSpeed = statusState.uploadSpeed,
+                    totalBytes = statusState.totalUpload,
+                    color = Color(0xFF3B82F6), // Blue
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier.padding(vertical = 12.dp)
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Left Part: Text Stats
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val totalBytes = folders.size * 50_000_000L
+                    ThisDeviceStatRow("Local State (Total)", "~${formatBytes(totalBytes)}")
+                    ThisDeviceStatRow("Uptime", formatUptime(statusState.uptime))
+                    ThisDeviceStatRow("Version", statusState.version.ifEmpty { "v1.27.8" })
+                    
+                    // Identification
+                    Column(modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            text = myId.take(7) + "..." + myId.takeLast(7),
-                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
+                            text = "Identification",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
-                        Text(
-                            text = if (copiedIdFeedback == myId) "Copied!" else "Copy",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier
+                                .clickable { onCopyClick(myId) }
+                                .padding(vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = myId.take(6) + "..." + myId.takeLast(6),
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (copiedIdFeedback == myId) "Copied!" else "Copy",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 }
-                
-                ThisDeviceStatRow("Version", statusState.version.ifEmpty { "v1.27.8" })
+
+                // Right Part: Donut Charts
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(start = 24.dp)
+                ) {
+                    val isRunning = statusState.isRunning
+                    val activeColor = Color(0xFF10B981) // Connected Emerald
+                    val inactiveColor = Color(0xFFEF4444) // Disconnected Crimson
+                    
+                    DonutChart(
+                        label = "Listeners",
+                        value = if (isRunning) 3 else 0,
+                        max = 3,
+                        color = if (isRunning) activeColor else inactiveColor
+                    )
+                    DonutChart(
+                        label = "Discovery",
+                        value = if (isRunning) 3 else 0,
+                        max = 5,
+                        color = if (isRunning) activeColor else inactiveColor
+                    )
+                }
             }
         }
     }
@@ -605,7 +855,10 @@ fun RemoteDevicesSection(
 ) {
     val myId = statusState.myId
     val remoteDevices = remember(devices, myId) {
-        devices.filter { it.id.normalizeDeviceId() != myId.normalizeDeviceId() && it.name.lowercase() != "localhost" }
+        devices.filter { 
+            it.id.normalizeDeviceId() != myId.normalizeDeviceId() &&
+            (it.connected || it.clientVersion.isNotEmpty() || it.inBytesTotal > 0 || it.outBytesTotal > 0)
+        }
     }
     val allPaused = remoteDevices.isNotEmpty() && remoteDevices.all { it.paused }
     val coroutineScope = rememberCoroutineScope()

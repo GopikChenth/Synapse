@@ -127,8 +127,9 @@ class MockSyncthingApiClient(
             device.deviceID to DeviceConnection(
                 address = if (device.paused) "" else "192.168.1.100:22000",
                 connected = !device.paused,
-                inBytesTotal = if (device.paused) 0 else 500000,
-                outBytesTotal = if (device.paused) 0 else 200000
+                clientVersion = "v1.27.8",
+                inBytesTotal = 500000,
+                outBytesTotal = 200000
             )
         }
         return ConnectionsResponse(
