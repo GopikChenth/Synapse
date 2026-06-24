@@ -1,5 +1,6 @@
 package com.arcadelabs.synapse.features.devices.ui
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arcadelabs.synapse.core.domain.models.*
@@ -10,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+@Immutable
 data class DeviceUiModel(
     val id: String,
     val name: String,
@@ -23,7 +25,8 @@ data class DeviceUiModel(
     val outBytesTotal: Long = 0,
     val introducer: Boolean = false,
     val autoAcceptFolders: Boolean = false,
-    val untrusted: Boolean = false
+    val untrusted: Boolean = false,
+    val sharedFolders: List<String> = emptyList()
 )
 
 class DeviceViewModel(
@@ -130,6 +133,11 @@ class DeviceViewModel(
 
         val uiDevices = config.devices.map { device ->
             val conn = connections[device.deviceID]
+            val deviceNormId = device.deviceID.normalizeDeviceId()
+            val sharedFolders = config.folders.filter { folder ->
+                folder.devices.any { it.deviceID.normalizeDeviceId() == deviceNormId }
+            }.map { it.label.ifEmpty { it.id } }
+            
             DeviceUiModel(
                 id = device.deviceID,
                 name = device.name,
@@ -143,7 +151,8 @@ class DeviceViewModel(
                 outBytesTotal = conn?.outBytesTotal ?: 0,
                 introducer = device.introducer,
                 autoAcceptFolders = device.autoAcceptFolders,
-                untrusted = device.untrusted
+                untrusted = device.untrusted,
+                sharedFolders = sharedFolders
             )
         }
         _devices.value = uiDevices

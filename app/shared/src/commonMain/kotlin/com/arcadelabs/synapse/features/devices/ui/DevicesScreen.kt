@@ -86,7 +86,6 @@ fun DevicesScreen(
                     items(filteredDevices) { device ->
                         DeviceItemCard(
                             device = device,
-                            folders = folders,
                             onOpenClick = { onEditDeviceClick(device) },
                             onDeleteClick = { deviceToDelete = device }
                         )
@@ -130,15 +129,10 @@ fun DevicesScreen(
 @Composable
 fun DeviceItemCard(
     device: DeviceUiModel,
-    folders: List<com.arcadelabs.synapse.core.domain.models.Folder>,
     onOpenClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
-    val sharedFolders = remember(device.id, folders) {
-        folders.filter { folder ->
-            folder.devices.any { it.deviceID.normalizeDeviceId() == device.id.normalizeDeviceId() }
-        }.map { it.label.ifEmpty { it.id } }
-    }
+    val sharedFolders = device.sharedFolders
 
     Card(
         modifier = Modifier
