@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextOverflow
 @Composable
 fun DevicesScreen(
     onAddDeviceClick: (String, String) -> Unit = { _, _ -> },
+    onEditDeviceClick: (DeviceUiModel) -> Unit = {},
     viewModel: DeviceViewModel = koinViewModel()
 ) {
     val devices by viewModel.devices.collectAsState()
@@ -86,7 +87,7 @@ fun DevicesScreen(
                         DeviceItemCard(
                             device = device,
                             folders = folders,
-                            onOpenClick = { viewModel.toggleDevicePause(device.id, device.paused) },
+                            onOpenClick = { onEditDeviceClick(device) },
                             onDeleteClick = { deviceToDelete = device }
                         )
                     }

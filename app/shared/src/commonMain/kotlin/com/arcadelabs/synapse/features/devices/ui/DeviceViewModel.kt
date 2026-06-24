@@ -20,7 +20,10 @@ data class DeviceUiModel(
     val clientVersion: String = "",
     val connectionType: String = "",
     val inBytesTotal: Long = 0,
-    val outBytesTotal: Long = 0
+    val outBytesTotal: Long = 0,
+    val introducer: Boolean = false,
+    val autoAcceptFolders: Boolean = false,
+    val untrusted: Boolean = false
 )
 
 class DeviceViewModel(
@@ -137,7 +140,10 @@ class DeviceViewModel(
                 clientVersion = conn?.clientVersion ?: "",
                 connectionType = conn?.type ?: "",
                 inBytesTotal = conn?.inBytesTotal ?: 0,
-                outBytesTotal = conn?.outBytesTotal ?: 0
+                outBytesTotal = conn?.outBytesTotal ?: 0,
+                introducer = device.introducer,
+                autoAcceptFolders = device.autoAcceptFolders,
+                untrusted = device.untrusted
             )
         }
         _devices.value = uiDevices
@@ -239,6 +245,96 @@ class DeviceViewModel(
                             "Synapse is not started"
                         } else {
                             msg.ifEmpty { "Failed to add device" }
+                        }
+                    }
+                }
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun updateDevice(
+        id: String,
+        name: String,
+        addresses: List<String>,
+        introducer: Boolean,
+        autoAccept: Boolean,
+        paused: Boolean,
+        untrusted: Boolean,
+        sharedFolders: Map<String, String>,
+        onSuccess: () -> Unit
+    ) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
+            try {
+                val currentConfig = apiClient.systemConfig()
+                val normalizedId = id.normalizeDeviceId()
+                
+                val existingDevice = currentConfig.devices.firstOrNull { it.deviceID.normalizeDeviceId() == normalizedId }
+                val updatedDevice = (existingDevice ?: Device(deviceID = normalizedId)).copy(
+                    name = name,
+                    addresses = addresses,
+                    paused = paused,
+                    introducer = introducer,
+                    autoAcceptFolders = autoAccept,
+                    untrusted = untrusted
+                )
+                
+                val updatedFolders = currentConfig.folders.map { folder ->
+                    if (sharedFolders.containsKey(folder.id)) {
+                        val password = sharedFolders[folder.id] ?: ""
+                        val existingRef = folder.devices.firstOrNull { it.deviceID.normalizeDeviceId() == normalizedId }
+                        val newRef = FolderDeviceReference(
+                            deviceID = normalizedId,
+                            encryptionPassword = if (untrusted) password else ""
+                        )
+                        if (existingRef != null) {
+                            folder.copy(devices = folder.devices.map {
+                                if (it.deviceID.normalizeDeviceId() == normalizedId) newRef else it
+                            })
+                        } else {
+                            folder.copy(devices = folder.devices + newRef)
+                        }
+                    } else {
+                        folder.copy(devices = folder.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId })
+                    }
+                }
+                
+                val updatedDevices = currentConfig.devices.map {
+                    if (it.deviceID.normalizeDeviceId() == normalizedId) updatedDevice else it
+                }
+                
+                val updatedConfig = currentConfig.copy(
+                    devices = updatedDevices,
+                    folders = updatedFolders
+                )
+                
+                apiClient.updateSystemConfig(updatedConfig)
+                try {
+                    updateDeviceStates()
+                } catch (_: Exception) {}
+                onSuccess()
+            } catch (e: Exception) {
+                _error.value = when (e) {
+                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
+                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+                    is SyncthingApiException -> "API Error: ${e.message}"
+                    else -> {
+                        val msg = e.message ?: ""
+                        if (
+                            msg.contains("connect", ignoreCase = true) ||
+                            msg.contains("127.0.0.1") ||
+                            msg.contains("refused", ignoreCase = true) ||
+                            msg.contains("cert", ignoreCase = true) ||
+                            msg.contains("trust", ignoreCase = true)
+                        ) {
+                            "Synapse is not started"
+                        } else {
+                            msg.ifEmpty { "Failed to update device" }
                         }
                     }
                 }

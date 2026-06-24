@@ -33,6 +33,7 @@ import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
 import com.arcadelabs.synapse.features.devices.ui.DevicesScreen
 import com.arcadelabs.synapse.features.devices.ui.AddDeviceDialog
+import com.arcadelabs.synapse.features.devices.ui.EditDeviceDialog
 import com.arcadelabs.synapse.features.devices.ui.DeviceViewModel
 import com.arcadelabs.synapse.features.folders.ui.CreateFolderDialog
 import com.arcadelabs.synapse.features.folders.ui.EditFolderDialog
@@ -141,6 +142,8 @@ fun App(
     var isEditFolderDialogOpen by remember { mutableStateOf(false) }
     var folderToEdit by remember { mutableStateOf<com.arcadelabs.synapse.core.domain.models.Folder?>(null) }
     var isAddDeviceDialogOpen by remember { mutableStateOf(false) }
+    var isEditDeviceDialogOpen by remember { mutableStateOf(false) }
+    var deviceToEdit by remember { mutableStateOf<com.arcadelabs.synapse.features.devices.ui.DeviceUiModel?>(null) }
     var prefilledDeviceId by remember { mutableStateOf("") }
     var prefilledDeviceName by remember { mutableStateOf("") }
     var isShowDeviceIdDialogOpen by remember { mutableStateOf(false) }
@@ -424,6 +427,10 @@ fun App(
                                     prefilledDeviceId = id
                                     prefilledDeviceName = name
                                     isAddDeviceDialogOpen = true
+                                },
+                                onEditDeviceClick = { device ->
+                                    deviceToEdit = device
+                                    isEditDeviceDialogOpen = true
                                 }
                             )
                             Screen.STATUS -> StatusScreen(onRunBehaviorChanged = onRunBehaviorChanged)
@@ -501,6 +508,30 @@ fun App(
                             prefilledDeviceId = prefilledDeviceId,
                             prefilledDeviceName = prefilledDeviceName
                         )
+                    }
+                }
+
+                // Root level Full-screen Edit Device Dialog Overlay
+                AnimatedVisibility(
+                    visible = isEditDeviceDialogOpen,
+                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
+                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    ) {
+                        deviceToEdit?.let { device ->
+                            EditDeviceDialog(
+                                device = device,
+                                onDismiss = {
+                                    isEditDeviceDialogOpen = false
+                                    deviceToEdit = null
+                                }
+                            )
+                        }
                     }
                 }
 

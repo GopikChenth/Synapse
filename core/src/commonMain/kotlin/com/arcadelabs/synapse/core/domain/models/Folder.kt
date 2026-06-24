@@ -5,7 +5,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class FolderDeviceReference(
-    @SerialName("deviceID") val deviceID: String
+    @SerialName("deviceID") val deviceID: String,
+    @SerialName("encryptionPassword") val encryptionPassword: String = ""
 )
 
 @Serializable

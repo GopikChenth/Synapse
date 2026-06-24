@@ -26,6 +26,7 @@ import com.arcadelabs.synapse.core.network.SyncthingApiClient
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import com.arcadelabs.synapse.features.devices.ui.DesktopDevicesScreen
 import com.arcadelabs.synapse.features.devices.ui.DesktopAddDeviceDialog
+import com.arcadelabs.synapse.features.devices.ui.DesktopEditDeviceDialog
 import com.arcadelabs.synapse.features.devices.ui.DeviceViewModel
 import com.arcadelabs.synapse.features.folders.ui.DesktopFoldersScreen
 import com.arcadelabs.synapse.features.folders.ui.DesktopCreateFolderDialog
@@ -101,6 +102,8 @@ fun DesktopApp(
     var isEditFolderDialogOpen by remember { mutableStateOf(false) }
     var folderToEdit by remember { mutableStateOf<com.arcadelabs.synapse.core.domain.models.Folder?>(null) }
     var isAddDeviceDialogOpen by remember { mutableStateOf(false) }
+    var isEditDeviceDialogOpen by remember { mutableStateOf(false) }
+    var deviceToEdit by remember { mutableStateOf<com.arcadelabs.synapse.features.devices.ui.DeviceUiModel?>(null) }
     var prefilledDeviceId by remember { mutableStateOf("") }
     var prefilledDeviceName by remember { mutableStateOf("") }
     var isRestartConfirmOpen by remember { mutableStateOf(false) }
@@ -243,6 +246,10 @@ fun DesktopApp(
                                     prefilledDeviceId = id
                                     prefilledDeviceName = name
                                     isAddDeviceDialogOpen = true
+                                },
+                                onEditDeviceClick = { device ->
+                                    deviceToEdit = device
+                                    isEditDeviceDialogOpen = true
                                 }
                             )
                             DesktopScreen.SETTINGS -> DesktopSettingsScreen(
@@ -280,6 +287,19 @@ fun DesktopApp(
                             folderToEdit = null
                         },
                         selectDirectory = selectDirectory
+                    )
+                }
+            }
+
+            // Edit Device Dialog
+            if (isEditDeviceDialogOpen) {
+                deviceToEdit?.let { device ->
+                    DesktopEditDeviceDialog(
+                        device = device,
+                        onDismiss = {
+                            isEditDeviceDialogOpen = false
+                            deviceToEdit = null
+                        }
                     )
                 }
             }
