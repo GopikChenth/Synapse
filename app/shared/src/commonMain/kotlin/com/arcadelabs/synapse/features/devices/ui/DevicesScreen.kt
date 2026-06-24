@@ -14,6 +14,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import com.arcadelabs.synapse.core.designsystem.DevicesIcon
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
@@ -87,7 +90,8 @@ fun DevicesScreen(
                         DeviceItemCard(
                             device = device,
                             onOpenClick = { onEditDeviceClick(device) },
-                            onDeleteClick = { deviceToDelete = device }
+                            onDeleteClick = { deviceToDelete = device },
+                            onPauseClick = { viewModel.toggleDevicePause(device.id, device.paused) }
                         )
                     }
                 }
@@ -130,7 +134,8 @@ fun DevicesScreen(
 fun DeviceItemCard(
     device: DeviceUiModel,
     onOpenClick: () -> Unit,
-    onDeleteClick: () -> Unit
+    onDeleteClick: () -> Unit,
+    onPauseClick: () -> Unit
 ) {
     val sharedFolders = device.sharedFolders
 
@@ -210,12 +215,56 @@ fun DeviceItemCard(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            IconButton(onClick = onDeleteClick) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Delete Device",
-                    tint = MaterialTheme.colorScheme.error
-                )
+            var showMenu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "More options",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false }
+                ) {
+                    val pauseText = if (device.paused) "Resume Device" else "Pause Device"
+                    val pauseIcon = if (device.paused) Icons.Default.PlayArrow else Icons.Default.Refresh
+                    DropdownMenuItem(
+                        text = { Text(pauseText) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = pauseIcon,
+                                contentDescription = null
+                            )
+                        },
+                        onClick = {
+                            showMenu = false
+                            onPauseClick()
+                        }
+                    )
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                "Delete Device",
+                                color = MaterialTheme.colorScheme.error,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        },
+                        onClick = {
+                            showMenu = false
+                            onDeleteClick()
+                        }
+                    )
+                }
             }
         }
     }

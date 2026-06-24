@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.ui.graphics.Color
 import com.arcadelabs.synapse.core.designsystem.FolderIcon
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
@@ -570,7 +571,7 @@ fun FolderCard(
             val statusColor = if (folder.paused)
                 MaterialTheme.colorScheme.tertiary
             else
-                MaterialTheme.colorScheme.primary
+                Color(0xFF10B981) // Premium green for Synced
 
             Surface(
                 shape = RoundedCornerShape(20.dp),
@@ -598,35 +599,6 @@ fun FolderCard(
                     expanded = showMenu,
                     onDismissRequest = { showMenu = false }
                 ) {
-                    // Info header
-                    Text(
-                        text = "Folder Info",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                    HorizontalDivider()
-                    DropdownMenuItem(
-                        text = {
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text("ID: ${folder.id}", style = MaterialTheme.typography.bodySmall)
-                                Text(
-                                    "Type: ${when(folder.type) {
-                                        "sendreceive" -> "Send & Receive"
-                                        "sendonly" -> "Send Only"
-                                        "receiveonly" -> "Receive Only"
-                                        else -> folder.type
-                                    }}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Text("Rescan: ${folder.rescanIntervalS}s", style = MaterialTheme.typography.bodySmall)
-                                Text("Devices: ${folder.devices.size}", style = MaterialTheme.typography.bodySmall)
-                            }
-                        },
-                        onClick = {},
-                        enabled = false
-                    )
-                    HorizontalDivider()
                     DropdownMenuItem(
                         text = {
                             Text(
