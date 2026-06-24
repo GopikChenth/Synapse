@@ -265,6 +265,63 @@ class FolderViewModel(
         }
     }
 
+    fun updateFolder(
+        id: String,
+        label: String,
+        path: String,
+        type: String,
+        paused: Boolean,
+        watchForChanges: Boolean,
+        sharedDevices: List<String>,
+        versioningType: String,
+        cleanoutAfter: Int,
+        onSuccess: () -> Unit
+    ) {
+        val updatedFolder = Folder(
+            id = id,
+            label = label,
+            path = path,
+            type = type,
+            paused = paused,
+            fsWatcherEnabled = watchForChanges,
+            devices = sharedDevices.map { FolderDeviceReference(it.normalizeDeviceId()) },
+            versioning = FolderVersioning(
+                type = versioningType,
+                params = if (versioningType == "trashcan" || versioningType == "staggered") {
+                    mapOf("cleanoutAfter" to cleanoutAfter.toString())
+                } else {
+                    emptyMap()
+                }
+            )
+        )
+
+        val snapshot = _foldersState.value
+        _foldersState.value = snapshot.map { if (it.id == id) updatedFolder else it }
+
+        viewModelScope.launch {
+            _error.value = null
+            try {
+                val currentConfig = apiClient.systemConfig()
+                val updatedFolders = currentConfig.folders.map {
+                    if (it.id == id) updatedFolder else it
+                }
+                val updatedConfig = currentConfig.copy(folders = updatedFolders)
+                apiClient.updateSystemConfig(updatedConfig)
+
+                // Confirm from server
+                val confirmed = apiClient.systemConfig()
+                _foldersState.value = confirmed.folders.filter { it.id !in pendingDeletions }
+                fetchMyIdAndConnections()
+                updateDevicesState(confirmed.devices)
+
+                onSuccess()
+            } catch (e: Exception) {
+                _foldersState.value = snapshot
+                _error.value = e.message ?: "Failed to update folder"
+            }
+        }
+    }
+
     fun dismissPendingDevice(deviceId: String) {
         viewModelScope.launch {
             try {

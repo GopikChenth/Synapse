@@ -35,6 +35,7 @@ import com.arcadelabs.synapse.features.devices.ui.DevicesScreen
 import com.arcadelabs.synapse.features.devices.ui.AddDeviceDialog
 import com.arcadelabs.synapse.features.devices.ui.DeviceViewModel
 import com.arcadelabs.synapse.features.folders.ui.CreateFolderDialog
+import com.arcadelabs.synapse.features.folders.ui.EditFolderDialog
 import com.arcadelabs.synapse.features.folders.ui.FoldersScreen
 import com.arcadelabs.synapse.features.status.ui.StatusScreen
 import com.arcadelabs.synapse.features.status.ui.RunBehavior
@@ -137,6 +138,8 @@ fun App(
     }
 
     var isCreateFolderDialogOpen by remember { mutableStateOf(false) }
+    var isEditFolderDialogOpen by remember { mutableStateOf(false) }
+    var folderToEdit by remember { mutableStateOf<com.arcadelabs.synapse.core.domain.models.Folder?>(null) }
     var isAddDeviceDialogOpen by remember { mutableStateOf(false) }
     var prefilledDeviceId by remember { mutableStateOf("") }
     var prefilledDeviceName by remember { mutableStateOf("") }
@@ -410,6 +413,10 @@ fun App(
                         when (screen) {
                             Screen.FOLDERS -> FoldersScreen(
                                 onAddFolderClick = { isCreateFolderDialogOpen = true },
+                                onEditFolderClick = { folder ->
+                                    folderToEdit = folder
+                                    isEditFolderDialogOpen = true
+                                },
                                 openFolder = openFolder
                             )
                             Screen.DEVICES -> DevicesScreen(
@@ -448,6 +455,31 @@ fun App(
                             prefilledFolderLabel = prefilledFolderLabel,
                             prefilledSharedDevices = prefilledFolderSharedDevices
                         )
+                    }
+                }
+
+                // Root level Full-screen Edit Folder Overlay
+                AnimatedVisibility(
+                    visible = isEditFolderDialogOpen,
+                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
+                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    ) {
+                        folderToEdit?.let { folder ->
+                            EditFolderDialog(
+                                folder = folder,
+                                onDismiss = {
+                                    isEditFolderDialogOpen = false
+                                    folderToEdit = null
+                                },
+                                selectDirectory = selectDirectory
+                            )
+                        }
                     }
                 }
 

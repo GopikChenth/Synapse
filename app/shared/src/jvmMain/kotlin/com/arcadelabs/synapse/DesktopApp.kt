@@ -29,6 +29,7 @@ import com.arcadelabs.synapse.features.devices.ui.DesktopAddDeviceDialog
 import com.arcadelabs.synapse.features.devices.ui.DeviceViewModel
 import com.arcadelabs.synapse.features.folders.ui.DesktopFoldersScreen
 import com.arcadelabs.synapse.features.folders.ui.DesktopCreateFolderDialog
+import com.arcadelabs.synapse.features.folders.ui.DesktopEditFolderDialog
 import com.arcadelabs.synapse.features.status.ui.DesktopStatusScreen
 import com.arcadelabs.synapse.features.status.ui.RunBehavior
 import org.koin.compose.viewmodel.koinViewModel
@@ -97,6 +98,8 @@ fun DesktopApp(
     deviceViewModel: DeviceViewModel = koinViewModel()
 ) {
     var isCreateFolderDialogOpen by remember { mutableStateOf(false) }
+    var isEditFolderDialogOpen by remember { mutableStateOf(false) }
+    var folderToEdit by remember { mutableStateOf<com.arcadelabs.synapse.core.domain.models.Folder?>(null) }
     var isAddDeviceDialogOpen by remember { mutableStateOf(false) }
     var prefilledDeviceId by remember { mutableStateOf("") }
     var prefilledDeviceName by remember { mutableStateOf("") }
@@ -229,6 +232,10 @@ fun DesktopApp(
                             )
                             DesktopScreen.FOLDERS -> DesktopFoldersScreen(
                                 onAddFolderClick = { isCreateFolderDialogOpen = true },
+                                onEditFolderClick = { folder ->
+                                    folderToEdit = folder
+                                    isEditFolderDialogOpen = true
+                                },
                                 openFolder = openFolder
                             )
                             DesktopScreen.DEVICES -> DesktopDevicesScreen(
@@ -261,6 +268,20 @@ fun DesktopApp(
                     prefilledFolderLabel = prefilledFolderLabel,
                     prefilledSharedDevices = prefilledFolderSharedDevices
                 )
+            }
+
+            // Edit Folder Dialog
+            if (isEditFolderDialogOpen) {
+                folderToEdit?.let { folder ->
+                    DesktopEditFolderDialog(
+                        folder = folder,
+                        onDismiss = {
+                            isEditFolderDialogOpen = false
+                            folderToEdit = null
+                        },
+                        selectDirectory = selectDirectory
+                    )
+                }
             }
 
             // Root level Full-screen Add Device Dialog Overlay

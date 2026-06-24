@@ -38,6 +38,7 @@ private fun generateRandomFolderId(): String {
 @Composable
 fun DesktopFoldersScreen(
     onAddFolderClick: () -> Unit,
+    onEditFolderClick: (com.arcadelabs.synapse.core.domain.models.Folder) -> Unit = {},
     openFolder: ((String) -> Unit)? = null,
     viewModel: FolderViewModel = koinViewModel()
 ) {
@@ -102,7 +103,7 @@ fun DesktopFoldersScreen(
                         items(folders) { folder ->
                             DesktopFolderCard(
                                 folder = folder,
-                                onOpenClick = { openFolder?.invoke(folder.path) },
+                                onOpenClick = { onEditFolderClick(folder) },
                                 onDeleteFolder = { viewModel.deleteFolder(it) }
                             )
                         }
@@ -461,22 +462,10 @@ fun DesktopFolderCard(
     onDeleteFolder: (String) -> Unit = {},
     viewModel: FolderViewModel = koinViewModel()
 ) {
-    var showDetail by remember { mutableStateOf(false) }
-
-    if (showDetail) {
-        FolderDetailDialog(
-            folder = folder,
-            onDismiss = { showDetail = false },
-            onOpenInExplorer = { onOpenClick(); showDetail = false },
-            onDelete = { onDeleteFolder(folder.id); showDetail = false },
-            viewModel = viewModel
-        )
-    }
-
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { showDetail = true },
+            .clickable { onOpenClick() },
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)

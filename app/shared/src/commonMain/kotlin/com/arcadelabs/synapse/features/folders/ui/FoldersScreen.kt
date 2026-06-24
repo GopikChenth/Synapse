@@ -37,6 +37,7 @@ fun generateRandomFolderId(): String {
 @Composable
 fun FoldersScreen(
     onAddFolderClick: () -> Unit,
+    onEditFolderClick: (com.arcadelabs.synapse.core.domain.models.Folder) -> Unit = {},
     onAddDeviceClick: (String, String) -> Unit = { _, _ -> },
     openFolder: ((String) -> Unit)? = null,
     viewModel: FolderViewModel = koinViewModel()
@@ -109,7 +110,7 @@ fun FoldersScreen(
                     items(folders) { folder ->
                         FolderCard(
                             folder = folder,
-                            onOpenClick = { openFolder?.invoke(folder.path) },
+                            onOpenClick = { onEditFolderClick(folder) },
                             onDeleteFolder = { viewModel.deleteFolder(it) },
                             onRescanFolder = { viewModel.rescanFolder(it) }
                         )
