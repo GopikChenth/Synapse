@@ -20,9 +20,12 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import com.arcadelabs.synapse.core.designsystem.FolderIcon
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
+import com.arcadelabs.synapse.SynapseBackHandler
 
 fun generateRandomFolderId(): String {
     val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -142,298 +145,286 @@ fun CreateFolderSheet(
 
     val canSave = folderId.isNotBlank() && folderPath.isNotBlank()
 
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    SynapseBackHandler(enabled = true, onBack = onDismiss)
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        dragHandle = { BottomSheetDefaults.DragHandle() }
-    ) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Add Folder", style = MaterialTheme.typography.titleMedium) },
+                navigationIcon = {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            if (canSave) {
+                                viewModel.createFolder(
+                                    id = folderId.trim(),
+                                    label = folderLabel.trim(),
+                                    path = folderPath.trim(),
+                                    type = folderType,
+                                    paused = pauseFolder,
+                                    watchForChanges = watchForChanges,
+                                    sharedDevices = selectedDevices.toList(),
+                                    versioningType = versioningType,
+                                    onSuccess = onDismiss
+                                )
+                            }
+                        },
+                        enabled = canSave && !isLoading
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(Icons.Default.Check, contentDescription = "Save")
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            )
+        }
+    ) { innerPadding ->
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Header
+            // Error banner
+            if (error != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = error ?: "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+
+            // Folder Label
+            OutlinedTextField(
+                value = folderLabel,
+                onValueChange = { folderLabel = it },
+                label = { Text("Folder Label (optional)") },
+                placeholder = { Text("e.g. My Documents") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Folder ID
+            OutlinedTextField(
+                value = folderId,
+                onValueChange = { folderId = it },
+                label = { Text("Folder ID") },
+                singleLine = true,
+                supportingText = { Text("Must match the ID on remote devices to sync") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Directory Path
+            OutlinedTextField(
+                value = folderPath,
+                onValueChange = { folderPath = it },
+                label = { Text("Directory Path") },
+                singleLine = true,
+                trailingIcon = {
+                    IconButton(onClick = {
+                        selectDirectory?.invoke { selectedPath ->
+                            folderPath = selectedPath
+                        }
+                    }) {
+                        Icon(
+                            FolderIcon,
+                            contentDescription = "Browse",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                },
+                placeholder = { Text("/sdcard/Documents") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Folder Type
+            var showTypeDropdown by remember { mutableStateOf(false) }
+            val typeLabel = when (folderType) {
+                "sendreceive" -> "Send & Receive"
+                "sendonly"    -> "Send Only"
+                "receiveonly" -> "Receive Only"
+                else          -> "Send & Receive"
+            }
+            ExposedDropdownMenuBox(
+                expanded = showTypeDropdown,
+                onExpandedChange = { showTypeDropdown = it }
+            ) {
+                OutlinedTextField(
+                    value = typeLabel,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Folder Type") },
+                    trailingIcon = {
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = showTypeDropdown)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                )
+                ExposedDropdownMenu(
+                    expanded = showTypeDropdown,
+                    onDismissRequest = { showTypeDropdown = false }
+                ) {
+                    listOf(
+                        "sendreceive" to "Send & Receive",
+                        "sendonly"    to "Send Only",
+                        "receiveonly" to "Receive Only"
+                    ).forEach { (value, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = { folderType = value; showTypeDropdown = false }
+                        )
+                    }
+                }
+            }
+
+            // Share with Devices
+            if (devices.isNotEmpty()) {
+                Text(
+                    text = "Share with Devices",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                devices.forEach { device ->
+                    val isChecked = selectedDevices.contains(device.deviceID.normalizeDeviceId())
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                if (isChecked) selectedDevices.remove(device.deviceID.normalizeDeviceId())
+                                else selectedDevices.add(device.deviceID.normalizeDeviceId())
+                            }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = device.name.ifEmpty { device.deviceID.take(8) + "..." },
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Switch(
+                            checked = isChecked,
+                            onCheckedChange = { checked ->
+                                if (checked) selectedDevices.add(device.deviceID.normalizeDeviceId())
+                                else selectedDevices.remove(device.deviceID.normalizeDeviceId())
+                            },
+                            modifier = Modifier.scale(0.85f)
+                        )
+                    }
+                }
+            }
+
+            // Watch for Changes
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Watch for Changes",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "Auto-detect file changes without manual rescanning",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = watchForChanges,
+                    onCheckedChange = { watchForChanges = it },
+                    modifier = Modifier.scale(0.85f)
+                )
+            }
+
+            // Pause Folder
+            Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Add Folder",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    "Pause Folder",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
-                Button(
-                    onClick = {
-                        if (canSave) {
-                            viewModel.createFolder(
-                                id = folderId.trim(),
-                                label = folderLabel.trim(),
-                                path = folderPath.trim(),
-                                type = folderType,
-                                paused = pauseFolder,
-                                watchForChanges = watchForChanges,
-                                sharedDevices = selectedDevices.toList(),
-                                versioningType = versioningType,
-                                onSuccess = onDismiss
-                            )
-                        }
-                    },
-                    enabled = canSave && !isLoading
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text("Save")
-                }
+                Switch(
+                    checked = pauseFolder,
+                    onCheckedChange = { pauseFolder = it },
+                    modifier = Modifier.scale(0.85f)
+                )
             }
 
-            HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
-
-            // Scrollable form
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+            // File Versioning
+            var showVersioningDropdown by remember { mutableStateOf(false) }
+            val versioningLabel = when (versioningType) {
+                "none"      -> "No File Versioning"
+                "trashcan"  -> "Trashcan File Versioning"
+                "simple"    -> "Simple File Versioning"
+                "staggered" -> "Staggered File Versioning"
+                else        -> "No File Versioning"
+            }
+            ExposedDropdownMenuBox(
+                expanded = showVersioningDropdown,
+                onExpandedChange = { showVersioningDropdown = it }
             ) {
-                // Error banner
-                if (error != null) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = error ?: "",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.padding(12.dp)
-                        )
-                    }
-                }
-
-                // Folder Label
                 OutlinedTextField(
-                    value = folderLabel,
-                    onValueChange = { folderLabel = it },
-                    label = { Text("Folder Label (optional)") },
-                    placeholder = { Text("e.g. My Documents") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Folder ID
-                OutlinedTextField(
-                    value = folderId,
-                    onValueChange = { folderId = it },
-                    label = { Text("Folder ID") },
-                    singleLine = true,
-                    supportingText = { Text("Must match the ID on remote devices to sync") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Directory Path
-                OutlinedTextField(
-                    value = folderPath,
-                    onValueChange = { folderPath = it },
-                    label = { Text("Directory Path") },
-                    singleLine = true,
+                    value = versioningLabel,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("File Versioning") },
                     trailingIcon = {
-                        IconButton(onClick = {
-                            selectDirectory?.invoke { selectedPath ->
-                                folderPath = selectedPath
-                            }
-                        }) {
-                            Icon(
-                                FolderIcon,
-                                contentDescription = "Browse",
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = showVersioningDropdown)
                     },
-                    placeholder = { Text("/sdcard/Documents") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                 )
-
-                // Folder Type
-                var showTypeDropdown by remember { mutableStateOf(false) }
-                val typeLabel = when (folderType) {
-                    "sendreceive" -> "Send & Receive"
-                    "sendonly"    -> "Send Only"
-                    "receiveonly" -> "Receive Only"
-                    else          -> "Send & Receive"
-                }
-                ExposedDropdownMenuBox(
-                    expanded = showTypeDropdown,
-                    onExpandedChange = { showTypeDropdown = it }
-                ) {
-                    OutlinedTextField(
-                        value = typeLabel,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Folder Type") },
-                        trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = showTypeDropdown)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
-                    )
-                    ExposedDropdownMenu(
-                        expanded = showTypeDropdown,
-                        onDismissRequest = { showTypeDropdown = false }
-                    ) {
-                        listOf(
-                            "sendreceive" to "Send & Receive",
-                            "sendonly"    to "Send Only",
-                            "receiveonly" to "Receive Only"
-                        ).forEach { (value, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = { folderType = value; showTypeDropdown = false }
-                            )
-                        }
-                    }
-                }
-
-                // Share with Devices
-                if (devices.isNotEmpty()) {
-                    Text(
-                        text = "Share with Devices",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    devices.forEach { device ->
-                        val isChecked = selectedDevices.contains(device.deviceID.normalizeDeviceId())
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    if (isChecked) selectedDevices.remove(device.deviceID.normalizeDeviceId())
-                                    else selectedDevices.add(device.deviceID.normalizeDeviceId())
-                                }
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = device.name.ifEmpty { device.deviceID.take(8) + "..." },
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Switch(
-                                checked = isChecked,
-                                onCheckedChange = { checked ->
-                                    if (checked) selectedDevices.add(device.deviceID.normalizeDeviceId())
-                                    else selectedDevices.remove(device.deviceID.normalizeDeviceId())
-                                },
-                                modifier = Modifier.scale(0.85f)
-                            )
-                        }
-                    }
-                }
-
-                // Watch for Changes
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Watch for Changes",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            "Auto-detect file changes without manual rescanning",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = watchForChanges,
-                        onCheckedChange = { watchForChanges = it },
-                        modifier = Modifier.scale(0.85f)
-                    )
-                }
-
-                // Pause Folder
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        "Pause Folder",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Switch(
-                        checked = pauseFolder,
-                        onCheckedChange = { pauseFolder = it },
-                        modifier = Modifier.scale(0.85f)
-                    )
-                }
-
-                // File Versioning
-                var showVersioningDropdown by remember { mutableStateOf(false) }
-                val versioningLabel = when (versioningType) {
-                    "none"      -> "No File Versioning"
-                    "trashcan"  -> "Trashcan File Versioning"
-                    "simple"    -> "Simple File Versioning"
-                    "staggered" -> "Staggered File Versioning"
-                    else        -> "No File Versioning"
-                }
-                ExposedDropdownMenuBox(
+                ExposedDropdownMenu(
                     expanded = showVersioningDropdown,
-                    onExpandedChange = { showVersioningDropdown = it }
+                    onDismissRequest = { showVersioningDropdown = false }
                 ) {
-                    OutlinedTextField(
-                        value = versioningLabel,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("File Versioning") },
-                        trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = showVersioningDropdown)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
-                    )
-                    ExposedDropdownMenu(
-                        expanded = showVersioningDropdown,
-                        onDismissRequest = { showVersioningDropdown = false }
-                    ) {
-                        listOf(
-                            "none"      to "No File Versioning",
-                            "trashcan"  to "Trashcan File Versioning",
-                            "simple"    to "Simple File Versioning",
-                            "staggered" to "Staggered File Versioning"
-                        ).forEach { (value, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = { versioningType = value; showVersioningDropdown = false }
-                            )
-                        }
+                    listOf(
+                        "none"      to "No File Versioning",
+                        "trashcan"  to "Trashcan File Versioning",
+                        "simple"    to "Simple File Versioning",
+                        "staggered" to "Staggered File Versioning"
+                    ).forEach { (value, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = { versioningType = value; showVersioningDropdown = false }
+                        )
                     }
                 }
-
-                // Bottom spacing
-                Spacer(modifier = Modifier.height(16.dp))
             }
+
+            // Bottom spacing
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

@@ -424,20 +424,31 @@ fun App(
                     }
                 }
 
-                // Create Folder Bottom Sheet
-                if (isCreateFolderDialogOpen) {
-                    CreateFolderDialog(
-                        onDismiss = {
-                            isCreateFolderDialogOpen = false
-                            prefilledFolderId = ""
-                            prefilledFolderLabel = ""
-                            prefilledFolderSharedDevices = emptyList()
-                        },
-                        selectDirectory = selectDirectory,
-                        prefilledFolderId = prefilledFolderId,
-                        prefilledFolderLabel = prefilledFolderLabel,
-                        prefilledSharedDevices = prefilledFolderSharedDevices
-                    )
+                // Root level Full-screen Add Folder Overlay
+                AnimatedVisibility(
+                    visible = isCreateFolderDialogOpen,
+                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
+                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    ) {
+                        CreateFolderDialog(
+                            onDismiss = {
+                                isCreateFolderDialogOpen = false
+                                prefilledFolderId = ""
+                                prefilledFolderLabel = ""
+                                prefilledFolderSharedDevices = emptyList()
+                            },
+                            selectDirectory = selectDirectory,
+                            prefilledFolderId = prefilledFolderId,
+                            prefilledFolderLabel = prefilledFolderLabel,
+                            prefilledSharedDevices = prefilledFolderSharedDevices
+                        )
+                    }
                 }
 
                 // Root level Full-screen Add Device Dialog Overlay

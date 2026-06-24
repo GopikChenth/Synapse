@@ -29,6 +29,7 @@ import com.arcadelabs.synapse.core.designsystem.QrCodeIcon
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.parseSyncthingQr
 import com.arcadelabs.synapse.core.domain.models.parseSyncthingQrDetails
+import com.arcadelabs.synapse.SynapseBackHandler
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +40,7 @@ fun AddDeviceDialog(
     prefilledDeviceName: String = "",
     viewModel: DeviceViewModel = koinViewModel()
 ) {
+    SynapseBackHandler(enabled = true, onBack = onDismiss)
     val folders by viewModel.folders.collectAsState()
 
     // Form States
