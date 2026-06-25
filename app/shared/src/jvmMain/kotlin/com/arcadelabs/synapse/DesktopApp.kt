@@ -33,6 +33,7 @@ import com.arcadelabs.synapse.features.folders.ui.DesktopCreateFolderDialog
 import com.arcadelabs.synapse.features.folders.ui.DesktopEditFolderDialog
 import com.arcadelabs.synapse.features.status.ui.DesktopStatusScreen
 import com.arcadelabs.synapse.features.status.ui.RunBehavior
+import com.arcadelabs.synapse.features.recent.ui.RecentChangesScreen
 import org.koin.compose.viewmodel.koinViewModel
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
@@ -46,6 +47,7 @@ enum class DesktopScreen(val title: String) {
     DASHBOARD("Dashboard"),
     FOLDERS("Folders"),
     DEVICES("Devices"),
+    RECENT("Recent Changes"),
     SETTINGS("Settings")
 }
 
@@ -168,6 +170,7 @@ fun DesktopApp(
                             DesktopScreen.DASHBOARD -> Icons.Default.Home
                             DesktopScreen.FOLDERS -> FolderIcon
                             DesktopScreen.DEVICES -> DevicesIcon
+                            DesktopScreen.RECENT -> HistoryIcon
                             DesktopScreen.SETTINGS -> Icons.Default.Settings
                         }
                         NavigationRailItem(
@@ -241,22 +244,25 @@ fun DesktopApp(
                                 },
                                 openFolder = openFolder
                             )
-                            DesktopScreen.DEVICES -> DesktopDevicesScreen(
-                                onAddDeviceClick = { id, name ->
-                                    prefilledDeviceId = id
-                                    prefilledDeviceName = name
-                                    isAddDeviceDialogOpen = true
-                                },
-                                onEditDeviceClick = { device ->
-                                    deviceToEdit = device
-                                    isEditDeviceDialogOpen = true
-                                }
-                            )
-                            DesktopScreen.SETTINGS -> DesktopSettingsScreen(
-                                apiClient = apiClient,
-                                openUrl = openUrl
-                            )
-                        }
+                             DesktopScreen.DEVICES -> DesktopDevicesScreen(
+                                 onAddDeviceClick = { id, name ->
+                                     prefilledDeviceId = id
+                                     prefilledDeviceName = name
+                                     isAddDeviceDialogOpen = true
+                                 },
+                                 onEditDeviceClick = { device ->
+                                     deviceToEdit = device
+                                     isEditDeviceDialogOpen = true
+                                 }
+                             )
+                             DesktopScreen.RECENT -> RecentChangesScreen(
+                                 onCloseClick = { currentScreen = DesktopScreen.DASHBOARD }
+                             )
+                             DesktopScreen.SETTINGS -> DesktopSettingsScreen(
+                                 apiClient = apiClient,
+                                 openUrl = openUrl
+                             )
+                         }
                     }
                 }
             }

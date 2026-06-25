@@ -24,6 +24,8 @@ class DesktopDaemonManager {
     val state: StateFlow<DaemonState> = _state
 
     private var process: Process? = null
+    @Volatile
+    private var isStopped = false
 
     companion object {
         private const val VERSION      = "1.27.8"
@@ -36,6 +38,7 @@ class DesktopDaemonManager {
     }
 
     fun start() {
+        isStopped = false
         Thread {
             try {
                 runDaemonLifecycle()
@@ -46,6 +49,7 @@ class DesktopDaemonManager {
     }
 
     fun stop() {
+        isStopped = true
         try {
             process?.destroy()
             process = null
@@ -88,7 +92,6 @@ class DesktopDaemonManager {
         }
 
         // ── Step 3: Start our own managed daemon ───────────────────────────────
-        _state.value = DaemonState.Starting
         try {
             val pb = ProcessBuilder(
                 binFile.absolutePath,
@@ -102,38 +105,52 @@ class DesktopDaemonManager {
             )
             pb.environment()["STNOUPGRADE"] = "1"
             pb.redirectErrorStream(true)
-            val proc = pb.start()
-            process = proc
 
-            Thread {
-                try {
-                    proc.inputStream.bufferedReader().use { reader ->
-                        var line = reader.readLine()
-                        while (line != null) {
-                            println("[Syncthing] $line")
-                            line = reader.readLine()
+            while (!isStopped) {
+                _state.value = DaemonState.Starting
+                val proc = pb.start()
+                process = proc
+
+                Thread {
+                    try {
+                        proc.inputStream.bufferedReader().use { reader ->
+                            var line = reader.readLine()
+                            while (line != null) {
+                                println("[Syncthing] $line")
+                                line = reader.readLine()
+                            }
                         }
+                    } catch (_: Exception) {}
+                }.start()
+
+                Runtime.getRuntime().addShutdownHook(Thread { proc.destroy() })
+
+                // ── Step 4: Ping until the REST API is up (no config parsing needed) ──
+                var ready = false
+                repeat(60) { // up to 30 seconds
+                    if (!ready && pingApi(MANAGED_BASE_URL, MANAGED_API_KEY)) {
+                        ready = true
                     }
-                } catch (_: Exception) {}
-            }.start()
-
-            Runtime.getRuntime().addShutdownHook(Thread { proc.destroy() })
-
-            // ── Step 4: Ping until the REST API is up (no config parsing needed) ──
-            var ready = false
-            repeat(60) { // up to 30 seconds
-                if (!ready && pingApi(MANAGED_BASE_URL, MANAGED_API_KEY)) {
-                    ready = true
+                    if (!ready) Thread.sleep(500)
                 }
-                if (!ready) Thread.sleep(500)
-            }
 
-            if (!ready) {
-                _state.value = DaemonState.Error("Syncthing did not respond after 30 seconds.")
-                return
-            }
+                if (!ready) {
+                    _state.value = DaemonState.Error("Syncthing did not respond after 30 seconds.")
+                    return
+                }
 
-            _state.value = DaemonState.Ready(MANAGED_API_KEY, MANAGED_BASE_URL)
+                _state.value = DaemonState.Ready(MANAGED_API_KEY, MANAGED_BASE_URL)
+
+                val exitCode = proc.waitFor()
+                println("[Syncthing] Daemon process exited with code $exitCode")
+
+                if (exitCode != 3 || isStopped) {
+                    break
+                }
+
+                // Sleep briefly before restarting
+                Thread.sleep(1000)
+            }
 
         } catch (e: Exception) {
             _state.value = DaemonState.Error("Failed to start Syncthing daemon: ${e.message}")

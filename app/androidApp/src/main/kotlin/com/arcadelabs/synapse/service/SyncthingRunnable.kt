@@ -32,7 +32,7 @@ class SyncthingRunnable(
             }
 
             val command = when (commandType) {
-                CommandType.SERVE -> listOf(binary.absolutePath, "serve", "--no-browser")
+                CommandType.SERVE -> listOf(binary.absolutePath, "serve", "--no-browser", "--no-restart")
                 CommandType.GENERATE -> listOf(binary.absolutePath, "generate")
                 CommandType.DEVICE_ID -> listOf(binary.absolutePath, "device-id")
             }

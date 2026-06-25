@@ -104,6 +104,11 @@ interface SyncthingApiClient {
     suspend fun scan(folderId: String? = null): HttpResponse
 
     /**
+     * Retrieves recent events from the Syncthing daemon.
+     */
+    suspend fun getEvents(since: Int = 0, limit: Int = 100): List<Event>
+
+    /**
      * Removes a single folder from the Syncthing configuration by ID.
      * Uses DELETE /rest/config/folders/{id} — no restart required.
      */
@@ -407,6 +412,15 @@ internal class SyncthingApiClientImpl(
             header("X-API-Key", key)
             parameter("folder", folderId)
         }
+    }
+
+    override suspend fun getEvents(since: Int, limit: Int): List<Event> {
+        val key = getOrResolveApiKey()
+        return client.get("$baseUrl/rest/events") {
+            header("X-API-Key", key)
+            parameter("since", since)
+            parameter("limit", limit)
+        }.body()
     }
 }
 

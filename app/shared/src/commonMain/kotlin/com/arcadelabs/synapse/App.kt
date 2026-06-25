@@ -40,6 +40,7 @@ import com.arcadelabs.synapse.features.folders.ui.EditFolderDialog
 import com.arcadelabs.synapse.features.folders.ui.FoldersScreen
 import com.arcadelabs.synapse.features.status.ui.StatusScreen
 import com.arcadelabs.synapse.features.status.ui.RunBehavior
+import com.arcadelabs.synapse.features.recent.ui.RecentChangesScreen
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
@@ -148,6 +149,8 @@ fun App(
     var prefilledDeviceName by remember { mutableStateOf("") }
     var isShowDeviceIdDialogOpen by remember { mutableStateOf(false) }
     var isImportExportDialogOpen by remember { mutableStateOf(false) }
+    var isRestartConfirmOpen by remember { mutableStateOf(false) }
+    var isRecentChangesPageOpen by remember { mutableStateOf(false) }
     var prefilledFolderId by remember { mutableStateOf("") }
     var prefilledFolderLabel by remember { mutableStateOf("") }
     var prefilledFolderSharedDevices by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -233,10 +236,15 @@ fun App(
                     )
 
                     NavigationDrawerItem(
-                        icon = { Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                        icon = { Icon(HistoryIcon, contentDescription = null, modifier = Modifier.size(20.dp)) },
                         label = { Text("Recent changes", style = MaterialTheme.typography.bodyMedium) },
                         selected = false,
-                        onClick = {},
+                        onClick = {
+                            coroutineScope.launch {
+                                drawerState.close()
+                            }
+                            isRecentChangesPageOpen = true
+                        },
                         colors = drawerItemColors,
                         modifier = Modifier.padding(horizontal = 12.dp)
                     )
@@ -276,10 +284,8 @@ fun App(
                         onClick = {
                             coroutineScope.launch {
                                 drawerState.close()
-                                try {
-                                    apiClient.restart()
-                                } catch(e: Exception) {}
                             }
+                            isRestartConfirmOpen = true
                         },
                         colors = drawerItemColors,
                         modifier = Modifier.padding(horizontal = 12.dp)
@@ -752,6 +758,60 @@ fun App(
                             }
                         }
                     )
+                }
+
+                // Restart Confirmation Dialog
+                if (isRestartConfirmOpen) {
+                    AlertDialog(
+                        onDismissRequest = { isRestartConfirmOpen = false },
+                        title = { Text("Restart Syncthing Daemon?") },
+                        text = {
+                            Text("Are you sure you want to restart the Syncthing daemon? This will briefly disconnect all active synchronizations.")
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    isRestartConfirmOpen = false
+                                    coroutineScope.launch {
+                                        try {
+                                            apiClient.restart()
+                                        } catch (e: Exception) {
+                                            // ignore expected network error due to connection termination on restart
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text("Restart")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = {
+                                    isRestartConfirmOpen = false
+                                }
+                            ) {
+                                Text("Cancel")
+                            }
+                        }
+                    )
+                }
+
+                // Root level Full-screen Recent Changes Overlay
+                AnimatedVisibility(
+                    visible = isRecentChangesPageOpen,
+                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
+                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    ) {
+                        RecentChangesScreen(
+                            onCloseClick = { isRecentChangesPageOpen = false }
+                        )
+                    }
                 }
             }
         }

@@ -8,6 +8,8 @@ import io.ktor.client.request.request
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class MockSyncthingApiClient(
     private val localDeviceName: String = "This Device"
@@ -207,5 +209,46 @@ class MockSyncthingApiClient(
 
     override suspend fun deleteDevice(deviceId: String) {
         devicesList.removeAll { it.deviceID == deviceId }
+    }
+
+    override suspend fun getEvents(since: Int, limit: Int): List<Event> {
+        return listOf(
+            Event(
+                id = 1,
+                globalID = 1,
+                type = "ItemFinished",
+                time = "2026-06-25T20:10:00.000Z",
+                data = kotlinx.serialization.json.buildJsonObject {
+                    put("item", "document.pdf")
+                    put("folder", "default")
+                    put("type", "file")
+                    put("action", "update")
+                }
+            ),
+            Event(
+                id = 2,
+                globalID = 2,
+                type = "ItemFinished",
+                time = "2026-06-25T20:12:00.000Z",
+                data = kotlinx.serialization.json.buildJsonObject {
+                    put("item", "image.png")
+                    put("folder", "photos")
+                    put("type", "file")
+                    put("action", "update")
+                }
+            ),
+            Event(
+                id = 3,
+                globalID = 3,
+                type = "ItemFinished",
+                time = "2026-06-25T20:15:00.000Z",
+                data = kotlinx.serialization.json.buildJsonObject {
+                    put("item", "old_config.txt")
+                    put("folder", "config")
+                    put("type", "file")
+                    put("action", "delete")
+                }
+            )
+        )
     }
 }

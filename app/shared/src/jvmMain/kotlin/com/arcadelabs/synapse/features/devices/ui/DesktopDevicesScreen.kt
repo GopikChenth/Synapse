@@ -37,8 +37,7 @@ fun DesktopDevicesScreen(
 
     val filteredDevices = remember(devices, myId) {
         devices.filter { 
-            it.id.normalizeDeviceId() != myId.normalizeDeviceId() &&
-            (it.connected || it.clientVersion.isNotEmpty() || it.inBytesTotal > 0 || it.outBytesTotal > 0)
+            it.id.normalizeDeviceId() != myId.normalizeDeviceId()
         }
     }
 
