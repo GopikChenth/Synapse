@@ -198,7 +198,12 @@ class MockSyncthingApiClient(
         return pendingFoldersMap.toMap()
     }
 
-    override suspend fun dismissPendingFolder(folderId: String): HttpResponse {
+    override suspend fun dismissPendingFolder(
+        folderId: String,
+        deviceId: String,
+        label: String,
+        time: String
+    ): HttpResponse {
         pendingFoldersMap.remove(folderId)
         return dummyResponse()
     }

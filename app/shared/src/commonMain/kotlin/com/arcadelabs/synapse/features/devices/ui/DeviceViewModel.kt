@@ -375,10 +375,10 @@ class DeviceViewModel(
         }
     }
 
-    fun dismissPendingFolder(folderId: String) {
+    fun dismissPendingFolder(folderId: String, deviceId: String, label: String, time: String) {
         viewModelScope.launch {
             try {
-                apiClient.dismissPendingFolder(folderId)
+                apiClient.dismissPendingFolder(folderId, deviceId, label, time)
                 updateDeviceStates()
             } catch (e: Exception) {
                 val msg = e.message ?: ""

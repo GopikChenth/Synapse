@@ -138,7 +138,12 @@ interface SyncthingApiClient {
     /**
      * Dismisses/rejects the pending folder share request.
      */
-    suspend fun dismissPendingFolder(folderId: String): HttpResponse
+    suspend fun dismissPendingFolder(
+        folderId: String,
+        deviceId: String = "",
+        label: String = "",
+        time: String = ""
+    ): HttpResponse
 }
 
 internal class SyncthingApiClientImpl(
@@ -393,10 +398,31 @@ internal class SyncthingApiClientImpl(
 
     override suspend fun dismissPendingDevice(deviceId: String): HttpResponse {
         val key = getOrResolveApiKey()
-        return client.delete("$baseUrl/rest/cluster/pending/devices") {
+        val deleteResponse = client.delete("$baseUrl/rest/cluster/pending/devices") {
             header("X-API-Key", key)
             parameter("device", deviceId)
         }
+
+        try {
+            val rawConfigString = rawSystemConfig()
+            val rawConfigJson = json.parseToJsonElement(rawConfigString).jsonObject
+            val newRootMap = rawConfigJson.toMutableMap()
+
+            val existingIgnored = (rawConfigJson["ignoredDevices"] as? JsonArray)?.toMutableList() ?: mutableListOf()
+            val isAlreadyIgnored = existingIgnored.any {
+                it is JsonPrimitive && it.content == deviceId
+            }
+            if (!isAlreadyIgnored) {
+                existingIgnored.add(JsonPrimitive(deviceId))
+                newRootMap["ignoredDevices"] = JsonArray(existingIgnored)
+                val patchedConfigJson = JsonObject(newRootMap)
+                updateRawSystemConfig(patchedConfigJson.toString())
+            }
+        } catch (e: Exception) {
+            // Ignore/Log error
+        }
+
+        return deleteResponse
     }
 
     override suspend fun getPendingFolders(): Map<String, PendingFolderOffer> {
@@ -406,12 +432,63 @@ internal class SyncthingApiClientImpl(
         }.body()
     }
 
-    override suspend fun dismissPendingFolder(folderId: String): HttpResponse {
+    override suspend fun dismissPendingFolder(
+        folderId: String,
+        deviceId: String,
+        label: String,
+        time: String
+    ): HttpResponse {
         val key = getOrResolveApiKey()
-        return client.delete("$baseUrl/rest/cluster/pending/folders") {
+        val deleteResponse = client.delete("$baseUrl/rest/cluster/pending/folders") {
             header("X-API-Key", key)
             parameter("folder", folderId)
+            if (deviceId.isNotEmpty()) {
+                parameter("device", deviceId)
+            }
         }
+
+        if (deviceId.isNotEmpty()) {
+            try {
+                val rawConfigString = rawSystemConfig()
+                val rawConfigJson = json.parseToJsonElement(rawConfigString).jsonObject
+                val newRootMap = rawConfigJson.toMutableMap()
+
+                val devicesArray = rawConfigJson["devices"]?.jsonArray
+                if (devicesArray != null) {
+                    val updatedDevices = devicesArray.map { deviceElement ->
+                        val deviceObj = deviceElement.jsonObject
+                        val currentDeviceId = deviceObj["deviceID"]?.jsonPrimitive?.content ?: ""
+                        if (currentDeviceId == deviceId) {
+                            val newDeviceMap = deviceObj.toMutableMap()
+                            val existingIgnored = (deviceObj["ignoredFolders"] as? JsonArray)?.toMutableList() ?: mutableListOf()
+
+                            val isAlreadyIgnored = existingIgnored.any {
+                                (it as? JsonObject)?.get("id")?.jsonPrimitive?.content == folderId
+                            }
+                            if (!isAlreadyIgnored) {
+                                val newIgnoredFolder = buildJsonObject {
+                                    put("id", folderId)
+                                    put("label", label)
+                                    put("time", time)
+                                }
+                                existingIgnored.add(newIgnoredFolder)
+                                newDeviceMap["ignoredFolders"] = JsonArray(existingIgnored)
+                            }
+                            JsonObject(newDeviceMap)
+                        } else {
+                            deviceElement
+                        }
+                    }
+                    newRootMap["devices"] = JsonArray(updatedDevices)
+                    val patchedConfigJson = JsonObject(newRootMap)
+                    updateRawSystemConfig(patchedConfigJson.toString())
+                }
+            } catch (e: Exception) {
+                // Ignore/Log error
+            }
+        }
+
+        return deleteResponse
     }
 
     override suspend fun getEvents(since: Int, limit: Int): List<Event> {
