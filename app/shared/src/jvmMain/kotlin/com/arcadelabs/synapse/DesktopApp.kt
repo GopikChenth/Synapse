@@ -471,7 +471,12 @@ fun DesktopApp(
                     dismissButton = {
                         TextButton(
                             onClick = {
-                                deviceViewModel.dismissPendingFolder(folderId)
+                                deviceViewModel.dismissPendingFolder(
+                                    folderId = folderId,
+                                    deviceId = offeringDeviceId,
+                                    label = folderDetails.label,
+                                    time = folderDetails.time
+                                )
                             }
                         ) {
                             Text("Dismiss", color = MaterialTheme.colorScheme.error)
