@@ -41,6 +41,7 @@ import com.arcadelabs.synapse.features.folders.ui.FoldersScreen
 import com.arcadelabs.synapse.features.status.ui.StatusScreen
 import com.arcadelabs.synapse.features.status.ui.RunBehavior
 import com.arcadelabs.synapse.features.recent.ui.RecentChangesScreen
+import com.arcadelabs.synapse.features.settings.ui.SettingsScreen
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
@@ -151,6 +152,7 @@ fun App(
     var isImportExportDialogOpen by remember { mutableStateOf(false) }
     var isRestartConfirmOpen by remember { mutableStateOf(false) }
     var isRecentChangesPageOpen by remember { mutableStateOf(false) }
+    var isSettingsPageOpen by remember { mutableStateOf(false) }
     var prefilledFolderId by remember { mutableStateOf("") }
     var prefilledFolderLabel by remember { mutableStateOf("") }
     var prefilledFolderSharedDevices by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -302,7 +304,12 @@ fun App(
                         icon = { Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(20.dp)) },
                         label = { Text("Settings", style = MaterialTheme.typography.bodyMedium) },
                         selected = false,
-                        onClick = {},
+                        onClick = {
+                            coroutineScope.launch {
+                                drawerState.close()
+                            }
+                            isSettingsPageOpen = true
+                        },
                         colors = drawerItemColors,
                         modifier = Modifier.padding(horizontal = 12.dp)
                     )
@@ -810,6 +817,24 @@ fun App(
                     ) {
                         RecentChangesScreen(
                             onCloseClick = { isRecentChangesPageOpen = false }
+                        )
+                    }
+                }
+
+                // Root level Full-screen Settings Overlay
+                AnimatedVisibility(
+                    visible = isSettingsPageOpen,
+                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
+                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    ) {
+                        SettingsScreen(
+                            onClose = { isSettingsPageOpen = false }
                         )
                     }
                 }

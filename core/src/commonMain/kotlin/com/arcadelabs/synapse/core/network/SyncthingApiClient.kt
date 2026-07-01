@@ -139,6 +139,26 @@ interface SyncthingApiClient {
      * Dismisses/rejects the pending folder share request.
      */
     suspend fun dismissPendingFolder(folderId: String): HttpResponse
+
+    /**
+     * Retrieves the Syncthing daemon options configuration.
+     */
+    suspend fun getConfigOptions(): ConfigOptions
+
+    /**
+     * Replaces the Syncthing daemon options configuration.
+     */
+    suspend fun updateConfigOptions(options: ConfigOptions)
+
+    /**
+     * Retrieves the Syncthing GUI configuration.
+     */
+    suspend fun getConfigGui(): GuiConfig
+
+    /**
+     * Replaces the Syncthing GUI configuration.
+     */
+    suspend fun updateConfigGui(gui: GuiConfig)
 }
 
 internal class SyncthingApiClientImpl(
@@ -421,6 +441,44 @@ internal class SyncthingApiClientImpl(
             parameter("since", since)
             parameter("limit", limit)
         }.body()
+    }
+
+    override suspend fun getConfigOptions(): ConfigOptions {
+        val key = getOrResolveApiKey()
+        return client.get("$baseUrl/rest/config/options") {
+            header("X-API-Key", key)
+        }.body()
+    }
+
+    override suspend fun updateConfigOptions(options: ConfigOptions) {
+        val key = getOrResolveApiKey()
+        val response = client.put("$baseUrl/rest/config/options") {
+            header("X-API-Key", key)
+            contentType(ContentType.Application.Json)
+            setBody(options)
+        }
+        if (response.status.value !in 200..299) {
+            throw SyncthingApiException("Failed to update config options: HTTP ${response.status.value}")
+        }
+    }
+
+    override suspend fun getConfigGui(): GuiConfig {
+        val key = getOrResolveApiKey()
+        return client.get("$baseUrl/rest/config/gui") {
+            header("X-API-Key", key)
+        }.body()
+    }
+
+    override suspend fun updateConfigGui(gui: GuiConfig) {
+        val key = getOrResolveApiKey()
+        val response = client.put("$baseUrl/rest/config/gui") {
+            header("X-API-Key", key)
+            contentType(ContentType.Application.Json)
+            setBody(gui)
+        }
+        if (response.status.value !in 200..299) {
+            throw SyncthingApiException("Failed to update GUI config: HTTP ${response.status.value}")
+        }
     }
 }
 

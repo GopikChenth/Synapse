@@ -211,6 +211,21 @@ class MockSyncthingApiClient(
         devicesList.removeAll { it.deviceID == deviceId }
     }
 
+    private var mockOptions = ConfigOptions()
+    private var mockGui = GuiConfig(apiKey = "mock-api-key-12345")
+
+    override suspend fun getConfigOptions(): ConfigOptions = mockOptions
+
+    override suspend fun updateConfigOptions(options: ConfigOptions) {
+        mockOptions = options
+    }
+
+    override suspend fun getConfigGui(): GuiConfig = mockGui
+
+    override suspend fun updateConfigGui(gui: GuiConfig) {
+        mockGui = gui
+    }
+
     override suspend fun getEvents(since: Int, limit: Int): List<Event> {
         return listOf(
             Event(
