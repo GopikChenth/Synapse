@@ -41,6 +41,7 @@ import com.arcadelabs.synapse.features.settings.ui.DesktopSettingsScreen
 import com.arcadelabs.synapse.features.dashboard.ui.DesktopDashboardScreen
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
+import com.arcadelabs.synapse.core.prefs.PreferencesHelper
 import qrcode.raw.QRCodeProcessor
 
 enum class DesktopScreen(val title: String) {
@@ -138,12 +139,14 @@ fun DesktopApp(
             }
         } catch (_: Exception) {}
     }
+    val preferencesHelper = koinInject<PreferencesHelper>()
+    val selectedTheme by preferencesHelper.themeFlow.collectAsState()
     val coroutineScope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf(DesktopScreen.DASHBOARD) }
 
 
 
-    MaterialTheme {
+    SynapseTheme(selectedTheme = selectedTheme) {
         Box(modifier = Modifier.fillMaxSize()) {
             Row(modifier = Modifier.fillMaxSize()) {
                 NavigationRail(

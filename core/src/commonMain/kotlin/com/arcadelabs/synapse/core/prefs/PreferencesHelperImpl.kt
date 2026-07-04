@@ -1,6 +1,7 @@
 package com.arcadelabs.synapse.core.prefs
 
 import com.russhwolf.settings.Settings
+import kotlinx.coroutines.flow.asStateFlow
 
 class PreferencesHelperImpl(private val settings: Settings = Settings()) : PreferencesHelper {
     override var apiBaseUrl: String
@@ -25,5 +26,15 @@ class PreferencesHelperImpl(private val settings: Settings = Settings()) : Prefe
         get() = settings.getString("config_file_path", "")
         set(value) {
             settings.putString("config_file_path", value)
+        }
+
+    private val _themeFlow = kotlinx.coroutines.flow.MutableStateFlow(settings.getString("selected_theme", "Default"))
+    override val themeFlow = _themeFlow.asStateFlow()
+
+    override var selectedTheme: String
+        get() = settings.getString("selected_theme", "Default")
+        set(value) {
+            settings.putString("selected_theme", value)
+            _themeFlow.value = value
         }
 }

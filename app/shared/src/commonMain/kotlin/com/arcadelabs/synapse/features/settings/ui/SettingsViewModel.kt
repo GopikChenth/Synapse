@@ -6,6 +6,7 @@ import com.arcadelabs.synapse.core.domain.models.ConfigOptions
 import com.arcadelabs.synapse.core.domain.models.GuiConfig
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.prefs.PreferencesHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,6 +43,9 @@ data class SettingsUiState(
     val guiUseTLS: Boolean = false,
     val guiApiKey: String = "",
 
+    // Theme
+    val selectedTheme: String = "Default",
+
     // Save state
     val isSaving: Boolean = false,
     val saveSuccess: Boolean = false,
@@ -54,7 +58,8 @@ data class SettingsUiState(
 )
 
 class SettingsViewModel(
-    private val apiClient: SyncthingApiClient
+    private val apiClient: SyncthingApiClient,
+    private val preferencesHelper: PreferencesHelper
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -99,6 +104,7 @@ class SettingsViewModel(
                         guiUser = gui.user,
                         guiUseTLS = gui.useTLS,
                         guiApiKey = gui.apiKey,
+                        selectedTheme = preferencesHelper.selectedTheme,
                         // Store originals
                         originalOptions = options,
                         originalGui = gui,
@@ -128,6 +134,11 @@ class SettingsViewModel(
     fun updateLocalAnnounceEnabled(value: Boolean) = _uiState.update { it.copy(localAnnounceEnabled = value) }
     fun updateGlobalAnnounceEnabled(value: Boolean) = _uiState.update { it.copy(globalAnnounceEnabled = value) }
     fun updateRelaysEnabled(value: Boolean) = _uiState.update { it.copy(relaysEnabled = value) }
+
+    fun updateSelectedTheme(value: String) {
+        preferencesHelper.selectedTheme = value
+        _uiState.update { it.copy(selectedTheme = value) }
+    }
     fun updateGlobalAnnounceServers(value: String) = _uiState.update { it.copy(globalAnnounceServers = value) }
     fun updateCrashReportingEnabled(value: Boolean) = _uiState.update { it.copy(crashReportingEnabled = value) }
     fun updateGuiAddress(value: String) = _uiState.update { it.copy(guiAddress = value) }

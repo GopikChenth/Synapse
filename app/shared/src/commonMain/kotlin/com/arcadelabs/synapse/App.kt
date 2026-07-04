@@ -42,6 +42,8 @@ import com.arcadelabs.synapse.features.status.ui.StatusScreen
 import com.arcadelabs.synapse.features.status.ui.RunBehavior
 import com.arcadelabs.synapse.features.recent.ui.RecentChangesScreen
 import com.arcadelabs.synapse.features.settings.ui.SettingsScreen
+import com.arcadelabs.synapse.core.prefs.PreferencesHelper
+import com.arcadelabs.synapse.SynapseBackHandler
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
@@ -102,8 +104,10 @@ fun App(
     showNotification: ((title: String, message: String) -> Unit)? = null,
     deviceModelName: String = "",
     apiClient: SyncthingApiClient = koinInject(),
+    preferencesHelper: PreferencesHelper = koinInject(),
     deviceViewModel: DeviceViewModel = koinViewModel()
 ) {
+    val selectedTheme by preferencesHelper.themeFlow.collectAsState()
     val pendingDevices by deviceViewModel.pendingDevices.collectAsState()
     val shownNotifications = remember { mutableSetOf<String>() }
     LaunchedEffect(pendingDevices) {
@@ -182,7 +186,7 @@ fun App(
         }
     }
 
-    MaterialTheme {
+    SynapseTheme(selectedTheme = selectedTheme) {
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
@@ -815,6 +819,7 @@ fun App(
                     exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
                     modifier = Modifier.fillMaxSize()
                 ) {
+                    SynapseBackHandler(enabled = isRecentChangesPageOpen, onBack = { isRecentChangesPageOpen = false })
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -833,6 +838,7 @@ fun App(
                     exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
                     modifier = Modifier.fillMaxSize()
                 ) {
+                    SynapseBackHandler(enabled = isSettingsPageOpen, onBack = { isSettingsPageOpen = false })
                     Box(
                         modifier = Modifier
                             .fillMaxSize()

@@ -133,6 +133,13 @@ private fun SettingsContent(
                 checked = state.urAccepted > 0,
                 onCheckedChange = { viewModel.updateUsageReporting(it) }
             )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+            ThemeSelectionRow(
+                selectedTheme = state.selectedTheme,
+                onThemeSelected = { viewModel.updateSelectedTheme(it) }
+            )
         }
 
         // --- Connections Section ---
@@ -345,3 +352,59 @@ private fun SettingsSwitchRow(
         )
     }
 }
+
+@Composable
+private fun ThemeSelectionRow(
+    selectedTheme: String,
+    onThemeSelected: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val themes = listOf(
+        "Default" to "Standard (Material)",
+        "DeepSpace" to "Deep Space (Sleek Dark)",
+        "SunsetGlow" to "Sunset Glow (Warm Amber)",
+        "NordicForest" to "Nordic Forest (Emerald Mint)"
+    )
+    val selectedLabel = themes.find { it.first == selectedTheme }?.second ?: "Standard (Material)"
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "App Theme",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "Select premium interface theme",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Box {
+            TextButton(onClick = { expanded = true }) {
+                Text(selectedLabel, color = MaterialTheme.colorScheme.primary)
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                themes.forEach { (themeKey, themeLabel) ->
+                    DropdownMenuItem(
+                        text = { Text(themeLabel) },
+                        onClick = {
+                            onThemeSelected(themeKey)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+

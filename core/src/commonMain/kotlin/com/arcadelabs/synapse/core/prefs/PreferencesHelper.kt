@@ -24,4 +24,10 @@ interface PreferencesHelper {
 
     /** Path to Syncthing's config.xml file on disk (platform-dependent) */
     var configFilePath: String
+
+    /** Selected app UI theme */
+    var selectedTheme: String
+
+    /** Reactive flow of the selected theme */
+    val themeFlow: kotlinx.coroutines.flow.StateFlow<String>
 }
