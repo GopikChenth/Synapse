@@ -30,4 +30,10 @@ interface PreferencesHelper {
 
     /** Reactive flow of the selected theme */
     val themeFlow: kotlinx.coroutines.flow.StateFlow<String>
+
+    /** Selected theme mode: "Dark", "Light", or "System" */
+    var themeMode: String
+
+    /** Reactive flow of the selected theme mode */
+    val themeModeFlow: kotlinx.coroutines.flow.StateFlow<String>
 }

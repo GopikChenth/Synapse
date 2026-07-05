@@ -37,4 +37,14 @@ class PreferencesHelperImpl(private val settings: Settings = Settings()) : Prefe
             settings.putString("selected_theme", value)
             _themeFlow.value = value
         }
+
+    private val _themeModeFlow = kotlinx.coroutines.flow.MutableStateFlow(settings.getString("theme_mode", "Dark"))
+    override val themeModeFlow = _themeModeFlow.asStateFlow()
+
+    override var themeMode: String
+        get() = settings.getString("theme_mode", "Dark")
+        set(value) {
+            settings.putString("theme_mode", value)
+            _themeModeFlow.value = value
+        }
 }

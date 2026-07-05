@@ -141,12 +141,13 @@ fun DesktopApp(
     }
     val preferencesHelper = koinInject<PreferencesHelper>()
     val selectedTheme by preferencesHelper.themeFlow.collectAsState()
+    val themeMode by preferencesHelper.themeModeFlow.collectAsState()
     val coroutineScope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf(DesktopScreen.DASHBOARD) }
 
 
 
-    SynapseTheme(selectedTheme = selectedTheme) {
+    SynapseTheme(selectedTheme = selectedTheme, themeMode = themeMode) {
         Box(modifier = Modifier.fillMaxSize()) {
             Row(modifier = Modifier.fillMaxSize()) {
                 NavigationRail(

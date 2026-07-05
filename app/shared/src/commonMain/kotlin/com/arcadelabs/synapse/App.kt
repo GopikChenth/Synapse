@@ -108,6 +108,7 @@ fun App(
     deviceViewModel: DeviceViewModel = koinViewModel()
 ) {
     val selectedTheme by preferencesHelper.themeFlow.collectAsState()
+    val themeMode by preferencesHelper.themeModeFlow.collectAsState()
     val pendingDevices by deviceViewModel.pendingDevices.collectAsState()
     val shownNotifications = remember { mutableSetOf<String>() }
     LaunchedEffect(pendingDevices) {
@@ -186,7 +187,7 @@ fun App(
         }
     }
 
-    SynapseTheme(selectedTheme = selectedTheme) {
+    SynapseTheme(selectedTheme = selectedTheme, themeMode = themeMode) {
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {

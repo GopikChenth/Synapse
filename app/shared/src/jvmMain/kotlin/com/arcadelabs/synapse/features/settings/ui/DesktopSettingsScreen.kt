@@ -18,6 +18,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import com.arcadelabs.synapse.DesktopQrCodeView
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
@@ -221,7 +225,20 @@ fun DesktopSettingsScreen(
 
                     DesktopThemeSelectionRow(
                         selectedTheme = state.selectedTheme,
-                        onThemeSelected = { viewModel.updateSelectedTheme(it) }
+                        onThemeSelected = { themeKey ->
+                            viewModel.updateSelectedTheme(themeKey)
+                            if (themeKey == "TacticalHUD" && state.themeMode == "Light") {
+                                viewModel.updateThemeMode("Dark")
+                            }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    DesktopAppearanceModeRow(
+                        selectedMode = state.themeMode,
+                        onModeSelected = { viewModel.updateThemeMode(it) },
+                        disabledOptions = if (state.selectedTheme == "TacticalHUD") listOf("Light") else emptyList()
                     )
                 }
 
@@ -260,7 +277,10 @@ fun DesktopSettingsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Toggle row with 2 columns
-                    Row(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(24.dp)
+                    ) {
                         Column(modifier = Modifier.weight(1f)) {
                             DesktopSettingsSwitchRow(
                                 label = "NAT Traversal",
@@ -279,7 +299,10 @@ fun DesktopSettingsScreen(
                         }
                     }
 
-                    Row(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(24.dp)
+                    ) {
                         Column(modifier = Modifier.weight(1f)) {
                             DesktopSettingsSwitchRow(
                                 label = "Local Discovery",
@@ -539,12 +562,12 @@ private fun DesktopThemeSelectionRow(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val themes = listOf(
-        "Default" to "Standard (Material)",
+        "Default" to "Standard Purple (Default)",
+        "MidnightGreen" to "Midnight Green (Forest)",
         "DeepSpace" to "Deep Space (Sleek Dark)",
-        "SunsetGlow" to "Sunset Glow (Warm Amber)",
-        "NordicForest" to "Nordic Forest (Emerald Mint)"
+        "TacticalHUD" to "Tactical HUD (Cyberpunk)"
     )
-    val selectedLabel = themes.find { it.first == selectedTheme }?.second ?: "Standard (Material)"
+    val selectedLabel = themes.find { it.first == selectedTheme }?.second ?: "Standard Purple (Default)"
 
     Row(
         modifier = Modifier
@@ -582,6 +605,110 @@ private fun DesktopThemeSelectionRow(
                         }
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DesktopAppearanceModeRow(
+    selectedMode: String,
+    onModeSelected: (String) -> Unit,
+    disabledOptions: List<String> = emptyList()
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+            Text(
+                text = "Appearance Mode",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "Choose light, dark, or system preference",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        
+        DesktopSegmentedButtonRow(
+            options = listOf("Light", "Dark", "System"),
+            selectedOption = selectedMode,
+            onOptionSelected = onModeSelected,
+            disabledOptions = disabledOptions,
+            modifier = Modifier.width(220.dp)
+        )
+    }
+}
+
+@Composable
+private fun DesktopSegmentedButtonRow(
+    options: List<String>,
+    selectedOption: String,
+    onOptionSelected: (String) -> Unit,
+    disabledOptions: List<String> = emptyList(),
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .height(36.dp)
+            .border(
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shape = RoundedCornerShape(18.dp)
+            )
+            .background(Color.Transparent)
+    ) {
+        options.forEachIndexed { index, option ->
+            val isSelected = option == selectedOption
+            val isDisabled = disabledOptions.contains(option)
+            val shape = when (index) {
+                0 -> RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp)
+                options.size - 1 -> RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp)
+                else -> androidx.compose.ui.graphics.RectangleShape
+            }
+            
+            val containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                Color.Transparent
+            }
+            
+            val contentColor = when {
+                isDisabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .alpha(if (isDisabled) 0.38f else 1f)
+                    .background(containerColor, shape)
+                    .clickable(
+                        enabled = !isDisabled,
+                        onClick = { onOptionSelected(option) }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = option,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = contentColor,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                )
+            }
+            
+            if (index < options.size - 1) {
+                VerticalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    modifier = Modifier.fillMaxHeight()
+                )
             }
         }
     }

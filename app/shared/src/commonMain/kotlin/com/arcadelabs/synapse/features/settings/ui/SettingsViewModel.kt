@@ -45,6 +45,7 @@ data class SettingsUiState(
 
     // Theme
     val selectedTheme: String = "Default",
+    val themeMode: String = "Dark",
 
     // Save state
     val isSaving: Boolean = false,
@@ -105,6 +106,7 @@ class SettingsViewModel(
                         guiUseTLS = gui.useTLS,
                         guiApiKey = gui.apiKey,
                         selectedTheme = preferencesHelper.selectedTheme,
+                        themeMode = preferencesHelper.themeMode,
                         // Store originals
                         originalOptions = options,
                         originalGui = gui,
@@ -138,6 +140,11 @@ class SettingsViewModel(
     fun updateSelectedTheme(value: String) {
         preferencesHelper.selectedTheme = value
         _uiState.update { it.copy(selectedTheme = value) }
+    }
+
+    fun updateThemeMode(value: String) {
+        preferencesHelper.themeMode = value
+        _uiState.update { it.copy(themeMode = value) }
     }
     fun updateGlobalAnnounceServers(value: String) = _uiState.update { it.copy(globalAnnounceServers = value) }
     fun updateCrashReportingEnabled(value: Boolean) = _uiState.update { it.copy(crashReportingEnabled = value) }
