@@ -6,7 +6,11 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class FolderDbStatus(
     @SerialName("globalBytes") val globalBytes: Long = 0,
+    @SerialName("globalFiles") val globalFiles: Long = 0,
+    @SerialName("globalDirectories") val globalDirectories: Long = 0,
     @SerialName("localBytes") val localBytes: Long = 0,
+    @SerialName("localFiles") val localFiles: Long = 0,
+    @SerialName("localDirectories") val localDirectories: Long = 0,
     @SerialName("needBytes") val needBytes: Long = 0,
     @SerialName("state") val state: String = "idle",
     @SerialName("inSyncBytes") val inSyncBytes: Long = 0,

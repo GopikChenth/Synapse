@@ -56,6 +56,14 @@ class DesktopDaemonManager {
         } catch (_: Exception) {}
     }
 
+    fun getProcessId(): Int? {
+        return try {
+            process?.pid()?.toInt()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun runDaemonLifecycle() {
         val localAppData = System.getenv("LOCALAPPDATA") ?: System.getProperty("user.home")
         val synapseDir = File(localAppData, "Synapse")

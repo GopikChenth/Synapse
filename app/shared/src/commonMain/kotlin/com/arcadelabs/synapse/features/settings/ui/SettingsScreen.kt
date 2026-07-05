@@ -21,6 +21,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.alpha
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.composed
+import androidx.compose.ui.graphics.graphicsLayer
 import org.koin.compose.viewmodel.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -300,7 +307,14 @@ private fun SettingsSectionHeader(title: String) {
 @Composable
 private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessLow
+                )
+            ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
@@ -344,9 +358,16 @@ private fun SettingsSwitchRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .bounceClick(interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = { onCheckedChange(!checked) }
+            )
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -367,7 +388,7 @@ private fun SettingsSwitchRow(
         Spacer(modifier = Modifier.width(16.dp))
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange
+            onCheckedChange = null // Row handles clicking to prevent double toggles
         )
     }
 }
@@ -385,10 +406,17 @@ private fun ThemeSelectionRow(
         "TacticalHUD" to "Tactical HUD (Cyberpunk)"
     )
     val selectedLabel = themes.find { it.first == selectedTheme }?.second ?: "Standard Purple (Default)"
+    val interactionSource = remember { MutableInteractionSource() }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .bounceClick(interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = { expanded = true }
+            )
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -406,9 +434,13 @@ private fun ThemeSelectionRow(
             )
         }
         Box {
-            TextButton(onClick = { expanded = true }) {
-                Text(selectedLabel, color = MaterialTheme.colorScheme.primary)
-            }
+            Text(
+                text = selectedLabel,
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(end = 8.dp)
+            )
             DropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false }
@@ -471,7 +503,17 @@ private fun SegmentedButtonRow(
     disabledOptions: List<String> = emptyList(),
     modifier: Modifier = Modifier
 ) {
-    Row(
+    val selectedIndex = options.indexOf(selectedOption).coerceAtLeast(0)
+    
+    val animatedIndex by animateFloatAsState(
+        targetValue = selectedIndex.toFloat(),
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        )
+    )
+
+    BoxWithConstraints(
         modifier = modifier
             .height(36.dp)
             .border(
@@ -480,54 +522,83 @@ private fun SegmentedButtonRow(
             )
             .background(Color.Transparent)
     ) {
-        options.forEachIndexed { index, option ->
-            val isSelected = option == selectedOption
-            val isDisabled = disabledOptions.contains(option)
-            val shape = when (index) {
-                0 -> RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp)
-                options.size - 1 -> RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp)
-                else -> androidx.compose.ui.graphics.RectangleShape
-            }
-            
-            val containerColor = if (isSelected) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                Color.Transparent
-            }
-            
-            val contentColor = when {
-                isDisabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
-                else -> MaterialTheme.colorScheme.onSurfaceVariant
-            }
+        val segmentWidth = maxWidth / options.size
+        
+        Box(
+            modifier = Modifier
+                .offset(x = segmentWidth * animatedIndex)
+                .width(segmentWidth)
+                .fillMaxHeight()
+                .background(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(18.dp)
+                )
+        )
 
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .alpha(if (isDisabled) 0.38f else 1f)
-                    .background(containerColor, shape)
-                    .clickable(
-                        enabled = !isDisabled,
-                        onClick = { onOptionSelected(option) }
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = option,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = contentColor,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+        Row(modifier = Modifier.fillMaxSize()) {
+            options.forEachIndexed { index, option ->
+                val isSelected = option == selectedOption
+                val isDisabled = disabledOptions.contains(option)
+                val interactionSource = remember { MutableInteractionSource() }
+                val isPressed by interactionSource.collectIsPressedAsState()
+                val scale by animateFloatAsState(
+                    targetValue = if (isPressed) 0.92f else 1.0f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    )
                 )
-            }
-            
-            if (index < options.size - 1) {
-                VerticalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant,
-                    modifier = Modifier.fillMaxHeight()
+                
+                val contentColor by animateColorAsState(
+                    targetValue = when {
+                        isDisabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    animationSpec = tween(durationMillis = 200)
                 )
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .alpha(if (isDisabled) 0.38f else 1f)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                        }
+                        .clickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            enabled = !isDisabled,
+                            onClick = { onOptionSelected(option) }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = option,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = contentColor,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
             }
         }
+    }
+}
+
+private fun Modifier.bounceClick(interactionSource: MutableInteractionSource): Modifier = composed {
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.95f else 1.0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        )
+    )
+    this.graphicsLayer {
+        scaleX = scale
+        scaleY = scale
     }
 }
 

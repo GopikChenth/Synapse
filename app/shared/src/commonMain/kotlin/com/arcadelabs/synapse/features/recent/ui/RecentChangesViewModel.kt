@@ -60,6 +60,7 @@ class RecentChangesViewModel(
                     }
                     // Show most recent changes first
                     .reversed()
+                    .take(20)
                 
                 _changes.value = mapped
             } catch (e: Exception) {

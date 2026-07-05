@@ -115,7 +115,11 @@ class MockSyncthingApiClient(
     override suspend fun dbStatus(folderId: String): FolderDbStatus {
         return FolderDbStatus(
             globalBytes = 1024 * 1024 * 50,
+            globalFiles = 150,
+            globalDirectories = 25,
             localBytes = 1024 * 1024 * 50,
+            localFiles = 150,
+            localDirectories = 25,
             needBytes = 0,
             state = "idle",
             inSyncBytes = 1024 * 1024 * 50

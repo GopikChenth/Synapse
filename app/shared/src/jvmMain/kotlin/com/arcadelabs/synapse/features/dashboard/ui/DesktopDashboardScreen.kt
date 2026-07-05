@@ -34,7 +34,10 @@ import com.arcadelabs.synapse.features.devices.ui.DeviceUiModel
 import com.arcadelabs.synapse.features.folders.ui.FolderViewModel
 import com.arcadelabs.synapse.features.status.ui.StatusViewModel
 import com.arcadelabs.synapse.core.domain.models.PendingDevice
+import com.arcadelabs.synapse.core.domain.models.FolderDbStatus
+import com.arcadelabs.synapse.core.domain.models.toItemFinishedData
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import java.awt.Toolkit
@@ -125,6 +128,7 @@ fun DesktopDashboardScreen(
                     Column(modifier = Modifier.weight(1.1f)) {
                         FoldersCardSection(
                             folders = folders,
+                            devices = devices,
                             expandedFolderId = expandedFolderId,
                             onFolderClick = { id ->
                                 expandedFolderId = if (expandedFolderId == id) null else id
@@ -152,7 +156,8 @@ fun DesktopDashboardScreen(
                                     clipboard.setContents(selection, selection)
                                     copiedIdFeedback = id
                                 } catch (_: Exception) {}
-                            }
+                            },
+                            apiClient = apiClient
                         )
 
                         RemoteDevicesSection(
@@ -177,6 +182,7 @@ fun DesktopDashboardScreen(
                 ) {
                     FoldersCardSection(
                         folders = folders,
+                        devices = devices,
                         expandedFolderId = expandedFolderId,
                         onFolderClick = { id ->
                             expandedFolderId = if (expandedFolderId == id) null else id
@@ -198,7 +204,8 @@ fun DesktopDashboardScreen(
                                 clipboard.setContents(selection, selection)
                                 copiedIdFeedback = id
                             } catch (_: Exception) {}
-                        }
+                        },
+                        apiClient = apiClient
                     )
 
                     RemoteDevicesSection(
@@ -222,6 +229,7 @@ fun DesktopDashboardScreen(
 @Composable
 fun FoldersCardSection(
     folders: List<com.arcadelabs.synapse.core.domain.models.Folder>,
+    devices: List<DeviceUiModel>,
     expandedFolderId: String?,
     onFolderClick: (String) -> Unit,
     onAddFolderClick: () -> Unit,
@@ -232,6 +240,45 @@ fun FoldersCardSection(
     val allPaused = folders.isNotEmpty() && folders.all { it.paused }
     // Cap to 6 folders on dashboard
     val displayedFolders = folders.take(6)
+
+    // Folder status state tracking
+    var folderStatusState by remember { mutableStateOf<FolderDbStatus?>(null) }
+    var folderLatestChangeState by remember { mutableStateOf<String?>(null) }
+    val json = remember { kotlinx.serialization.json.Json { ignoreUnknownKeys = true } }
+
+    LaunchedEffect(expandedFolderId) {
+        if (expandedFolderId != null) {
+            while (true) {
+                try {
+                    val status = apiClient.dbStatus(expandedFolderId)
+                    folderStatusState = status
+                    
+                    val events = apiClient.getEvents(limit = 100)
+                    val lastEvent = events.reversed().firstOrNull { event ->
+                        if (event.type == "ItemFinished" && event.data != null) {
+                            val data = event.toItemFinishedData(json)
+                            data != null && data.folder == expandedFolderId
+                        } else false
+                    }
+                    if (lastEvent != null) {
+                        val data = lastEvent.toItemFinishedData(json)!!
+                        val actionLabel = when (data.action) {
+                            "update" -> "Updated"
+                            "delete" -> "Deleted"
+                            else -> data.action.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+                        }
+                        folderLatestChangeState = "$actionLabel ${data.item}"
+                    } else {
+                        folderLatestChangeState = "No recent changes"
+                    }
+                } catch (_: Exception) {}
+                kotlinx.coroutines.delay(2000)
+            }
+        } else {
+            folderStatusState = null
+            folderLatestChangeState = null
+        }
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -279,8 +326,39 @@ fun FoldersCardSection(
                         "receiveonly" -> "Receive Only"
                         else          -> "Send & Receive"
                     }
-                    val rescanLabel = if (folder.fsWatcherEnabled)
-                        "${folder.rescanIntervalS / 3600}h  Enabled" else "${folder.rescanIntervalS}s  Disabled"
+                    val rescanLabel = run {
+                        val hours = folder.rescanIntervalS / 3600
+                        val mins = (folder.rescanIntervalS % 3600) / 60
+                        val timeStr = when {
+                            folder.rescanIntervalS == 0 -> "Disabled"
+                            hours > 0 -> "${hours}h"
+                            else -> "${mins}m"
+                        }
+                        val watcherStr = if (folder.fsWatcherEnabled) "  Enabled" else "  Disabled"
+                        "$timeStr$watcherStr"
+                    }
+                    val sharedWithLabel = if (folder.devices.isEmpty()) {
+                        "Nobody"
+                    } else {
+                        folder.devices.map { ref ->
+                            devices.find { it.id.normalizeDeviceId() == ref.deviceID.normalizeDeviceId() }?.name ?: ref.deviceID.take(7)
+                        }.joinToString(", ")
+                    }
+                    val lastScanLabel = folderStatusState?.stateChanged?.let { isoTime ->
+                        try {
+                            val tIndex = isoTime.indexOf('T')
+                            if (tIndex != -1) {
+                                val datePart = isoTime.substring(0, tIndex)
+                                val timePart = isoTime.substring(tIndex + 1, tIndex + 9)
+                                "$datePart $timePart"
+                            } else {
+                                isoTime
+                            }
+                        } catch (_: Exception) {
+                            isoTime
+                        }
+                    } ?: "Scanning..."
+                    val latestChangeLabel = folderLatestChangeState ?: "No recent changes"
 
                     Column(
                         modifier = Modifier.fillMaxWidth().animateContentSize()
@@ -345,6 +423,18 @@ fun FoldersCardSection(
                                     clickable = true,
                                     onClick = { openFolder?.invoke(folder.path) }
                                 )
+                                // Global State
+                                val globalStateText = folderStatusState?.let { status ->
+                                    "${status.globalFiles}  ${status.globalDirectories}  ~${formatBinaryBytes(status.globalBytes)}"
+                                } ?: "Loading..."
+                                FolderInfoRow(label = "Global State", value = globalStateText)
+
+                                // Local State
+                                val localStateText = folderStatusState?.let { status ->
+                                    "${status.localFiles}  ${status.localDirectories}  ~${formatBinaryBytes(status.localBytes)}"
+                                } ?: "Loading..."
+                                FolderInfoRow(label = "Local State", value = localStateText)
+                                
                                 // Folder Type
                                 FolderInfoRow(label = "Folder Type", value = folderTypeLabel)
                                 // Block Indexing
@@ -356,20 +446,13 @@ fun FoldersCardSection(
                                 // Shared With
                                 FolderInfoRow(
                                     label = "Shared With",
-                                    value = if (folder.devices.isEmpty()) "Nobody" else "${folder.devices.size} device(s)",
-                                    valueColor = if (folder.devices.isNotEmpty()) MaterialTheme.colorScheme.primary else null
+                                    value = sharedWithLabel,
+                                    valueColor = if (sharedWithLabel != "Nobody") MaterialTheme.colorScheme.primary else null
                                 )
-                                // Versioning
-                                FolderInfoRow(
-                                    label = "File Versioning",
-                                    value = when (folder.versioning.type) {
-                                        "none"      -> "None"
-                                        "trashcan"  -> "Trash Can"
-                                        "simple"    -> "Simple"
-                                        "staggered" -> "Staggered"
-                                        else        -> "None"
-                                    }
-                                )
+                                // Last Scan
+                                FolderInfoRow(label = "Last Scan", value = lastScanLabel)
+                                // Latest Change
+                                FolderInfoRow(label = "Latest Change", value = latestChangeLabel)
 
                                 HorizontalDivider(
                                     modifier = Modifier.padding(vertical = 4.dp),
@@ -693,12 +776,42 @@ fun ThisDeviceSection(
     folders: List<com.arcadelabs.synapse.core.domain.models.Folder>,
     devices: List<DeviceUiModel>,
     copiedIdFeedback: String?,
-    onCopyClick: (String) -> Unit
+    onCopyClick: (String) -> Unit,
+    apiClient: SyncthingApiClient
 ) {
     // Find local device in devices list to resolve its name
     val myId = statusState.myId
     val localDevice = devices.find { it.id.normalizeDeviceId() == myId.normalizeDeviceId() }
     val localDeviceName = localDevice?.name?.ifEmpty { "This Device" } ?: "This Device"
+
+    // Local State (Total) aggregation states
+    var totalLocalFiles by remember { mutableStateOf(0L) }
+    var totalLocalDirs by remember { mutableStateOf(0L) }
+    var totalLocalBytes by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(folders) {
+        if (folders.isNotEmpty()) {
+            while (isActive) {
+                try {
+                    var filesSum = 0L
+                    var dirsSum = 0L
+                    var bytesSum = 0L
+                    folders.forEach { folder ->
+                        try {
+                            val status = apiClient.dbStatus(folder.id)
+                            filesSum += status.localFiles
+                            dirsSum += status.localDirectories
+                            bytesSum += status.localBytes
+                        } catch (_: Exception) {}
+                    }
+                    totalLocalFiles = filesSum
+                    totalLocalDirs = dirsSum
+                    totalLocalBytes = bytesSum
+                } catch (_: Exception) {}
+                kotlinx.coroutines.delay(3000)
+            }
+        }
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -763,13 +876,21 @@ fun ThisDeviceSection(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val totalBytes = folders.size * 50_000_000L
-                    ThisDeviceStatRow("Local State (Total)", "~${formatBytes(totalBytes)}")
+                    val downloadRateText = "${formatRate(statusState.downloadSpeed * 8)} (${formatBinaryBytes(statusState.totalDownload)})"
+                    val uploadRateText = "${formatRate(statusState.uploadSpeed * 8)} (${formatBinaryBytes(statusState.totalUpload)})"
+                    val localStateText = "${totalLocalFiles}  ${totalLocalDirs}  ~${formatBinaryBytes(totalLocalBytes)}"
+
+                    ThisDeviceStatRow("Download Rate", downloadRateText)
+                    ThisDeviceStatRow("Upload Rate", uploadRateText)
+                    ThisDeviceStatRow("Local State (Total)", localStateText)
                     ThisDeviceStatRow("Uptime", formatUptime(statusState.uptime))
-                    ThisDeviceStatRow("Version", statusState.version.ifEmpty { "v1.27.8" })
                     
-                    // Identification
-                    Column(modifier = Modifier.fillMaxWidth()) {
+                    // Identification row with copy
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
                             text = "Identification",
                             style = MaterialTheme.typography.labelSmall,
@@ -783,7 +904,7 @@ fun ThisDeviceSection(
                                 .padding(vertical = 2.dp)
                         ) {
                             Text(
-                                text = myId.take(6) + "..." + myId.takeLast(6),
+                                text = myId.take(7),
                                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold
@@ -795,6 +916,18 @@ fun ThisDeviceSection(
                             )
                         }
                     }
+                    
+                    val osName = System.getProperty("os.name") ?: "Windows"
+                    val osArch = System.getProperty("os.arch") ?: "64-bit"
+                    val osLabel = if (osName.contains("Windows", ignoreCase = true)) {
+                        "Windows (64-bit Intel/AMD)"
+                    } else {
+                        "$osName ($osArch)"
+                    }
+                    val verStr = statusState.version.ifEmpty { "v2.1.1" }
+                    val versionText = "$verStr, $osLabel"
+
+                    ThisDeviceStatRow("Version", versionText)
                 }
 
                 // Right Part: Donut Charts
@@ -863,6 +996,55 @@ fun RemoteDevicesSection(
     val coroutineScope = rememberCoroutineScope()
     var deviceToDelete by remember { mutableStateOf<DeviceUiModel?>(null) }
 
+    // Device connection status and rate tracking states
+    var deviceConnectionState by remember { mutableStateOf<com.arcadelabs.synapse.core.domain.models.DeviceConnection?>(null) }
+    var downloadRateState by remember { mutableStateOf(0L) }
+    var uploadRateState by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(expandedDeviceId) {
+        if (expandedDeviceId != null) {
+            var prevInBytes: Long? = null
+            var prevOutBytes: Long? = null
+            var lastTime = System.currentTimeMillis()
+            
+            while (isActive) {
+                try {
+                    val connResp = apiClient.systemConnections()
+                    val conn = connResp.connections[expandedDeviceId]
+                    if (conn != null) {
+                        deviceConnectionState = conn
+                        val now = System.currentTimeMillis()
+                        val elapsedSec = (now - lastTime) / 1000.0
+                        if (elapsedSec > 0.5) {
+                            if (prevInBytes != null) {
+                                val diffIn = conn.inBytesTotal - prevInBytes
+                                val rateIn = (diffIn / elapsedSec).toLong()
+                                downloadRateState = rateIn * 8 // bits per second
+                            }
+                            if (prevOutBytes != null) {
+                                val diffOut = conn.outBytesTotal - prevOutBytes
+                                val rateOut = (diffOut / elapsedSec).toLong()
+                                uploadRateState = rateOut * 8 // bits per second
+                            }
+                        }
+                        prevInBytes = conn.inBytesTotal
+                        prevOutBytes = conn.outBytesTotal
+                        lastTime = now
+                    } else {
+                        deviceConnectionState = null
+                        downloadRateState = 0L
+                        uploadRateState = 0L
+                    }
+                } catch (_: Exception) {}
+                kotlinx.coroutines.delay(2000)
+            }
+        } else {
+            deviceConnectionState = null
+            downloadRateState = 0L
+            uploadRateState = 0L
+        }
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -898,6 +1080,13 @@ fun RemoteDevicesSection(
                             folder.devices.any { it.deviceID.normalizeDeviceId() == device.id.normalizeDeviceId() }
                         }.map { it.label.ifEmpty { it.id } }
                     }
+                    val downloadRateText = "${formatRate(downloadRateState)} (${formatBytes(deviceConnectionState?.inBytesTotal ?: device.inBytesTotal)})"
+                    val uploadRateText = "${formatRate(uploadRateState)} (${formatBytes(deviceConnectionState?.outBytesTotal ?: device.outBytesTotal)})"
+                    val addressText = deviceConnectionState?.address?.ifEmpty { null } ?: device.addressConnected.ifEmpty { null } ?: device.addresses.firstOrNull() ?: "Dynamic"
+                    val connectionTypeText = deviceConnectionState?.type?.ifEmpty { null } ?: device.connectionType.ifEmpty { null } ?: "Unknown"
+                    val connectionsText = if (device.connected) "1 + 1" else "0"
+                    val versionText = deviceConnectionState?.clientVersion?.ifEmpty { null } ?: device.clientVersion.ifEmpty { null } ?: "v2.1.2"
+                    val foldersText = sharedFolders.joinToString(", ").ifEmpty { "None" }
 
                     Column(
                         modifier = Modifier
@@ -949,47 +1138,31 @@ fun RemoteDevicesSection(
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(start = 32.dp, end = 8.dp, bottom = 12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                SelectionContainer {
-                                    Text(
-                                        text = "Device ID:\n${device.id}",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                    )
-                                }
-
-                                Text(
-                                    text = "Addresses: ${device.addresses.joinToString(", ")}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                )
-
-                                if (device.connected) {
-                                    Text(
-                                        text = "Connected via: ${device.addressConnected} (${device.connectionType})",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                    )
-                                    Text(
-                                        text = "Version: ${device.clientVersion}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                    )
-                                }
-
-                                Text(
-                                    text = "In Total: ${formatBytes(device.inBytesTotal)} | Out Total: ${formatBytes(device.outBytesTotal)}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                )
-
-                                Text(
-                                    text = "Shared Folders: ${sharedFolders.joinToString(", ").ifEmpty { "None" }}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                )
+                                // Download Rate
+                                FolderInfoRow(label = "Download Rate", value = downloadRateText)
+                                // Upload Rate
+                                FolderInfoRow(label = "Upload Rate", value = uploadRateText)
+                                // Address
+                                FolderInfoRow(label = "Address", value = addressText)
+                                // Connection Type
+                                FolderInfoRow(label = "Connection Type", value = connectionTypeText)
+                                // Number of Connections
+                                FolderInfoRow(label = "Number of Connections", value = connectionsText)
+                                // Compression
+                                FolderInfoRow(label = "Compression", value = "Metadata Only")
+                                // Identification
+                                FolderInfoRow(label = "Identification", value = device.id.take(7))
+                                // Version
+                                FolderInfoRow(label = "Version", value = versionText)
+                                // Folders
+                                FolderInfoRow(label = "Folders", value = foldersText)
 
                                 // Action Buttons
                                 Row(
@@ -1120,6 +1293,27 @@ private fun formatBytes(bytes: Long): String {
         kb >= 1.0 -> "${(kb * 10).toLong() / 10.0} KB"
         else -> "$bytes B"
     }
+}
+
+private fun formatBinaryBytes(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val kb = bytes.toDouble() / 1024.0
+    val mb = kb / 1024.0
+    val gb = mb / 1024.0
+    return when {
+        gb >= 1.0 -> String.format(java.util.Locale.US, "%.2f GiB", gb)
+        mb >= 1.0 -> String.format(java.util.Locale.US, "%.2f MiB", mb)
+        kb >= 1.0 -> String.format(java.util.Locale.US, "%.2f KiB", kb)
+        else -> "$bytes B"
+    }
+}
+
+private fun formatRate(bitsPerSec: Long): String {
+    if (bitsPerSec < 1000) return "$bitsPerSec bps"
+    val kbps = bitsPerSec / 1000.0
+    if (kbps < 1000) return "${(kbps * 10).toLong() / 10.0} Kbps"
+    val mbps = kbps / 1000.0
+    return "${(mbps * 10).toLong() / 10.0} Mbps"
 }
 
 private fun formatSpeed(bytesPerSec: Long): String {

@@ -1,6 +1,7 @@
 package com.arcadelabs.synapse
 
 import androidx.compose.material3.*
+import androidx.compose.animation.core.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
@@ -35,6 +36,8 @@ fun main() {
     application {
         val daemonManager = remember { DesktopDaemonManager() }
         val daemonState by daemonManager.state.collectAsState()
+        // Track the artificial boot progress (from 0.0f to 1.0f)
+        var bootProgress by remember { mutableStateOf(0f) }
         var isReady by remember { mutableStateOf(false) }
         val preferencesHelper: com.arcadelabs.synapse.core.prefs.PreferencesHelper = org.koin.compose.koinInject()
 
@@ -42,18 +45,59 @@ fun main() {
             daemonManager.start()
         }
 
+        // Handle artificial boot progress transitions
         LaunchedEffect(daemonState) {
             if (daemonState is DaemonState.Ready) {
+                // Daemon is ready: quickly animate the remaining progress to 100%
+                val startVal = bootProgress
+                androidx.compose.animation.core.animate(
+                    initialValue = startVal,
+                    targetValue = 1f,
+                    animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing)
+                ) { value, _ ->
+                    bootProgress = value
+                }
+            } else {
+                // Daemon is not ready: reset and animate progress up to 90%
+                bootProgress = 0f
+                androidx.compose.animation.core.animate(
+                    initialValue = 0f,
+                    targetValue = 0.9f,
+                    animationSpec = tween(durationMillis = 600, easing = LinearOutSlowInEasing)
+                ) { value, _ ->
+                    if (daemonState !is DaemonState.Ready) {
+                        bootProgress = value
+                    }
+                }
+            }
+        }
+
+        // Handle transition to application screen once daemon is Ready AND bootProgress reaches 100%
+        LaunchedEffect(daemonState, bootProgress) {
+            if (daemonState is DaemonState.Ready && bootProgress >= 1f) {
                 val readyState = daemonState as DaemonState.Ready
                 preferencesHelper.apiBaseUrl = readyState.apiBaseUrl
                 preferencesHelper.apiKey = readyState.apiKey
                 isReady = true
+            } else if (daemonState !is DaemonState.Ready) {
+                isReady = false
             }
         }
 
         // Track window visibility
         var isWindowVisible by remember { mutableStateOf(true) }
         var hasShownBackgroundNotification by remember { mutableStateOf(false) }
+
+        // Optimize memory usage when backgrounded in the system tray
+        LaunchedEffect(isWindowVisible, isReady) {
+            val daemonPid = if (isReady) daemonManager.getProcessId() else null
+            if (!isWindowVisible) {
+                System.gc()
+                optimizeMemory(daemonPid, background = true)
+            } else {
+                optimizeMemory(daemonPid, background = false)
+            }
+        }
 
         // Create tray painter
         val trayIconPainter = remember { createTrayIconPainter() }
@@ -173,6 +217,7 @@ fun main() {
                     } else {
                         DaemonStartupScreen(
                             state = daemonState,
+                            bootProgress = bootProgress,
                             onRetry = {
                                 daemonManager.start()
                             }
@@ -224,5 +269,67 @@ private interface DWMAPI : com.sun.jna.win32.StdCallLibrary {
 
     companion object {
         val INSTANCE: DWMAPI = com.sun.jna.Native.load("dwmapi", DWMAPI::class.java) as DWMAPI
+    }
+}
+
+private const val PROCESS_SET_INFORMATION = 0x0200
+private const val PROCESS_SET_QUOTA = 0x0100
+private const val PROCESS_VM_OPERATION = 0x0008
+
+private const val IDLE_PRIORITY_CLASS = 0x00000040
+private const val NORMAL_PRIORITY_CLASS = 0x00000020
+
+private interface Kernel32Lite : com.sun.jna.win32.StdCallLibrary {
+    companion object {
+        val INSTANCE = com.sun.jna.Native.load("kernel32", Kernel32Lite::class.java) as Kernel32Lite
+    }
+    fun GetCurrentProcess(): com.sun.jna.Pointer
+    fun OpenProcess(dwDesiredAccess: Int, bInheritHandle: Boolean, dwProcessId: Int): com.sun.jna.Pointer
+    fun SetPriorityClass(hProcess: com.sun.jna.Pointer, dwPriorityClass: Int): Boolean
+    fun SetProcessWorkingSetSize(hProcess: com.sun.jna.Pointer, dwMinimumWorkingSetSize: Long, dwMaximumWorkingSetSize: Long): Boolean
+    fun CloseHandle(hObject: com.sun.jna.Pointer): Boolean
+}
+
+private interface PsapiLite : com.sun.jna.win32.StdCallLibrary {
+    companion object {
+        val INSTANCE = com.sun.jna.Native.load("psapi", PsapiLite::class.java) as PsapiLite
+    }
+    fun EmptyWorkingSet(hProcess: com.sun.jna.Pointer): Boolean
+}
+
+private fun optimizeMemory(pid: Int?, background: Boolean) {
+    if (!System.getProperty("os.name").lowercase().contains("win")) return
+    try {
+        if (background) {
+            val myProcess = Kernel32Lite.INSTANCE.GetCurrentProcess()
+            PsapiLite.INSTANCE.EmptyWorkingSet(myProcess)
+            Kernel32Lite.INSTANCE.SetPriorityClass(myProcess, IDLE_PRIORITY_CLASS)
+            Kernel32Lite.INSTANCE.SetProcessWorkingSetSize(myProcess, -1L, -1L)
+
+            if (pid != null && pid > 0) {
+                val access = PROCESS_SET_INFORMATION or PROCESS_SET_QUOTA or PROCESS_VM_OPERATION
+                val hProcess = Kernel32Lite.INSTANCE.OpenProcess(access, false, pid)
+                if (hProcess != com.sun.jna.Pointer.NULL) {
+                    Kernel32Lite.INSTANCE.SetPriorityClass(hProcess, IDLE_PRIORITY_CLASS)
+                    Kernel32Lite.INSTANCE.SetProcessWorkingSetSize(hProcess, -1L, -1L)
+                    PsapiLite.INSTANCE.EmptyWorkingSet(hProcess)
+                    Kernel32Lite.INSTANCE.CloseHandle(hProcess)
+                }
+            }
+        } else {
+            val myProcess = Kernel32Lite.INSTANCE.GetCurrentProcess()
+            Kernel32Lite.INSTANCE.SetPriorityClass(myProcess, NORMAL_PRIORITY_CLASS)
+
+            if (pid != null && pid > 0) {
+                val access = PROCESS_SET_INFORMATION
+                val hProcess = Kernel32Lite.INSTANCE.OpenProcess(access, false, pid)
+                if (hProcess != com.sun.jna.Pointer.NULL) {
+                    Kernel32Lite.INSTANCE.SetPriorityClass(hProcess, NORMAL_PRIORITY_CLASS)
+                    Kernel32Lite.INSTANCE.CloseHandle(hProcess)
+                }
+            }
+        }
+    } catch (e: Throwable) {
+        e.printStackTrace()
     }
 }
