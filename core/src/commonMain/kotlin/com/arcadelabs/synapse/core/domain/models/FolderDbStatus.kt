@@ -17,5 +17,6 @@ data class FolderDbStatus(
     @SerialName("needDeletes") val needDeletes: Long = 0,
     @SerialName("sequence") val sequence: Long = 0,
     @SerialName("stateChanged") val stateChanged: String = "",
-    @SerialName("version") val version: Long = 0
+    @SerialName("version") val version: Long = 0,
+    @SerialName("pullErrors") val pullErrors: Long = 0
 )

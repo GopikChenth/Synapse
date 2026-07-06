@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -42,6 +43,7 @@ import com.arcadelabs.synapse.features.status.ui.StatusScreen
 import com.arcadelabs.synapse.features.status.ui.RunBehavior
 import com.arcadelabs.synapse.features.recent.ui.RecentChangesScreen
 import com.arcadelabs.synapse.features.settings.ui.SettingsScreen
+import com.arcadelabs.synapse.features.dashboard.ui.MobileDashboardScreen
 import com.arcadelabs.synapse.core.prefs.PreferencesHelper
 import com.arcadelabs.synapse.SynapseBackHandler
 import kotlinx.coroutines.launch
@@ -50,6 +52,7 @@ import org.koin.compose.viewmodel.koinViewModel
 import qrcode.raw.QRCodeProcessor
 
 enum class Screen(val title: String) {
+    DASHBOARD("Dashboard"),
     FOLDERS("Folders"),
     DEVICES("Devices"),
     STATUS("Status")
@@ -168,7 +171,7 @@ fun App(
     val coroutineScope = rememberCoroutineScope()
 
     val pagerState = rememberPagerState(
-        initialPage = Screen.FOLDERS.ordinal,
+        initialPage = Screen.DASHBOARD.ordinal,
         pageCount = { Screen.entries.size }
     )
 
@@ -361,6 +364,7 @@ fun App(
                             Screen.entries.forEach { screen ->
                                 val selected = pagerState.currentPage == screen.ordinal
                                 val icon = when (screen) {
+                                    Screen.DASHBOARD -> Icons.Default.Home
                                     Screen.FOLDERS -> FolderIcon
                                     Screen.DEVICES -> DevicesIcon
                                     Screen.STATUS -> Icons.Default.Info
@@ -432,6 +436,27 @@ fun App(
                     ) { pageIndex ->
                         val screen = Screen.entries[pageIndex]
                         when (screen) {
+                            Screen.DASHBOARD -> MobileDashboardScreen(
+                                onAddFolderClick = { isCreateFolderDialogOpen = true },
+                                onAddDeviceClick = {
+                                    prefilledDeviceId = ""
+                                    prefilledDeviceName = ""
+                                    isAddDeviceDialogOpen = true
+                                },
+                                onShowDeviceIdClick = { isShowDeviceIdDialogOpen = true },
+                                onRecentChangesClick = { isRecentChangesPageOpen = true },
+                                onSettingsClick = { isSettingsPageOpen = true },
+                                onNavigateToFolders = {
+                                    coroutineScope.launch {
+                                        pagerState.animateScrollToPage(Screen.FOLDERS.ordinal)
+                                    }
+                                },
+                                onNavigateToDevices = {
+                                    coroutineScope.launch {
+                                        pagerState.animateScrollToPage(Screen.DEVICES.ordinal)
+                                    }
+                                }
+                            )
                             Screen.FOLDERS -> FoldersScreen(
                                 onAddFolderClick = { isCreateFolderDialogOpen = true },
                                 onEditFolderClick = { folder ->

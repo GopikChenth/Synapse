@@ -26,6 +26,8 @@ private val StandardPurpleDarkColorScheme = darkColorScheme(
     onSurface = Color(0xFFE6E1E5),
     surfaceVariant = Color(0xFF49454F),
     onSurfaceVariant = Color(0xFFCAC4D0),
+    surfaceContainer = Color(0xFF2B2930),
+    surfaceContainerHigh = Color(0xFF36343B),
     outline = Color(0xFF938F99)
 )
 
@@ -44,6 +46,8 @@ private val StandardPurpleLightColorScheme = lightColorScheme(
     onSurface = Color(0xFF1C1B1F),
     surfaceVariant = Color(0xFFE7E0EC),
     onSurfaceVariant = Color(0xFF49454F),
+    surfaceContainer = Color(0xFFF3EDF7),
+    surfaceContainerHigh = Color(0xFFECE6F0),
     outline = Color(0xFF79747E)
 )
 
@@ -63,6 +67,8 @@ private val DeepSpaceColorScheme = darkColorScheme(
     onSurface = Color(0xFFFFFFFF),
     surfaceVariant = Color(0xFF2D3B4E),
     onSurfaceVariant = Color(0xFFC5C6C7),
+    surfaceContainer = Color(0xFF1A2230),
+    surfaceContainerHigh = Color(0xFF243040),
     outline = Color(0xFF45A29E)
 )
 
@@ -79,6 +85,8 @@ private val DeepSpaceLightColorScheme = lightColorScheme(
     onSurface = Color(0xFF1F2833),
     surfaceVariant = Color(0xFFE9ECEF),
     onSurfaceVariant = Color(0xFF495057),
+    surfaceContainer = Color(0xFFF0F2F5),
+    surfaceContainerHigh = Color(0xFFE9ECEF),
     outline = Color(0xFF45A29E)
 )
 
@@ -104,6 +112,8 @@ private val MidnightGreenColorScheme = darkColorScheme(
     onSurface = Color(0xFFFFFFFF),
     surfaceVariant = Color(0xFF2B2928),
     onSurfaceVariant = Color(0xFFB7B7B7),
+    surfaceContainer = Color(0xFF2B2928),
+    surfaceContainerHigh = Color(0xFF353332),
     outline = Color(0xFF353332),
     outlineVariant = Color(0xFF353332),
     error = Color(0xFFE97152),
@@ -131,6 +141,8 @@ private val MidnightGreenLightColorScheme = lightColorScheme(
     onSurface = Color(0xFF171615),
     surfaceVariant = Color(0xFFEAECE7),
     onSurfaceVariant = Color(0xFF5C5E5A),
+    surfaceContainer = Color(0xFFF0F2ED),
+    surfaceContainerHigh = Color(0xFFEAECE7),
     outline = Color(0xFFB7B7B7),
     outlineVariant = Color(0xFFE0E0E0),
     error = Color(0xFFD84A26),
@@ -159,8 +171,10 @@ private val TacticalHUDColorScheme = darkColorScheme(
     onBackground = Color(0xFFFFFFFF),
     surface = Color(0xFF0B0F13),
     onSurface = Color(0xFFFFFFFF),
-    surfaceVariant = Color(0xFF1A222C), // surfaceContainerHigh
+    surfaceVariant = Color(0xFF1A222C),
     onSurfaceVariant = Color(0xFF9CB4C2),
+    surfaceContainer = Color(0xFF131A21),
+    surfaceContainerHigh = Color(0xFF1A222C),
     outline = Color(0xFF2C3B47),
     outlineVariant = Color(0xFF1F2B34),
     error = Color(0xFFFF4328),
@@ -188,6 +202,8 @@ private val TacticalHUDLightColorScheme = lightColorScheme(
     onSurface = Color(0xFF05070A),
     surfaceVariant = Color(0xFFE2E7EC),
     onSurfaceVariant = Color(0xFF3C4858),
+    surfaceContainer = Color(0xFFE8ECF0),
+    surfaceContainerHigh = Color(0xFFE2E7EC),
     outline = Color(0xFF718294),
     outlineVariant = Color(0xFFB4C5D6),
     error = Color(0xFFBA1A1A),
