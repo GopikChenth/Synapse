@@ -21,8 +21,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.alpha
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -315,7 +314,7 @@ private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
                     stiffness = Spring.StiffnessLow
                 )
             ),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
         )
@@ -421,18 +420,12 @@ private fun ThemeSelectionRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "App Theme",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "Select premium interface theme",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        Text(
+            text = "App Theme",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f)
+        )
         Box {
             Text(
                 text = selectedLabel,
@@ -472,25 +465,19 @@ private fun AppearanceModeRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-            Text(
-                text = "Appearance Mode",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "Choose light, dark, or system preference",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        Text(
+            text = "Appearance Mode",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f)
+        )
         
         SegmentedButtonRow(
             options = listOf("Light", "Dark", "System"),
             selectedOption = selectedMode,
             onOptionSelected = onModeSelected,
             disabledOptions = disabledOptions,
-            modifier = Modifier.width(220.dp)
+            modifier = Modifier.width(240.dp)
         )
     }
 }
@@ -503,84 +490,113 @@ private fun SegmentedButtonRow(
     disabledOptions: List<String> = emptyList(),
     modifier: Modifier = Modifier
 ) {
-    val selectedIndex = options.indexOf(selectedOption).coerceAtLeast(0)
-    
-    val animatedIndex by animateFloatAsState(
-        targetValue = selectedIndex.toFloat(),
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow
-        )
-    )
-
-    BoxWithConstraints(
+    Row(
         modifier = modifier
-            .height(36.dp)
-            .border(
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                shape = RoundedCornerShape(18.dp)
+            .fillMaxWidth()
+            .height(40.dp)
+            .background(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                shape = RoundedCornerShape(20.dp)
             )
-            .background(Color.Transparent)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        val segmentWidth = maxWidth / options.size
-        
-        Box(
-            modifier = Modifier
-                .offset(x = segmentWidth * animatedIndex)
-                .width(segmentWidth)
-                .fillMaxHeight()
-                .background(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(18.dp)
+        options.forEach { option ->
+            val isSelected = option == selectedOption
+            val isDisabled = disabledOptions.contains(option)
+            val interactionSource = remember { MutableInteractionSource() }
+            
+            // Layout Weight Morphing: Selected is 1.6f, Unselected is 0.7f
+            val weight by animateFloatAsState(
+                targetValue = if (isSelected) 1.6f else 0.7f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMedium
                 )
-        )
+            )
+            
+            // Shape Morphing: Active morphs to 20.dp (fully rounded), Inactive morphs to 6.dp
+            val cornerRadius by animateDpAsState(
+                targetValue = if (isSelected) 20.dp else 6.dp,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMedium
+                )
+            )
+            
+            val containerColor by animateColorAsState(
+                targetValue = when {
+                    isSelected -> MaterialTheme.colorScheme.primaryContainer
+                    else -> Color.Transparent
+                },
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMedium
+                )
+            )
+            
+            val contentColor by animateColorAsState(
+                targetValue = when {
+                    isDisabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                    isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                animationSpec = tween(durationMillis = 200)
+            )
 
-        Row(modifier = Modifier.fillMaxSize()) {
-            options.forEachIndexed { index, option ->
-                val isSelected = option == selectedOption
-                val isDisabled = disabledOptions.contains(option)
-                val interactionSource = remember { MutableInteractionSource() }
-                val isPressed by interactionSource.collectIsPressedAsState()
-                val scale by animateFloatAsState(
-                    targetValue = if (isPressed) 0.92f else 1.0f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMedium
+            val icon = when (option) {
+                "Light" -> com.arcadelabs.synapse.core.designsystem.SunIcon
+                "Dark" -> com.arcadelabs.synapse.core.designsystem.MoonIcon
+                else -> com.arcadelabs.synapse.core.designsystem.SystemIcon
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(weight)
+                    .fillMaxHeight()
+                    .background(
+                        color = containerColor,
+                        shape = RoundedCornerShape(cornerRadius)
                     )
-                )
-                
-                val contentColor by animateColorAsState(
-                    targetValue = when {
-                        isDisabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                        isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    animationSpec = tween(durationMillis = 200)
-                )
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .alpha(if (isDisabled) 0.38f else 1f)
-                        .graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                        }
-                        .clickable(
-                            interactionSource = interactionSource,
-                            indication = null,
-                            enabled = !isDisabled,
-                            onClick = { onOptionSelected(option) }
-                        ),
-                    contentAlignment = Alignment.Center
+                    .clickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        enabled = !isDisabled,
+                        onClick = { onOptionSelected(option) }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 6.dp)
                 ) {
-                    Text(
-                        text = option,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = contentColor,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = option,
+                        tint = contentColor,
+                        modifier = Modifier.size(16.dp)
                     )
+                    
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = isSelected,
+                        enter = fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + 
+                                expandHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMedium)),
+                        exit = fadeOut(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + 
+                               shrinkHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMedium))
+                    ) {
+                        Row {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = option,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = contentColor,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
+                    }
                 }
             }
         }

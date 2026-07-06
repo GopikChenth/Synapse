@@ -20,7 +20,7 @@ fun DeviceSummaryCard(
 ) {
     Card(
         modifier = modifier.clickable { onNavigateToDevices() },
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
         )
