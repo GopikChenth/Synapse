@@ -43,6 +43,28 @@
                 android:value="Synapse is a continuous peer-to-peer file synchronization app wrapper. It runs the local Syncthing daemon process in the background to sync folders with connected devices." />
         </service>
         
+        <!-- Boot Receiver for Auto-Start -->
+        <receiver
+            android:name=".receiver.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Home Screen 2x2 Widget Provider -->
+        <receiver
+            android:name=".widget.SynapseWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.arcadelabs.synapse.ACTION_WIDGET_TOGGLE_SYNC" />
+                <action android:name="com.arcadelabs.synapse.ACTION_WIDGET_SYNC_NOW" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
     </application>
 
 </manifest>

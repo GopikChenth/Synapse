@@ -24,6 +24,7 @@ class SyncthingService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiMulticastLock: WifiManager.MulticastLock? = null
     private var runConditionMonitor: RunConditionMonitor? = null
+    private var widgetPollingJob: Job? = null
 
     inner class SyncthingBinder : Binder() {
         fun getService(): SyncthingService = this@SyncthingService
@@ -103,16 +104,19 @@ class SyncthingService : Service() {
                 Log.i(TAG, "Runnable exited with code $exitCode")
                 runnable?.stop()
                 runnable = null
+                stopWidgetPolling()
                 if (exitCode == 3) {
                     startSyncthingProcessOnly()
                 }
             }
         }
+        startWidgetPolling()
     }
 
     private fun stopSyncthingProcessOnly() {
         runnable?.stop()
         runnable = null
+        stopWidgetPolling()
 
         updateNotification("Syncthing is waiting for run conditions")
     }
@@ -120,8 +124,142 @@ class SyncthingService : Service() {
     private fun stopSyncthing() {
         runnable?.stop()
         runnable = null
+        stopWidgetPolling()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun startWidgetPolling() {
+        if (widgetPollingJob != null) return
+        widgetPollingJob = serviceScope.launch {
+            var lastInBytes = 0L
+            var lastOutBytes = 0L
+            var lastTime = System.currentTimeMillis()
+            
+            val downloadHistory = mutableListOf<Long>()
+            val uploadHistory = mutableListOf<Long>()
+
+            while (isActive) {
+                try {
+                    val koin = org.koin.core.context.GlobalContext.get()
+                    val apiClient = koin.get<com.arcadelabs.synapse.core.network.SyncthingApiClient>()
+
+                    val status = apiClient.systemStatus()
+                    val connections = apiClient.systemConnections()
+                    val config = apiClient.systemConfig()
+
+                    var totalBytes = 0L
+                    var totalInSyncBytes = 0L
+                    var totalGlobalBytes = 0L
+
+                    config.folders.forEach { folder ->
+                        try {
+                            val dbStatus = apiClient.dbStatus(folder.id)
+                            totalBytes += dbStatus.localBytes
+                            totalInSyncBytes += dbStatus.inSyncBytes
+                            totalGlobalBytes += dbStatus.globalBytes
+                        } catch (_: Exception) {}
+                    }
+
+                    val progressPercent = if (totalGlobalBytes > 0L) {
+                        ((totalInSyncBytes.toDouble() / totalGlobalBytes.toDouble()) * 100.0).toInt().coerceIn(0, 100)
+                    } else {
+                        100
+                    }
+
+                    val now = System.currentTimeMillis()
+                    val elapsedSec = (now - lastTime).toDouble() / 1000.0
+                    lastTime = now
+
+                    val currentIn = connections.total.inBytesTotal
+                    val currentOut = connections.total.outBytesTotal
+
+                    val dlSpeed = if (lastInBytes > 0 && elapsedSec > 0) {
+                        ((currentIn - lastInBytes) / elapsedSec).toLong().coerceAtLeast(0)
+                    } else 0L
+                    val ulSpeed = if (lastOutBytes > 0 && elapsedSec > 0) {
+                        ((currentOut - lastOutBytes) / elapsedSec).toLong().coerceAtLeast(0)
+                    } else 0L
+
+                    lastInBytes = currentIn
+                    lastOutBytes = currentOut
+
+                    // Add to history
+                    downloadHistory.add(dlSpeed)
+                    uploadHistory.add(ulSpeed)
+                    if (downloadHistory.size > 15) downloadHistory.removeAt(0)
+                    if (uploadHistory.size > 15) uploadHistory.removeAt(0)
+
+                    val peersCount = connections.connections.values.count { it.connected }
+
+                    val chartBitmap = com.arcadelabs.synapse.widget.SynapseWidgetProvider.drawSpeedChart(
+                        context = this@SyncthingService,
+                        downloadHistory = downloadHistory,
+                        uploadHistory = uploadHistory
+                    )
+
+                    val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(this@SyncthingService)
+                    val thisWidget = android.content.ComponentName(this@SyncthingService, com.arcadelabs.synapse.widget.SynapseWidgetProvider::class.java)
+                    val appWidgetIds = appWidgetManager.getAppWidgetIds(thisWidget)
+
+                    if (appWidgetIds.isNotEmpty()) {
+                        com.arcadelabs.synapse.widget.SynapseWidgetProvider.updateWidgetState(
+                            context = this@SyncthingService,
+                            appWidgetManager = appWidgetManager,
+                            appWidgetIds = appWidgetIds,
+                            isRunning = true,
+                            peersCount = peersCount,
+                            progressText = "$progressPercent% synced",
+                            progressPercent = progressPercent,
+                            chartBitmap = chartBitmap
+                        )
+                    }
+                } catch (e: Exception) {
+                    // REST API not ready yet or offline, update widget with starting state
+                    try {
+                        val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(this@SyncthingService)
+                        val thisWidget = android.content.ComponentName(this@SyncthingService, com.arcadelabs.synapse.widget.SynapseWidgetProvider::class.java)
+                        val appWidgetIds = appWidgetManager.getAppWidgetIds(thisWidget)
+                        if (appWidgetIds.isNotEmpty()) {
+                            com.arcadelabs.synapse.widget.SynapseWidgetProvider.updateWidgetState(
+                                context = this@SyncthingService,
+                                appWidgetManager = appWidgetManager,
+                                appWidgetIds = appWidgetIds,
+                                isRunning = true,
+                                peersCount = 0,
+                                progressText = "Starting...",
+                                progressPercent = 0,
+                                chartBitmap = null
+                            )
+                        }
+                    } catch (_: Exception) {}
+                }
+                delay(5000)
+            }
+        }
+    }
+
+    private fun stopWidgetPolling() {
+        widgetPollingJob?.cancel()
+        widgetPollingJob = null
+
+        try {
+            val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(this)
+            val thisWidget = android.content.ComponentName(this, com.arcadelabs.synapse.widget.SynapseWidgetProvider::class.java)
+            val appWidgetIds = appWidgetManager.getAppWidgetIds(thisWidget)
+            if (appWidgetIds.isNotEmpty()) {
+                com.arcadelabs.synapse.widget.SynapseWidgetProvider.updateWidgetState(
+                    context = this,
+                    appWidgetManager = appWidgetManager,
+                    appWidgetIds = appWidgetIds,
+                    isRunning = false,
+                    peersCount = 0,
+                    progressText = "Stopped",
+                    progressPercent = 0,
+                    chartBitmap = null
+                )
+            }
+        } catch (_: Exception) {}
     }
 
     private fun acquireLocks() {

@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_background"
+    android:padding="8dp"
+    android:weightSum="2">
+
+    <!-- Top Half: Status & Sync Stats (Sub-Card) -->
+    <LinearLayout
+        android:id="@+id/widget_top_card_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1.1"
+        android:orientation="vertical"
+        android:background="@drawable/widget_sub_card_background"
+        android:padding="8dp"
+        android:layout_marginBottom="4dp">
+
+        <!-- Header: Progress Label on Left, Status Indicator Dot on Right -->
+        <RelativeLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <ImageView
+                android:id="@+id/widget_status_dot"
+                android:layout_width="8dp"
+                android:layout_height="8dp"
+                android:src="@drawable/ic_widget_dot_red"
+                android:layout_alignParentEnd="true"
+                android:layout_centerVertical="true"
+                android:contentDescription="Status Indicator" />
+
+            <TextView
+                android:id="@+id/widget_progress_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Stopped"
+                android:textColor="@color/widget_text_primary"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:layout_alignParentStart="true"
+                android:layout_centerVertical="true"
+                android:layout_toStartOf="@id/widget_status_dot"
+                android:layout_marginEnd="8dp"
+                android:singleLine="true"
+                android:ellipsize="end" />
+        </RelativeLayout>
+
+        <!-- Speed History Chart (Rendered dynamically in background onto a Canvas) -->
+        <ImageView
+            android:id="@+id/widget_speed_chart"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="2dp"
+            android:layout_marginBottom="2dp"
+            android:scaleType="fitXY"
+            android:contentDescription="Speed Chart" />
+
+        <!-- Linear Progress Bar -->
+        <ProgressBar
+            android:id="@+id/widget_progress_bar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:max="100"
+            android:progress="0"
+            android:progressTint="@color/widget_progress_fill"
+            android:progressBackgroundTint="@color/widget_progress_bg" />
+    </LinearLayout>
+
+    <!-- Bottom Half: Control Actions (Split horizontally) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="0.9"
+        android:orientation="horizontal"
+        android:layout_marginTop="4dp"
+        android:weightSum="2">
+
+        <!-- Bottom Left: Cycle Run Behavior Button (Icon Only) -->
+        <FrameLayout
+            android:id="@+id/widget_btn_toggle_container"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@drawable/widget_sub_card_background"
+            android:layout_marginEnd="4dp"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:id="@+id/widget_btn_toggle_icon"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_widget_follow"
+                android:contentDescription="Cycle Sync Behavior"
+                android:tint="@color/widget_icon_tint" />
+        </FrameLayout>
+
+        <!-- Bottom Right: Scan QR Code Button (Icon Only) -->
+        <FrameLayout
+            android:id="@+id/widget_btn_scan_container"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@drawable/widget_sub_card_background"
+            android:layout_marginStart="4dp"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:id="@+id/widget_btn_scan_icon"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_widget_scan"
+                android:contentDescription="Scan Device QR Code"
+                android:tint="@color/widget_icon_tint" />
+        </FrameLayout>
+    </LinearLayout>
+</LinearLayout>

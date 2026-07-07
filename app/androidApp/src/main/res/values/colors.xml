@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light Mode Widget Colors -->
+    <color name="widget_bg">#F4F3EF</color>
+    <color name="widget_sub_card_bg">#FFFFFF</color>
+    <color name="widget_border">#E5E5E5</color>
+    <color name="widget_text_primary">#1C1B1F</color>
+    <color name="widget_text_secondary">#7A757F</color>
+    <color name="widget_speed_down">#0F9F68</color>
+    <color name="widget_speed_up">#2F5F1B</color>
+    <color name="widget_progress_bg">#E6E1E5</color>
+    <color name="widget_progress_fill">#52A435</color>
+    <color name="widget_icon_tint">#1C1B1F</color>
+</resources>

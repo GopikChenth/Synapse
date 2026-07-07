@@ -39,6 +39,7 @@ import com.arcadelabs.synapse.core.domain.models.FolderDbStatus
 import com.arcadelabs.synapse.core.domain.models.toItemFinishedData
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
+import kotlinx.serialization.json.jsonPrimitive
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import java.awt.Toolkit
@@ -793,6 +794,7 @@ fun ThisDeviceSection(
 
     LaunchedEffect(folders) {
         if (folders.isNotEmpty()) {
+            var lastEventId = 0
             while (isActive) {
                 try {
                     var filesSum = 0L
@@ -810,10 +812,14 @@ fun ThisDeviceSection(
                     totalLocalDirs = dirsSum
                     totalLocalBytes = bytesSum
 
-                    // Count sync conflicts from finished items
-                    val events = apiClient.getEvents(limit = 100)
-                    syncConflictsCount = events.count { event ->
-                        event.type == "ItemFinished" && event.data != null && event.data.toString().contains("sync-conflict", ignoreCase = true)
+                    // Only fetch events newer than the last seen id, and accumulate new conflicts
+                    val events = apiClient.getEvents(since = lastEventId, limit = 100)
+                    if (events.isNotEmpty()) {
+                        lastEventId = events.last().id
+                        syncConflictsCount += events.count { event ->
+                            event.type == "ItemFinished" &&
+                                event.data?.get("item")?.jsonPrimitive?.content?.contains("sync-conflict", ignoreCase = true) == true
+                        }
                     }
                 } catch (_: Exception) {}
                 kotlinx.coroutines.delay(3000)
@@ -992,6 +998,7 @@ fun ThisDeviceStatRow(label: String, value: String) {
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        
     }
 }
 

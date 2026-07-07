@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark Mode Widget Colors -->
+    <color name="widget_bg">#141312</color>
+    <color name="widget_sub_card_bg">#232120</color>
+    <color name="widget_border">#2B2928</color>
+    <color name="widget_text_primary">#FFFFFF</color>
+    <color name="widget_text_secondary">#B7B7B7</color>
+    <color name="widget_speed_down">#10B981</color>
+    <color name="widget_speed_up">#3F7F29</color>
+    <color name="widget_progress_bg">#353332</color>
+    <color name="widget_progress_fill">#8CCF73</color>
+    <color name="widget_icon_tint">#FFFFFF</color>
+</resources>

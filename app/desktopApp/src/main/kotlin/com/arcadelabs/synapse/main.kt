@@ -17,6 +17,8 @@ import com.arcadelabs.synapse.daemon.DaemonState
 import com.arcadelabs.synapse.daemon.DaemonStartupScreen
 import com.arcadelabs.synapse.daemon.DesktopDaemonManager
 import com.arcadelabs.synapse.di.appDiModule
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.koin.core.context.startKoin
 import java.awt.image.BufferedImage
 
@@ -40,10 +42,19 @@ fun main() {
         var bootProgress by remember { mutableStateOf(0f) }
         var isReady by remember { mutableStateOf(false) }
         val preferencesHelper: com.arcadelabs.synapse.core.prefs.PreferencesHelper = org.koin.compose.koinInject()
-        val autoStart by preferencesHelper.autoStartFlow.collectAsState()
-
-        LaunchedEffect(autoStart) {
-            setWindowsStartup(autoStart)
+        LaunchedEffect(Unit) {
+            var initial = true
+            preferencesHelper.autoStartFlow.collect { enabled ->
+                // At launch, re-register only when enabled (heals a stale entry after
+                // the exe moves); skip the pointless delete when disabled.
+                val skip = initial && !enabled
+                initial = false
+                if (!skip) {
+                    withContext(Dispatchers.IO) {
+                        setWindowsStartup(enabled)
+                    }
+                }
+            }
         }
 
         LaunchedEffect(Unit) {
@@ -292,7 +303,6 @@ private interface Kernel32Lite : com.sun.jna.win32.StdCallLibrary {
     fun OpenProcess(dwDesiredAccess: Int, bInheritHandle: Boolean, dwProcessId: Int): com.sun.jna.Pointer
     fun SetPriorityClass(hProcess: com.sun.jna.Pointer, dwPriorityClass: Int): Boolean
     fun SetProcessWorkingSetSize(hProcess: com.sun.jna.Pointer, dwMinimumWorkingSetSize: Long, dwMaximumWorkingSetSize: Long): Boolean
-    fun GetModuleFileName(hModule: com.sun.jna.Pointer?, lpFilename: ByteArray, nSize: Int): Int
     fun CloseHandle(hObject: com.sun.jna.Pointer): Boolean
 }
 
@@ -343,33 +353,31 @@ private fun optimizeMemory(pid: Int?, background: Boolean) {
 private fun setWindowsStartup(enabled: Boolean) {
     if (!System.getProperty("os.name").lowercase().contains("win")) return
     try {
-        val runKey = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+        val runKey = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
         val appName = "Synapse"
-        
-        val javaHome = System.getProperty("java.home")
-        val javaExe = javaHome + java.io.File.separator + "bin" + java.io.File.separator + "javaw.exe"
-        val classPath = System.getProperty("java.class.path")
-        
-        val pathBuf = ByteArray(2048)
-        val len = Kernel32Lite.INSTANCE.GetModuleFileName(null, pathBuf, pathBuf.size)
-        val exePath = if (len > 0) String(pathBuf, 0, len).trim() else ""
-        
-        val cmd = if (exePath.endsWith(".exe", ignoreCase = true) && 
-                      !exePath.contains("java.exe", ignoreCase = true) && 
+        val hkcu = com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER
+
+        if (!enabled) {
+            if (com.sun.jna.platform.win32.Advapi32Util.registryValueExists(hkcu, runKey, appName)) {
+                com.sun.jna.platform.win32.Advapi32Util.registryDeleteValue(hkcu, runKey, appName)
+            }
+            return
+        }
+
+        val exePath = ProcessHandle.current().info().command().orElse("")
+
+        val cmd = if (exePath.endsWith(".exe", ignoreCase = true) &&
+                      !exePath.contains("java.exe", ignoreCase = true) &&
                       !exePath.contains("javaw.exe", ignoreCase = true)) {
             "\"$exePath\""
         } else {
-            "\"$javaExe\" -cp \"$classPath\" com.arcadelabs.synapse.MainKt"
+            // Dev run (java/javaw): register the current classpath launch command
+            val javaExe = System.getProperty("java.home") + java.io.File.separator + "bin" + java.io.File.separator + "javaw.exe"
+            "\"$javaExe\" -cp \"${System.getProperty("java.class.path")}\" com.arcadelabs.synapse.MainKt"
         }
 
-        if (enabled) {
-            val pb = ProcessBuilder("reg", "add", runKey, "/v", appName, "/t", "REG_SZ", "/d", cmd, "/f")
-            pb.start().waitFor()
-        } else {
-            val pb = ProcessBuilder("reg", "delete", runKey, "/v", appName, "/f")
-            pb.start().waitFor()
-        }
-    } catch (e: Exception) {
+        com.sun.jna.platform.win32.Advapi32Util.registrySetStringValue(hkcu, runKey, appName, cmd)
+    } catch (e: Throwable) {
         e.printStackTrace()
     }
 }
