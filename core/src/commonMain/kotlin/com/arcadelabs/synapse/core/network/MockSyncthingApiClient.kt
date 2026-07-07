@@ -272,6 +272,18 @@ class MockSyncthingApiClient(
                     put("type", "file")
                     put("action", "delete")
                 }
+            ),
+            Event(
+                id = 4,
+                globalID = 4,
+                type = "ItemFinished",
+                time = "2026-07-05T22:33:27.000Z",
+                data = kotlinx.serialization.json.buildJsonObject {
+                    put("item", "workspace.sync-conflict-20260705-223327-2NZT5WI.json")
+                    put("folder", "default")
+                    put("type", "file")
+                    put("action", "update")
+                }
             )
         )
     }

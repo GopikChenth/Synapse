@@ -40,6 +40,11 @@ fun main() {
         var bootProgress by remember { mutableStateOf(0f) }
         var isReady by remember { mutableStateOf(false) }
         val preferencesHelper: com.arcadelabs.synapse.core.prefs.PreferencesHelper = org.koin.compose.koinInject()
+        val autoStart by preferencesHelper.autoStartFlow.collectAsState()
+
+        LaunchedEffect(autoStart) {
+            setWindowsStartup(autoStart)
+        }
 
         LaunchedEffect(Unit) {
             daemonManager.start()
@@ -287,6 +292,7 @@ private interface Kernel32Lite : com.sun.jna.win32.StdCallLibrary {
     fun OpenProcess(dwDesiredAccess: Int, bInheritHandle: Boolean, dwProcessId: Int): com.sun.jna.Pointer
     fun SetPriorityClass(hProcess: com.sun.jna.Pointer, dwPriorityClass: Int): Boolean
     fun SetProcessWorkingSetSize(hProcess: com.sun.jna.Pointer, dwMinimumWorkingSetSize: Long, dwMaximumWorkingSetSize: Long): Boolean
+    fun GetModuleFileName(hModule: com.sun.jna.Pointer?, lpFilename: ByteArray, nSize: Int): Int
     fun CloseHandle(hObject: com.sun.jna.Pointer): Boolean
 }
 
@@ -330,6 +336,40 @@ private fun optimizeMemory(pid: Int?, background: Boolean) {
             }
         }
     } catch (e: Throwable) {
+        e.printStackTrace()
+    }
+}
+
+private fun setWindowsStartup(enabled: Boolean) {
+    if (!System.getProperty("os.name").lowercase().contains("win")) return
+    try {
+        val runKey = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+        val appName = "Synapse"
+        
+        val javaHome = System.getProperty("java.home")
+        val javaExe = javaHome + java.io.File.separator + "bin" + java.io.File.separator + "javaw.exe"
+        val classPath = System.getProperty("java.class.path")
+        
+        val pathBuf = ByteArray(2048)
+        val len = Kernel32Lite.INSTANCE.GetModuleFileName(null, pathBuf, pathBuf.size)
+        val exePath = if (len > 0) String(pathBuf, 0, len).trim() else ""
+        
+        val cmd = if (exePath.endsWith(".exe", ignoreCase = true) && 
+                      !exePath.contains("java.exe", ignoreCase = true) && 
+                      !exePath.contains("javaw.exe", ignoreCase = true)) {
+            "\"$exePath\""
+        } else {
+            "\"$javaExe\" -cp \"$classPath\" com.arcadelabs.synapse.MainKt"
+        }
+
+        if (enabled) {
+            val pb = ProcessBuilder("reg", "add", runKey, "/v", appName, "/t", "REG_SZ", "/d", cmd, "/f")
+            pb.start().waitFor()
+        } else {
+            val pb = ProcessBuilder("reg", "delete", runKey, "/v", appName, "/f")
+            pb.start().waitFor()
+        }
+    } catch (e: Exception) {
         e.printStackTrace()
     }
 }

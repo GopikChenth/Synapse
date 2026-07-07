@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="scan_qr"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_menu_camera"
+        android:shortcutShortLabel="@string/shortcut_scan_short"
+        android:shortcutLongLabel="@string/shortcut_scan_long">
+        <intent
+            android:action="com.arcadelabs.synapse.ACTION_SCAN_QR"
+            android:targetPackage="com.arcadelabs.synapse"
+            android:targetClass="com.arcadelabs.synapse.MainActivity" />
+    </shortcut>
+    
+    <shortcut
+        android:shortcutId="force_start"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_media_play"
+        android:shortcutShortLabel="@string/shortcut_start_short"
+        android:shortcutLongLabel="@string/shortcut_start_long">
+        <intent
+            android:action="com.arcadelabs.synapse.ACTION_FORCE_START"
+            android:targetPackage="com.arcadelabs.synapse"
+            android:targetClass="com.arcadelabs.synapse.MainActivity" />
+    </shortcut>
+    
+    <shortcut
+        android:shortcutId="pause_sync"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_media_pause"
+        android:shortcutShortLabel="@string/shortcut_pause_short"
+        android:shortcutLongLabel="@string/shortcut_pause_long">
+        <intent
+            android:action="com.arcadelabs.synapse.ACTION_PAUSE_SYNC"
+            android:targetPackage="com.arcadelabs.synapse"
+            android:targetClass="com.arcadelabs.synapse.MainActivity" />
+    </shortcut>
+</shortcuts>

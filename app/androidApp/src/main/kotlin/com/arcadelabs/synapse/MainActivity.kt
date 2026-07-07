@@ -15,6 +15,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -33,6 +36,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private lateinit var shortcutHandler: ShortcutHandler
+    private var initialDeviceId by mutableStateOf("")
+    private var initialOpenAddDevice by mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -41,8 +48,20 @@ class MainActivity : ComponentActivity() {
             window.decorView.isForceDarkAllowed = false
         }
 
+        shortcutHandler = ShortcutHandler(this)
+        shortcutHandler.handleIntent(intent) { scannedId ->
+            initialDeviceId = scannedId
+            initialOpenAddDevice = true
+        }
+
         setContent {
             App(
+                initialDeviceId = initialDeviceId,
+                initialOpenAddDevice = initialOpenAddDevice,
+                clearPrefilledDevice = {
+                    initialDeviceId = ""
+                    initialOpenAddDevice = false
+                },
                 openFolder = { path ->
                     try {
                         val docId = "primary:" + path.substringAfter("/storage/emulated/0/")
@@ -106,7 +125,7 @@ class MainActivity : ComponentActivity() {
                     finishAffinity()
                 },
                 onRunBehaviorChanged = { behavior ->
-                    val prefs = getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
+                    val prefs = getSharedPreferences("${packageName}_preferences", Context.MODE_PRIVATE)
                     prefs.edit().putString("run_behavior", behavior.name).apply()
                     
                     if (behavior == RunBehavior.FORCE_STOP) {
@@ -257,6 +276,15 @@ class MainActivity : ComponentActivity() {
                     startSyncthingService()
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        shortcutHandler.handleIntent(intent) { scannedId ->
+            initialDeviceId = scannedId
+            initialOpenAddDevice = true
         }
     }
 

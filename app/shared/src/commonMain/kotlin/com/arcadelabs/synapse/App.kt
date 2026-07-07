@@ -106,6 +106,9 @@ fun App(
     onRunBehaviorChanged: ((RunBehavior) -> Unit)? = null,
     showNotification: ((title: String, message: String) -> Unit)? = null,
     deviceModelName: String = "",
+    initialDeviceId: String = "",
+    initialOpenAddDevice: Boolean = false,
+    clearPrefilledDevice: () -> Unit = {},
     apiClient: SyncthingApiClient = koinInject(),
     preferencesHelper: PreferencesHelper = koinInject(),
     deviceViewModel: DeviceViewModel = koinViewModel()
@@ -164,6 +167,14 @@ fun App(
     var prefilledFolderId by remember { mutableStateOf("") }
     var prefilledFolderLabel by remember { mutableStateOf("") }
     var prefilledFolderSharedDevices by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    LaunchedEffect(initialDeviceId, initialOpenAddDevice) {
+        if (initialOpenAddDevice) {
+            prefilledDeviceId = initialDeviceId
+            isAddDeviceDialogOpen = true
+            clearPrefilledDevice()
+        }
+    }
 
     var localDeviceId by remember { mutableStateOf("") }
     var localDeviceName by remember { mutableStateOf("") }

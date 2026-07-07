@@ -88,7 +88,15 @@ class SyncthingRunnable(
     }
 
     fun stop() {
-        processRef.get()?.destroy()
+        val process = processRef.get()
+        if (process != null) {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                process.destroyForcibly()
+            } else {
+                process.destroy()
+            }
+            processRef.set(null)
+        }
         scope.cancel()
     }
 

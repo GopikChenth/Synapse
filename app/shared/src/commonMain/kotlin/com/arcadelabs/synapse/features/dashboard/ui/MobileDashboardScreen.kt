@@ -58,6 +58,14 @@ fun MobileDashboardScreen(
         }
     }
 
+    // Refresh folders and devices immediately when Syncthing starts running
+    LaunchedEffect(statusState.isRunning) {
+        if (statusState.isRunning) {
+            folderViewModel.loadFolders()
+            deviceViewModel.loadInitial()
+        }
+    }
+
     // Poll stats details periodically when the dashboard is visible
     LaunchedEffect(folders) {
         if (folders.isNotEmpty()) {

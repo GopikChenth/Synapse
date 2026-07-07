@@ -39,7 +39,7 @@ class SyncthingService : Service() {
         acquireLocks()
 
         runConditionMonitor = RunConditionMonitor(this) { isMet ->
-            val prefs = getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
+            val prefs = getSharedPreferences("${packageName}_preferences", Context.MODE_PRIVATE)
             val behaviorStr = prefs.getString("run_behavior", "FOLLOW")
             if (behaviorStr == "FOLLOW") {
                 if (isMet) {
@@ -55,7 +55,7 @@ class SyncthingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         if (action == ACTION_START) {
-            val prefs = getSharedPreferences("synapse_prefs", Context.MODE_PRIVATE)
+            val prefs = getSharedPreferences("${packageName}_preferences", Context.MODE_PRIVATE)
             val behaviorStr = prefs.getString("run_behavior", "FOLLOW")
             when (behaviorStr) {
                 "FORCE_START" -> {

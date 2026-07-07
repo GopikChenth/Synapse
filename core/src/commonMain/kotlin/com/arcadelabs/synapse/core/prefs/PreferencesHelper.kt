@@ -36,4 +36,16 @@ interface PreferencesHelper {
 
     /** Reactive flow of the selected theme mode */
     val themeModeFlow: kotlinx.coroutines.flow.StateFlow<String>
+
+    /** Selected run behavior: "FOLLOW", "FORCE_START", "FORCE_STOP" */
+    var runBehavior: String
+
+    /** Reactive flow of the selected run behavior */
+    val runBehaviorFlow: kotlinx.coroutines.flow.StateFlow<String>
+
+    /** Whether the app should start automatically on system boot */
+    var autoStart: Boolean
+
+    /** Reactive flow of the auto start setting */
+    val autoStartFlow: kotlinx.coroutines.flow.StateFlow<Boolean>
 }

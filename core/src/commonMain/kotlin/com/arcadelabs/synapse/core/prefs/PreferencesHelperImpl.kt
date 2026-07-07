@@ -47,4 +47,24 @@ class PreferencesHelperImpl(private val settings: Settings = Settings()) : Prefe
             settings.putString("theme_mode", value)
             _themeModeFlow.value = value
         }
+
+    private val _autoStartFlow = kotlinx.coroutines.flow.MutableStateFlow(settings.getBoolean("auto_start", false))
+    override val autoStartFlow = _autoStartFlow.asStateFlow()
+
+    override var autoStart: Boolean
+        get() = settings.getBoolean("auto_start", false)
+        set(value) {
+            settings.putBoolean("auto_start", value)
+            _autoStartFlow.value = value
+        }
+
+    private val _runBehaviorFlow = kotlinx.coroutines.flow.MutableStateFlow(settings.getString("run_behavior", "FOLLOW"))
+    override val runBehaviorFlow = _runBehaviorFlow.asStateFlow()
+
+    override var runBehavior: String
+        get() = settings.getString("run_behavior", "FOLLOW")
+        set(value) {
+            settings.putString("run_behavior", value)
+            _runBehaviorFlow.value = value
+        }
 }

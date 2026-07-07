@@ -557,7 +557,7 @@ private fun SegmentedButtonRow(
                     .fillMaxHeight()
                     .background(
                         color = containerColor,
-                        shape = RoundedCornerShape(cornerRadius)
+                        shape = RoundedCornerShape(cornerRadius.coerceAtLeast(0.dp))
                     )
                     .clickable(
                         interactionSource = interactionSource,

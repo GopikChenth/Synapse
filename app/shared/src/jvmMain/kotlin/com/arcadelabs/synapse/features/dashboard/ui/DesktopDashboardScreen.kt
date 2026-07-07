@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -788,6 +789,7 @@ fun ThisDeviceSection(
     var totalLocalFiles by remember { mutableStateOf(0L) }
     var totalLocalDirs by remember { mutableStateOf(0L) }
     var totalLocalBytes by remember { mutableStateOf(0L) }
+    var syncConflictsCount by remember { mutableStateOf(0) }
 
     LaunchedEffect(folders) {
         if (folders.isNotEmpty()) {
@@ -807,6 +809,12 @@ fun ThisDeviceSection(
                     totalLocalFiles = filesSum
                     totalLocalDirs = dirsSum
                     totalLocalBytes = bytesSum
+
+                    // Count sync conflicts from finished items
+                    val events = apiClient.getEvents(limit = 100)
+                    syncConflictsCount = events.count { event ->
+                        event.type == "ItemFinished" && event.data != null && event.data.toString().contains("sync-conflict", ignoreCase = true)
+                    }
                 } catch (_: Exception) {}
                 kotlinx.coroutines.delay(3000)
             }
@@ -870,64 +878,76 @@ fun ThisDeviceSection(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Left Part: Text Stats
-                Column(
+            ) {                // Left Part: Text Stats
+                Row(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
-                    val downloadRateText = "${formatRate(statusState.downloadSpeed * 8)} (${formatBinaryBytes(statusState.totalDownload)})"
-                    val uploadRateText = "${formatRate(statusState.uploadSpeed * 8)} (${formatBinaryBytes(statusState.totalUpload)})"
-                    val localStateText = "${totalLocalFiles}  ${totalLocalDirs}  ~${formatBinaryBytes(totalLocalBytes)}"
-
-                    ThisDeviceStatRow("Download Rate", downloadRateText)
-                    ThisDeviceStatRow("Upload Rate", uploadRateText)
-                    ThisDeviceStatRow("Local State (Total)", localStateText)
-                    ThisDeviceStatRow("Uptime", formatUptime(statusState.uptime))
-                    
-                    // Identification row with copy
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = "Identification",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                        )
+                        val downloadRateText = "${formatRate(statusState.downloadSpeed * 8)} (${formatBinaryBytes(statusState.totalDownload)})"
+                        val uploadRateText = "${formatRate(statusState.uploadSpeed * 8)} (${formatBinaryBytes(statusState.totalUpload)})"
+                        val localStateText = "${totalLocalFiles}  ${totalLocalDirs}  ~${formatBinaryBytes(totalLocalBytes)}"
+
+                        ThisDeviceStatRow("Download Rate", downloadRateText)
+                        ThisDeviceStatRow("Upload Rate", uploadRateText)
+                        ThisDeviceStatRow("Local State (Total)", localStateText)
+                        ThisDeviceStatRow("Synced Storage Volume", "~${formatBinaryBytes(totalLocalBytes)}")
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ThisDeviceStatRow("Sync Conflicts", if (syncConflictsCount > 0) "$syncConflictsCount" else "0")
+                        ThisDeviceStatRow("Uptime", formatUptime(statusState.uptime))
+                        
+                        // Identification row with copy
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier
-                                .clickable { onCopyClick(myId) }
-                                .padding(vertical = 2.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = myId.take(7),
-                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = if (copiedIdFeedback == myId) "Copied!" else "Copy",
+                                text = "Identification",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                             )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .clickable { onCopyClick(myId) }
+                                    .padding(vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = myId.take(7),
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Icon(
+                                    imageVector = if (copiedIdFeedback == myId) Icons.Default.Check else CopyIcon,
+                                    contentDescription = "Copy ID",
+                                    tint = if (copiedIdFeedback == myId) Color(0xFF10B981) else MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
-                    }
-                    
-                    val osName = System.getProperty("os.name") ?: "Windows"
-                    val osArch = System.getProperty("os.arch") ?: "64-bit"
-                    val osLabel = if (osName.contains("Windows", ignoreCase = true)) {
-                        "Windows (64-bit Intel/AMD)"
-                    } else {
-                        "$osName ($osArch)"
-                    }
-                    val verStr = statusState.version.ifEmpty { "v2.1.1" }
-                    val versionText = "$verStr, $osLabel"
+                        
+                        val osName = System.getProperty("os.name") ?: "Windows"
+                        val osArch = System.getProperty("os.arch") ?: "64-bit"
+                        val osLabel = if (osName.contains("Windows", ignoreCase = true)) {
+                            "Windows (64-bit Intel/AMD)"
+                        } else {
+                            "$osName ($osArch)"
+                        }
+                        val verStr = statusState.version.ifEmpty { "v2.1.1" }
+                        val versionText = "$verStr, $osLabel"
 
-                    ThisDeviceStatRow("Version", versionText)
+                        ThisDeviceStatRow("Version", versionText)
+                    }
                 }
 
                 // Right Part: Donut Charts

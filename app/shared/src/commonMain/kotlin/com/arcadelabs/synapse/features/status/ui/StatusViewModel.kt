@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arcadelabs.synapse.core.domain.models.*
 import com.arcadelabs.synapse.core.network.*
+import com.arcadelabs.synapse.core.prefs.PreferencesHelper
 import kotlin.time.TimeSource
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,7 +33,8 @@ data class StatusUiState(
 )
 
 class StatusViewModel(
-    private val apiClient: SyncthingApiClient
+    private val apiClient: SyncthingApiClient,
+    private val preferencesHelper: PreferencesHelper
 ) : ViewModel() {
 
     private val _statusState = MutableStateFlow(StatusUiState())
@@ -59,6 +61,13 @@ class StatusViewModel(
     private val failureThreshold = 3
 
     init {
+        val saved = try {
+            RunBehavior.valueOf(preferencesHelper.runBehavior)
+        } catch (_: Exception) {
+            RunBehavior.FOLLOW
+        }
+        _runBehavior.value = saved
+
         loadInitial()
         startPolling()
     }
@@ -232,6 +241,7 @@ class StatusViewModel(
 
     fun setRunBehavior(behavior: RunBehavior, onPlatformChange: ((RunBehavior) -> Unit)? = null) {
         _runBehavior.value = behavior
+        preferencesHelper.runBehavior = behavior.name
         onPlatformChange?.invoke(behavior)
         
         if (behavior == RunBehavior.FORCE_STOP) {
