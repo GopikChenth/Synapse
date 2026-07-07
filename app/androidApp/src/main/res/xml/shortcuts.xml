@@ -3,7 +3,7 @@
     <shortcut
         android:shortcutId="scan_qr"
         android:enabled="true"
-        android:icon="@android:drawable/ic_menu_camera"
+        android:icon="@drawable/ic_shortcut_scan"
         android:shortcutShortLabel="@string/shortcut_scan_short"
         android:shortcutLongLabel="@string/shortcut_scan_long">
         <intent
@@ -15,7 +15,7 @@
     <shortcut
         android:shortcutId="force_start"
         android:enabled="true"
-        android:icon="@android:drawable/ic_media_play"
+        android:icon="@drawable/ic_shortcut_start"
         android:shortcutShortLabel="@string/shortcut_start_short"
         android:shortcutLongLabel="@string/shortcut_start_long">
         <intent
@@ -27,7 +27,7 @@
     <shortcut
         android:shortcutId="pause_sync"
         android:enabled="true"
-        android:icon="@android:drawable/ic_media_pause"
+        android:icon="@drawable/ic_shortcut_pause"
         android:shortcutShortLabel="@string/shortcut_pause_short"
         android:shortcutLongLabel="@string/shortcut_pause_long">
         <intent

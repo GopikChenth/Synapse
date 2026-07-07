@@ -81,7 +81,7 @@ class SynapseWidgetProvider : AppWidgetProvider() {
                 progressText = when (newBehavior) {
                     "FORCE_START" -> "Starting..."
                     "FORCE_STOP" -> "Stopping..."
-                    else -> "Waiting for conditions..."
+                    else -> "Waiting..."
                 },
                 progressPercent = 0,
                 chartBitmap = null
@@ -318,6 +318,26 @@ class SynapseWidgetProvider : AppWidgetProvider() {
             val palette = getThemePalette(context)
             val canvas = android.graphics.Canvas(bitmap)
             canvas.drawColor(palette.subCardBg)
+
+            // Draw a subtle grid pattern
+            val gridPaint = android.graphics.Paint().apply {
+                color = palette.border
+                alpha = 45 // Subtle opacity
+                strokeWidth = 1f
+                style = android.graphics.Paint.Style.STROKE
+            }
+            // Horizontal lines
+            val numRows = 4
+            for (i in 1 until numRows) {
+                val y = (height.toFloat() / numRows) * i
+                canvas.drawLine(0f, y, width.toFloat(), y, gridPaint)
+            }
+            // Vertical lines
+            val numCols = 6
+            for (i in 1 until numCols) {
+                val x = (width.toFloat() / numCols) * i
+                canvas.drawLine(x, 0f, x, height.toFloat(), gridPaint)
+            }
 
             if (downloadHistory.isEmpty() && uploadHistory.isEmpty()) {
                 val paint = android.graphics.Paint().apply {
