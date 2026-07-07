@@ -310,8 +310,8 @@ private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
             .fillMaxWidth()
             .animateContentSize(
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessLow
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMedium
                 )
             ),
         shape = RoundedCornerShape(12.dp),
@@ -511,7 +511,7 @@ private fun SegmentedButtonRow(
             val weight by animateFloatAsState(
                 targetValue = if (isSelected) 1.6f else 0.7f,
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    dampingRatio = Spring.DampingRatioNoBouncy,
                     stiffness = Spring.StiffnessMedium
                 )
             )
@@ -520,7 +520,7 @@ private fun SegmentedButtonRow(
             val cornerRadius by animateDpAsState(
                 targetValue = if (isSelected) 20.dp else 6.dp,
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    dampingRatio = Spring.DampingRatioNoBouncy,
                     stiffness = Spring.StiffnessMedium
                 )
             )
@@ -581,10 +581,10 @@ private fun SegmentedButtonRow(
                     
                     androidx.compose.animation.AnimatedVisibility(
                         visible = isSelected,
-                        enter = fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + 
-                                expandHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMedium)),
-                        exit = fadeOut(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + 
-                               shrinkHorizontally(animationSpec = spring(stiffness = Spring.StiffnessMedium))
+                        enter = fadeIn(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)) + 
+                                expandHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)),
+                        exit = fadeOut(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)) + 
+                               shrinkHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium))
                     ) {
                         Row {
                             Spacer(modifier = Modifier.width(4.dp))
@@ -606,9 +606,9 @@ private fun SegmentedButtonRow(
 private fun Modifier.bounceClick(interactionSource: MutableInteractionSource): Modifier = composed {
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.95f else 1.0f,
+        targetValue = if (isPressed) 0.98f else 1.0f,
         animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
+            dampingRatio = Spring.DampingRatioNoBouncy,
             stiffness = Spring.StiffnessMedium
         )
     )

@@ -506,8 +506,8 @@ private fun DesktopSettingsCard(
             .fillMaxWidth()
             .animateContentSize(
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessLow
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMedium
                 )
             ),
         shape = RoundedCornerShape(16.dp),
@@ -728,26 +728,26 @@ private fun DesktopSegmentedButtonRow(
             val animatedWeight by animateFloatAsState(
                 targetValue = if (isSelected) 1.6f else 0.7f,
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    dampingRatio = Spring.DampingRatioNoBouncy,
                     stiffness = Spring.StiffnessMedium
                 )
             )
 
             val animatedTopStart by animateDpAsState(
                 targetValue = if (isSelected) 24.dp else if (index == 0) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
+                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
             )
             val animatedBottomStart by animateDpAsState(
                 targetValue = if (isSelected) 24.dp else if (index == 0) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
+                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
             )
             val animatedTopEnd by animateDpAsState(
                 targetValue = if (isSelected) 24.dp else if (index == options.size - 1) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
+                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
             )
             val animatedBottomEnd by animateDpAsState(
                 targetValue = if (isSelected) 24.dp else if (index == options.size - 1) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
+                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
             )
 
             val animatedShape = RoundedCornerShape(
@@ -778,9 +778,9 @@ private fun DesktopSegmentedButtonRow(
             val interactionSource = remember { MutableInteractionSource() }
             val isPressed by interactionSource.collectIsPressedAsState()
             val scale by animateFloatAsState(
-                targetValue = if (isPressed) 0.92f else 1.0f,
+                targetValue = if (isPressed) 0.98f else 1.0f,
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    dampingRatio = Spring.DampingRatioNoBouncy,
                     stiffness = Spring.StiffnessMedium
                 )
             )
@@ -816,8 +816,8 @@ private fun DesktopSegmentedButtonRow(
                     )
                     AnimatedVisibility(
                         visible = isSelected,
-                        enter = expandHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + fadeIn(),
-                        exit = shrinkHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + fadeOut()
+                        enter = expandHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)) + fadeIn(),
+                        exit = shrinkHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)) + fadeOut()
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Spacer(modifier = Modifier.width(4.dp))
@@ -855,9 +855,9 @@ private fun getIconForOption(option: String): ImageVector {
 private fun Modifier.bounceClick(interactionSource: MutableInteractionSource): Modifier = composed {
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.95f else 1.0f,
+        targetValue = if (isPressed) 0.98f else 1.0f,
         animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
+            dampingRatio = Spring.DampingRatioNoBouncy,
             stiffness = Spring.StiffnessMedium
         )
     )
