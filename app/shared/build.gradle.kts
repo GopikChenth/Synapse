@@ -9,6 +9,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+compose.resources {
+    publicResClass = true
+}
+
 kotlin {
     listOf(
         iosArm64(),

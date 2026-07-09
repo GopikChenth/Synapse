@@ -21,6 +21,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.koin.core.context.startKoin
 import java.awt.image.BufferedImage
+import synapse.app.shared.generated.resources.Res
+import synapse.app.shared.generated.resources.logo
 
 fun main() {
     startKoin {
@@ -159,6 +161,7 @@ fun main() {
                     }
                 },
                 title = "Synapse",
+                icon = org.jetbrains.compose.resources.painterResource(Res.drawable.logo)
             ) {
                 val composeWindow = this.window
                 
