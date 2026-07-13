@@ -2,6 +2,10 @@ package com.arcadelabs.synapse.features.dashboard.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.*
+import kotlin.math.PI
+import kotlin.math.sin
+import kotlin.math.cos
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -600,6 +604,21 @@ fun SpeedGraph(
         }
     }
     
+    var targetSpeed by remember { mutableStateOf(0f) }
+    var targetBytes by remember { mutableStateOf(0f) }
+    LaunchedEffect(currentSpeed, totalBytes) {
+        targetSpeed = currentSpeed.toFloat()
+        targetBytes = totalBytes.toFloat()
+    }
+    val animatedSpeed by animateFloatAsState(
+        targetValue = targetSpeed,
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+    val animatedBytes by animateFloatAsState(
+        targetValue = targetBytes,
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(12.dp),
@@ -624,7 +643,7 @@ fun SpeedGraph(
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                 )
                 Text(
-                    text = formatSpeed(currentSpeed),
+                    text = formatSpeed(animatedSpeed.toLong()),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Bold,
                     color = color
@@ -634,7 +653,7 @@ fun SpeedGraph(
             Spacer(modifier = Modifier.height(2.dp))
             
             Text(
-                text = "Total: ${formatBytes(totalBytes)}",
+                text = "Total: ${formatBytes(animatedBytes.toLong())}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )
@@ -712,7 +731,37 @@ fun DonutChart(
     color: Color,
     modifier: Modifier = Modifier
 ) {
-    val ratio = if (max > 0) value.toFloat() / max.toFloat() else 0f
+    var targetValue by remember { mutableStateOf(0f) }
+    LaunchedEffect(value) {
+        targetValue = value.toFloat()
+    }
+    
+    val animatedValue by animateFloatAsState(
+        targetValue = targetValue,
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+
+    val ratio = if (max > 0) animatedValue / max.toFloat() else 0f
+    
+    val infiniteTransition = rememberInfiniteTransition()
+    val phase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2f * PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        )
+    )
+
+    val isAnimating = kotlin.math.abs(animatedValue - targetValue) > 0.01f
+    val targetAmplitudeFactor = if (isAnimating) 1f - ratio.coerceIn(0f, 1f) else 0f
+    
+    val animatedAmplitudeFactor by animateFloatAsState(
+        targetValue = targetAmplitudeFactor,
+        animationSpec = tween(durationMillis = 300, easing = LinearOutSlowInEasing)
+    )
+
+    val isComplete = value >= max
     
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -726,7 +775,9 @@ fun DonutChart(
             val outlineColor = MaterialTheme.colorScheme.outlineVariant
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val strokeWidth = 5.dp.toPx()
-                val radius = (size.minDimension - strokeWidth) / 2
+                val radius = (size.minDimension - strokeWidth) / 2f
+                val centerX = size.width / 2f
+                val centerY = size.height / 2f
                 
                 // Background circle
                 drawCircle(
@@ -737,11 +788,35 @@ fun DonutChart(
                 
                 // Foreground arc (progress)
                 if (ratio > 0f) {
-                    drawArc(
+                    val startAngle = -90f
+                    val sweepAngle = ratio * 360f
+                    
+                    val startRadians = startAngle * (PI.toFloat() / 180f)
+                    val sweepRadians = sweepAngle * (PI.toFloat() / 180f)
+                    
+                    val path = Path()
+                    val waveFrequency = 8f // 8 waves around the full circle
+                    val waveHeightPx = 3.dp.toPx()
+                    val amplitude = waveHeightPx * animatedAmplitudeFactor
+                    
+                    val startR = (radius + sin((startRadians * waveFrequency + phase).toDouble()) * amplitude).toFloat()
+                    val startX = (centerX + cos(startRadians.toDouble()) * startR).toFloat()
+                    val startY = (centerY + sin(startRadians.toDouble()) * startR).toFloat()
+                    path.moveTo(startX, startY)
+                    
+                    val numPoints = 120
+                    val delta = sweepRadians / numPoints
+                    for (i in 1..numPoints) {
+                        val theta = startRadians + i * delta
+                        val r = (radius + sin((theta * waveFrequency + phase).toDouble()) * amplitude).toFloat()
+                        val x = (centerX + cos(theta.toDouble()) * r).toFloat()
+                        val y = (centerY + sin(theta.toDouble()) * r).toFloat()
+                        path.lineTo(x, y)
+                    }
+                    
+                    drawPath(
+                        path = path,
                         color = color,
-                        startAngle = -90f,
-                        sweepAngle = ratio * 360f,
-                        useCenter = false,
                         style = Stroke(
                             width = strokeWidth,
                             cap = androidx.compose.ui.graphics.StrokeCap.Round
@@ -752,7 +827,7 @@ fun DonutChart(
             
             // Value text inside donut hole
             Text(
-                text = "$value/$max",
+                text = "${animatedValue.toInt()}/$max",
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontWeight = FontWeight.Bold,
                     fontSize = 10.sp
@@ -791,6 +866,44 @@ fun ThisDeviceSection(
     var totalLocalDirs by remember { mutableStateOf(0L) }
     var totalLocalBytes by remember { mutableStateOf(0L) }
     var syncConflictsCount by remember { mutableStateOf(0) }
+
+    val animatedLocalFiles by animateFloatAsState(
+        targetValue = totalLocalFiles.toFloat(),
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+    val animatedLocalDirs by animateFloatAsState(
+        targetValue = totalLocalDirs.toFloat(),
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+    val animatedLocalBytes by animateFloatAsState(
+        targetValue = totalLocalBytes.toFloat(),
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+    val animatedConflicts by animateFloatAsState(
+        targetValue = syncConflictsCount.toFloat(),
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+
+    val animatedDownloadSpeed by animateFloatAsState(
+        targetValue = statusState.downloadSpeed.toFloat(),
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+    val animatedTotalDownload by animateFloatAsState(
+        targetValue = statusState.totalDownload.toFloat(),
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+    val animatedUploadSpeed by animateFloatAsState(
+        targetValue = statusState.uploadSpeed.toFloat(),
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+    val animatedTotalUpload by animateFloatAsState(
+        targetValue = statusState.totalUpload.toFloat(),
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+    val animatedUptime by animateFloatAsState(
+        targetValue = statusState.uptime.toFloat(),
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
 
     LaunchedEffect(folders) {
         if (folders.isNotEmpty()) {
@@ -893,21 +1006,21 @@ fun ThisDeviceSection(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        val downloadRateText = "${formatRate(statusState.downloadSpeed * 8)} (${formatBinaryBytes(statusState.totalDownload)})"
-                        val uploadRateText = "${formatRate(statusState.uploadSpeed * 8)} (${formatBinaryBytes(statusState.totalUpload)})"
-                        val localStateText = "${totalLocalFiles}  ${totalLocalDirs}  ~${formatBinaryBytes(totalLocalBytes)}"
+                        val downloadRateText = "${formatRate(animatedDownloadSpeed.toLong() * 8)} (${formatBinaryBytes(animatedTotalDownload.toLong())})"
+                        val uploadRateText = "${formatRate(animatedUploadSpeed.toLong() * 8)} (${formatBinaryBytes(animatedTotalUpload.toLong())})"
+                        val localStateText = "${animatedLocalFiles.toLong()}  ${animatedLocalDirs.toLong()}  ~${formatBinaryBytes(animatedLocalBytes.toLong())}"
 
                         ThisDeviceStatRow("Download Rate", downloadRateText)
                         ThisDeviceStatRow("Upload Rate", uploadRateText)
                         ThisDeviceStatRow("Local State (Total)", localStateText)
-                        ThisDeviceStatRow("Synced Storage Volume", "~${formatBinaryBytes(totalLocalBytes)}")
+                        ThisDeviceStatRow("Synced Storage Volume", "~${formatBinaryBytes(animatedLocalBytes.toLong())}")
                     }
                     Column(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        ThisDeviceStatRow("Sync Conflicts", if (syncConflictsCount > 0) "$syncConflictsCount" else "0")
-                        ThisDeviceStatRow("Uptime", formatUptime(statusState.uptime))
+                        ThisDeviceStatRow("Sync Conflicts", if (animatedConflicts.toInt() > 0) "${animatedConflicts.toInt()}" else "0")
+                        ThisDeviceStatRow("Uptime", formatUptime(animatedUptime.toLong()))
                         
                         // Identification row with copy
                         Row(

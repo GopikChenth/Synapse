@@ -1,10 +1,13 @@
 package com.arcadelabs.synapse.features.dashboard.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -18,6 +21,23 @@ fun DeviceSummaryCard(
     onNavigateToDevices: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var targetDevices by remember { mutableStateOf(0f) }
+    var targetActive by remember { mutableStateOf(0f) }
+    
+    LaunchedEffect(devicesCount, activeCount) {
+        targetDevices = devicesCount.toFloat()
+        targetActive = activeCount.toFloat()
+    }
+    
+    val animatedDevices by animateFloatAsState(
+        targetValue = targetDevices,
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+    val animatedActive by animateFloatAsState(
+        targetValue = targetActive,
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+
     Card(
         modifier = modifier.clickable { onNavigateToDevices() },
         shape = RoundedCornerShape(12.dp),
@@ -47,14 +67,14 @@ fun DeviceSummaryCard(
             }
             
             Text(
-                text = "$devicesCount",
+                text = "${animatedDevices.toInt()}",
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             
             Text(
-                text = "$activeCount Active",
+                text = "${animatedActive.toInt()} Active",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

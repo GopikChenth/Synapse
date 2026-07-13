@@ -40,6 +40,10 @@ class MainActivity : ComponentActivity() {
     private var initialDeviceId by mutableStateOf("")
     private var initialOpenAddDevice by mutableStateOf(false)
 
+    private val prefChangeListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+        // Custom dynamic island settings listener disabled
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -152,7 +156,35 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        val prefs = android.preference.PreferenceManager.getDefaultSharedPreferences(this)
+        prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
+
+        // Trigger initial check on startup
+        if (prefs.getBoolean("enable_dynamic_island", false) && !Settings.canDrawOverlays(this)) {
+            requestOverlayPermission()
+        }
+
         checkAndRequestPermissions()
+    }
+
+    override fun onResume() {
+        super.onResume()
+    }
+
+    override fun onDestroy() {
+        val prefs = android.preference.PreferenceManager.getDefaultSharedPreferences(this)
+        prefs.unregisterOnSharedPreferenceChangeListener(prefChangeListener)
+        super.onDestroy()
+    }
+
+    private fun requestOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST_CODE)
+        }
     }
 
     private var notificationIdCounter = 2000
@@ -173,7 +205,7 @@ class MainActivity : ComponentActivity() {
         val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
             .setContentTitle(title)
             .setContentText(message)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setAutoCancel(true)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
             
@@ -291,6 +323,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val PERMISSION_REQUEST_CODE = 200
         private const val STORAGE_PERMISSION_REQUEST_CODE = 201
+        private const val OVERLAY_PERMISSION_REQUEST_CODE = 202
     }
 }
 

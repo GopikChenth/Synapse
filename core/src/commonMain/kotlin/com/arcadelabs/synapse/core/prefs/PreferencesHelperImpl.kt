@@ -67,4 +67,14 @@ class PreferencesHelperImpl(private val settings: Settings = Settings()) : Prefe
             settings.putString("run_behavior", value)
             _runBehaviorFlow.value = value
         }
+
+    private val _enableDynamicIslandFlow = kotlinx.coroutines.flow.MutableStateFlow(settings.getBoolean("enable_dynamic_island", false))
+    override val enableDynamicIslandFlow = _enableDynamicIslandFlow.asStateFlow()
+
+    override var enableDynamicIsland: Boolean
+        get() = settings.getBoolean("enable_dynamic_island", false)
+        set(value) {
+            settings.putBoolean("enable_dynamic_island", value)
+            _enableDynamicIslandFlow.value = value
+        }
 }

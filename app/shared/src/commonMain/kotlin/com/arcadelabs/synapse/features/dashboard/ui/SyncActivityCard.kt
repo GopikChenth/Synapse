@@ -1,9 +1,12 @@
 package com.arcadelabs.synapse.features.dashboard.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -13,6 +16,16 @@ fun SyncActivityCard(
     syncActivityCount: Int,
     modifier: Modifier = Modifier
 ) {
+    var targetActivity by remember { mutableStateOf(0f) }
+    LaunchedEffect(syncActivityCount) {
+        targetActivity = syncActivityCount.toFloat()
+    }
+    
+    val animatedActivity by animateFloatAsState(
+        targetValue = targetActivity,
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(12.dp),
@@ -32,7 +45,7 @@ fun SyncActivityCard(
             )
             
             Text(
-                text = "$syncActivityCount items",
+                text = "${animatedActivity.toInt()} items",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface

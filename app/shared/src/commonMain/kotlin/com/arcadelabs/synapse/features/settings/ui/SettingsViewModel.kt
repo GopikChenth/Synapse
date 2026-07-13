@@ -47,6 +47,7 @@ data class SettingsUiState(
     val selectedTheme: String = "Default",
     val themeMode: String = "Dark",
     val autoStart: Boolean = false,
+    val enableDynamicIsland: Boolean = false,
 
     // Save state
     val isSaving: Boolean = false,
@@ -109,6 +110,7 @@ class SettingsViewModel(
                         selectedTheme = preferencesHelper.selectedTheme,
                         themeMode = preferencesHelper.themeMode,
                         autoStart = preferencesHelper.autoStart,
+                        enableDynamicIsland = preferencesHelper.enableDynamicIsland,
                         // Store originals
                         originalOptions = options,
                         originalGui = gui,
@@ -152,6 +154,11 @@ class SettingsViewModel(
     fun updateAutoStart(value: Boolean) {
         preferencesHelper.autoStart = value
         _uiState.update { it.copy(autoStart = value) }
+    }
+
+    fun updateEnableDynamicIsland(value: Boolean) {
+        preferencesHelper.enableDynamicIsland = value
+        _uiState.update { it.copy(enableDynamicIsland = value) }
     }
     fun updateGlobalAnnounceServers(value: String) = _uiState.update { it.copy(globalAnnounceServers = value) }
     fun updateCrashReportingEnabled(value: Boolean) = _uiState.update { it.copy(crashReportingEnabled = value) }

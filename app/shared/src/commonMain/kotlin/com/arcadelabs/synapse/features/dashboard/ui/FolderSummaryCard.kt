@@ -1,10 +1,13 @@
 package com.arcadelabs.synapse.features.dashboard.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -19,6 +22,23 @@ fun FolderSummaryCard(
     onNavigateToFolders: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var targetFolders by remember { mutableStateOf(0f) }
+    var targetPaused by remember { mutableStateOf(0f) }
+    
+    LaunchedEffect(foldersCount, pausedCount) {
+        targetFolders = foldersCount.toFloat()
+        targetPaused = pausedCount.toFloat()
+    }
+    
+    val animatedFolders by animateFloatAsState(
+        targetValue = targetFolders,
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+    val animatedPaused by animateFloatAsState(
+        targetValue = targetPaused,
+        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+    )
+
     Card(
         modifier = modifier.clickable { onNavigateToFolders() },
         shape = RoundedCornerShape(12.dp),
@@ -48,14 +68,14 @@ fun FolderSummaryCard(
             }
             
             Text(
-                text = "$foldersCount",
+                text = "${animatedFolders.toInt()}",
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             
             Text(
-                text = if (pausedCount > 0) "$pausedCount Paused" else "All Synced",
+                text = if (pausedCount > 0) "${animatedPaused.toInt()} Paused" else "All Synced",
                 style = MaterialTheme.typography.bodySmall,
                 color = if (pausedCount > 0) MaterialTheme.colorScheme.secondary else Color(0xFF10B981)
             )

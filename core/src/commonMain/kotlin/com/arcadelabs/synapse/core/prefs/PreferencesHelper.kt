@@ -3,9 +3,6 @@ package com.arcadelabs.synapse.core.prefs
 /**
  * Platform-agnostic settings contract for Synapse.
  *
- * TODO: Implement using the Russhwolf multiplatform-settings library:
- *   https://github.com/russhwolf/multiplatform-settings
- *
  * Each platform will provide its own backing store:
  *   - Android  → SharedPreferences / DataStore
  *   - iOS      → NSUserDefaults
@@ -48,4 +45,10 @@ interface PreferencesHelper {
 
     /** Reactive flow of the auto start setting */
     val autoStartFlow: kotlinx.coroutines.flow.StateFlow<Boolean>
+
+    /** Whether the Dynamic Island overlay is enabled */
+    var enableDynamicIsland: Boolean
+
+    /** Reactive flow of the Dynamic Island setting */
+    val enableDynamicIslandFlow: kotlinx.coroutines.flow.StateFlow<Boolean>
 }

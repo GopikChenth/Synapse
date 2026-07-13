@@ -140,6 +140,15 @@ private fun SettingsContent(
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
             SettingsSwitchRow(
+                label = "Auto Start",
+                description = "Start the daemon automatically on system boot",
+                checked = state.autoStart,
+                onCheckedChange = { viewModel.updateAutoStart(it) }
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+            SettingsSwitchRow(
                 label = "Usage Reporting",
                 description = "Allow anonymous usage data to be sent to the Syncthing developers",
                 checked = state.urAccepted > 0,
