@@ -205,7 +205,7 @@ class MainActivity : ComponentActivity() {
         val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
             .setContentTitle(title)
             .setContentText(message)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.synapse_logo_silhouette)
             .setAutoCancel(true)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
             

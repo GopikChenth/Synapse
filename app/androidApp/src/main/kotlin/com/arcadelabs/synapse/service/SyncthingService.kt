@@ -353,7 +353,7 @@ class SyncthingService : Service() {
             false
         }
 
-        val smallIconRes = R.drawable.ic_launcher_foreground
+        val smallIconRes = R.drawable.synapse_logo_silhouette
         val statusColor = if (runnable != null) {
             android.graphics.Color.parseColor("#4CAF50") // Green
         } else {
