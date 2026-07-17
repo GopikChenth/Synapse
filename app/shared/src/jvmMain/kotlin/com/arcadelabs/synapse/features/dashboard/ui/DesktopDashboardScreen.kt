@@ -53,6 +53,7 @@ import java.awt.datatransfer.StringSelection
 fun DesktopDashboardScreen(
     onAddFolderClick: () -> Unit,
     onAddDeviceClick: (String, String) -> Unit,
+    onEditFolderClick: (com.arcadelabs.synapse.core.domain.models.Folder) -> Unit,
     openFolder: ((String) -> Unit)? = null,
     apiClient: SyncthingApiClient,
     folderViewModel: FolderViewModel = koinViewModel(),
@@ -140,8 +141,10 @@ fun DesktopDashboardScreen(
                                 expandedFolderId = if (expandedFolderId == id) null else id
                             },
                             onAddFolderClick = onAddFolderClick,
+                            onEditFolderClick = onEditFolderClick,
                             openFolder = openFolder,
-                            apiClient = apiClient
+                            apiClient = apiClient,
+                            folderViewModel = folderViewModel
                         )
                     }
 
@@ -194,8 +197,10 @@ fun DesktopDashboardScreen(
                             expandedFolderId = if (expandedFolderId == id) null else id
                         },
                         onAddFolderClick = onAddFolderClick,
+                        onEditFolderClick = onEditFolderClick,
                         openFolder = openFolder,
-                        apiClient = apiClient
+                        apiClient = apiClient,
+                        folderViewModel = folderViewModel
                     )
 
                     ThisDeviceSection(
@@ -239,8 +244,10 @@ fun FoldersCardSection(
     expandedFolderId: String?,
     onFolderClick: (String) -> Unit,
     onAddFolderClick: () -> Unit,
+    onEditFolderClick: (com.arcadelabs.synapse.core.domain.models.Folder) -> Unit,
     openFolder: ((String) -> Unit)? = null,
-    apiClient: SyncthingApiClient
+    apiClient: SyncthingApiClient,
+    folderViewModel: FolderViewModel = koinViewModel()
 ) {
     val coroutineScope = rememberCoroutineScope()
     val allPaused = folders.isNotEmpty() && folders.all { it.paused }
@@ -467,21 +474,13 @@ fun FoldersCardSection(
 
                                 // Action buttons
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            coroutineScope.launch {
-                                                try {
-                                                    val current = apiClient.systemConfig()
-                                                    val updated = current.folders.map {
-                                                        if (it.id == folder.id) it.copy(paused = !it.paused) else it
-                                                    }
-                                                    apiClient.updateSystemConfig(current.copy(folders = updated))
-                                                } catch (_: Exception) {}
-                                            }
-                                        }
-                                    ) {
-                                        Text(if (folder.paused) "Resume" else "Pause")
-                                    }
+                                     OutlinedButton(
+                                         onClick = {
+                                             folderViewModel.pauseFolder(folder.id, !folder.paused)
+                                         }
+                                     ) {
+                                         Text(if (folder.paused) "Resume" else "Pause")
+                                     }
 
                                     OutlinedButton(
                                         onClick = {
@@ -493,11 +492,11 @@ fun FoldersCardSection(
                                         Text("Rescan")
                                     }
 
-                                    OutlinedButton(
-                                        onClick = { openFolder?.invoke(folder.path) }
-                                    ) {
-                                        Text("Edit")
-                                    }
+                                     OutlinedButton(
+                                         onClick = { onEditFolderClick(folder) }
+                                     ) {
+                                         Text("Edit")
+                                     }
                                 }
                             }
                             Spacer(modifier = Modifier.height(8.dp))

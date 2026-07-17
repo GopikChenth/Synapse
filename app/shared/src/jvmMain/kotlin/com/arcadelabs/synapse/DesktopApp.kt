@@ -237,6 +237,10 @@ fun DesktopApp(
                                     prefilledDeviceName = name
                                     isAddDeviceDialogOpen = true
                                 },
+                                onEditFolderClick = { folder ->
+                                    folderToEdit = folder
+                                    isEditFolderDialogOpen = true
+                                },
                                 openFolder = openFolder,
                                 apiClient = apiClient
                             )
