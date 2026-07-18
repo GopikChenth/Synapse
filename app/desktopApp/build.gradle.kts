@@ -29,6 +29,12 @@ compose.desktop {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Exe)
             packageName = "com.arcadelabs.synapse"
             packageVersion = "1.0.0"
+            windows {
+                dirChooser = true
+                shortcut = true
+                menu = true
+                iconFile.set(project.file("icon.ico"))
+            }
         }
     }
 }
