@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Splash Screen Background -->
+    <color name="splash_bg">#171615</color>
+
     <!-- Dark Mode Widget Colors -->
     <color name="widget_bg">#141312</color>
     <color name="widget_sub_card_bg">#232120</color>
