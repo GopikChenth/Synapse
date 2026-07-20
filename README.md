@@ -1,65 +1,122 @@
-This is a Kotlin Multiplatform project targeting Android, iOS, Web, Desktop (JVM), Server.
+<!-- Hero Banner -->
+<p align="center">
+  <img src="assets/readme/hero.svg" alt="Synapse Hero Banner" width="100%">
+</p>
 
-* [/app/iosApp](./app/iosApp/iosApp) contains an iOS application. Even if you’re sharing your UI with Compose Multiplatform,
-  you need this entry point for your iOS app. This is also where you should add SwiftUI code for your project.
+<p align="center">
+  <strong>A premium, modern, cross-platform Compose Multiplatform client for Syncthing.</strong>
+</p>
 
-* [/app/shared](./app/shared/src) is for code that will be shared across your Compose Multiplatform applications.
-  It contains several subfolders:
-  - [commonMain](./app/shared/src/commonMain/kotlin) is for code that’s common for all targets.
-  - Other folders are for Kotlin code that will be compiled for only the platform indicated in the folder name.
-    For example, if you want to use Apple’s CoreCrypto for the iOS part of your Kotlin app,
-    the [iosMain](./app/shared/src/iosMain/kotlin) folder would be the right place for such calls.
-    Similarly, if you want to edit the Desktop (JVM) specific part, the [jvmMain](./app/shared/src/jvmMain/kotlin)
-    folder is the appropriate location.
-
-* [/core](./core/src) is for the code that will be shared between all targets in the project.
-  The most important subfolder is [commonMain](./core/src/commonMain/kotlin). If preferred, you
-  can add code to the platform-specific folders here too.
-
-* [/server](./server/src/main/kotlin) is for the Ktor server application.
-
-### Running the apps
-
-Use the run configurations provided by the run widget in your IDE's toolbar. You can also use these commands and options:
-
-- Android app: `./gradlew :app:androidApp:assembleDebug`
-- Desktop app:
-  - Hot reload: `./gradlew :app:desktopApp:hotRun --auto`
-  - Standard run: `./gradlew :app:desktopApp:run`
-- Server: `./gradlew :server:run`
-- Web app:
-  - Wasm target (faster, modern browsers): `./gradlew :app:webApp:wasmJsBrowserDevelopmentRun`
-  - JS target (slower, supports older browsers): `./gradlew :app:webApp:jsBrowserDevelopmentRun`
-- iOS app: open the [/app/iosApp](./app/iosApp) directory in Xcode and run it from there.
-
-### Running tests
-
-Use the run button in your IDE's editor gutter, or run tests using Gradle tasks:
-
-- Android tests: `./gradlew :app:shared:testAndroidHostTest`
-- Desktop tests: `./gradlew :app:shared:jvmTest`
-- Server tests: `./gradlew :server:test`
-- Web tests:
-  - Wasm target: `./gradlew :app:shared:wasmJsTest`
-  - JS target: `./gradlew :app:shared:jsTest`
-- iOS tests: `./gradlew :app:shared:iosSimulatorArm64Test`
+<p align="center">
+  <a href="#running-the-apps">Get Started</a> •
+  <a href="#architecture--workflow">Architecture</a> •
+  <a href="#project-structure">Project Structure</a> •
+  <a href="#web-deployment-constraints">Web Deployment Constraints</a>
+</p>
 
 ---
 
-Learn more about [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html),
-[Compose Multiplatform](https://github.com/JetBrains/compose-multiplatform/#compose-multiplatform),
-[Kotlin/Wasm](https://kotl.in/wasm/)…
-
-We would appreciate your feedback on Compose/Web and Kotlin/Wasm in the public Slack channel [#compose-web](https://slack-chats.kotlinlang.org/c/compose-web).
-If you face any issues, please report them on [YouTrack](https://youtrack.jetbrains.com/newIssue?project=CMP).
+**Synapse** is a unified dashboard and user interface for managing [Syncthing](https://syncthing.net/) file synchronization states. Built using Kotlin Multiplatform and Jetpack Compose, it brings a consistent, native, and premium Material 3 experience to Android, iOS, Desktop (JVM), and Web browsers.
 
 ---
 
-### Web Deployment Constraints (CORS & Mixed-Content)
+### 🖥️ Architecture & Workflow
 
-When building and running the JS/WasmJS web application, be aware of the following web browser security constraints:
+<p align="center">
+  <img src="assets/readme/workflow.svg" alt="Synapse Architecture & Workflow" width="100%">
+</p>
 
-1. **CORS (Cross-Origin Resource Sharing)**: By default, the Syncthing daemon does not send CORS headers in its REST responses. This prevents browsers from making REST queries to Syncthing from a different origin (e.g. `http://localhost:8080` where Synapse runs).
-   - **Workaround**: You must either configure Syncthing to send CORS headers, run the Synapse web app as a browser extension with host permissions, or serve the web app behind a reverse proxy that matches Syncthing's origin.
-2. **Mixed-Content Rules**: Modern browsers block insecure HTTP requests (like local Syncthing `http://127.0.0.1:8384`) from pages served over secure HTTPS.
-   - **Workaround**: If Synapse is hosted on a secure site (HTTPS), you must configure Syncthing to use HTTPS (with a valid certificate, or accept the self-signed certificate warning in another tab first).
+* **Synapse GUI:** Communicates with the daemon REST API and opens WebSockets to receive instant, real-time sync state updates.
+* **Syncthing Daemon:** Runs in the background, handling the low-level block index exchanges and peer-to-peer file transfer protocols (BEP).
+
+---
+
+### ✨ Features
+
+* **Sleek Material 3 Theme:** Dynamic styling supporting system dark and light modes, customized status colors (emerald green for connected, amber for paused, crimson for disconnected).
+* **Tray Integration (Desktop):** Minimize to system tray on Windows/macOS with background memory optimization and instant desktop notifications.
+* **Auto-Start on Boot:** Support for automatic startup registration on Windows target.
+* **Wasm & JS Web Targets:** High-performance Kotlin/Wasm web client alongside standard JS fallback.
+
+---
+
+### 📁 Project Structure
+
+* **[`/app/shared`](./app/shared/src)**: The core UI and business logic shared across all platforms using Compose Multiplatform.
+  * **[`commonMain`](./app/shared/src/commonMain/kotlin)**: Shared layouts, controllers, and resources.
+  * **`androidMain`**, **`iosMain`**, **`jvmMain`**: Target-specific hooks for native APIs.
+* **[`/app/androidApp`](./app/androidApp)**: Native entry point and services for the Android application.
+* **[`/app/desktopApp`](./app/desktopApp)**: Entry point for the JVM Desktop target, system tray configurations, and native Windows bindings.
+* **[`/app/webApp`](./app/webApp)**: Builds the WASM and JS browser packages.
+* **[`/core`](./core/src)**: Shared networking, configuration databases, and utility logic.
+* **[`/server`](./server/src/main/kotlin)**: Built-in Ktor API server.
+
+---
+
+### 🚀 Running the Apps
+
+You can run these configurations directly from Android Studio / IntelliJ IDEA's run widget, or run them from the terminal:
+
+#### 📱 Mobile Targets
+* **Android App:**
+  ```bash
+  ./gradlew :app:androidApp:assembleDebug
+  ```
+* **iOS App:** Open the [`/app/iosApp`](./app/iosApp) folder in Xcode and build/run.
+
+#### 💻 Desktop Target
+* **Development (Hot Reload):**
+  ```bash
+  ./gradlew :app:desktopApp:hotRun --auto
+  ```
+* **Standard Execution:**
+  ```bash
+  ./gradlew :app:desktopApp:run
+  ```
+
+#### 🌐 Web Target
+* **Modern Web (WasmJs - Faster):**
+  ```bash
+  ./gradlew :app:webApp:wasmJsBrowserDevelopmentRun
+  ```
+* **Legacy Web (JS):**
+  ```bash
+  ./gradlew :app:webApp:jsBrowserDevelopmentRun
+  ```
+
+#### 🔌 Backend Server
+* **Ktor Server:**
+  ```bash
+  ./gradlew :server:run
+  ```
+
+---
+
+### 🧪 Running Tests
+
+Run tests inside your IDE gutter or run them from the command line:
+
+* **Android:** `./gradlew :app:shared:testAndroidHostTest`
+* **Desktop:** `./gradlew :app:shared:jvmTest`
+* **Web (Wasm):** `./gradlew :app:shared:wasmJsTest`
+* **Web (JS):** `./gradlew :app:shared:jsTest`
+* **iOS:** `./gradlew :app:shared:iosSimulatorArm64Test`
+* **Server:** `./gradlew :server:test`
+
+---
+
+### ⚠️ Web Deployment Constraints
+
+When compiling or deploying the Web (WasmJs/JS) targets, browsers enforce strict security rules that affect communication with Syncthing:
+
+> [!WARNING]
+> **CORS (Cross-Origin Resource Sharing)**
+> By default, the Syncthing daemon does not send CORS headers. This prevents browser applications hosted on a different origin (e.g., Synapse on `http://localhost:8080`) from making REST calls to the daemon.
+> 
+> * **Workaround:** Configure Syncthing to include CORS headers, run the Synapse Web App as a browser extension with host permissions, or serve both the Synapse assets and the daemon through a reverse proxy.
+
+> [!IMPORTANT]
+> **Mixed-Content Restrictions**
+> Modern web browsers block insecure HTTP requests (like local Syncthing on `http://127.0.0.1:8384`) from sites served securely over HTTPS.
+> 
+> * **Workaround:** If hosting Synapse on a secure HTTPS server, you must configure Syncthing to use HTTPS (and ensure you accept its certificate in your browser).
