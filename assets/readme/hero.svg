@@ -1,116 +1,70 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 320" width="100%" height="100%">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 300" width="100%" height="100%">
   <defs>
     <!-- Background Gradient -->
     <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#070A13" />
-      <stop offset="50%" stop-color="#0F1423" />
-      <stop offset="100%" stop-color="#15132E" />
+      <stop offset="0%" stop-color="#0F172A" />
+      <stop offset="100%" stop-color="#1E293B" />
     </linearGradient>
 
-    <!-- Glowing Accents -->
-    <radialGradient id="glow-purple" cx="20%" cy="30%" r="50%">
-      <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.15" />
-      <stop offset="100%" stop-color="#8B5CF6" stop-opacity="0" />
-    </radialGradient>
-    <radialGradient id="glow-emerald" cx="80%" cy="70%" r="60%">
-      <stop offset="0%" stop-color="#10B981" stop-opacity="0.12" />
-      <stop offset="100%" stop-color="#10B981" stop-opacity="0" />
-    </radialGradient>
-
-    <!-- Synapse Logo Glow -->
-    <filter id="glow-logo" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="6" result="blur" />
-      <feComposite in="SourceGraphic" in2="blur" operator="over" />
-    </filter>
-
-    <!-- Node Glow -->
-    <filter id="glow-node" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="3" result="blur" />
-      <feComposite in="SourceGraphic" in2="blur" operator="over" />
-    </filter>
+    <!-- Platform Badge Styling Gradients -->
+    <linearGradient id="badge-glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0.02" />
+    </linearGradient>
   </defs>
 
   <style>
-    .title { font-family: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif; font-weight: 800; font-size: 42px; fill: #FFFFFF; letter-spacing: 3px; }
-    .subtitle { font-family: 'Inter', system-ui, -apple-system, sans-serif; font-weight: 500; font-size: 15px; fill: #9CA3AF; letter-spacing: 0.5px; }
-    .tagline { font-family: 'Inter', system-ui, -apple-system, sans-serif; font-weight: 400; font-size: 13px; fill: #6B7280; }
-    .badge-text { font-family: 'Inter', system-ui, -apple-system, sans-serif; font-weight: 600; font-size: 11px; fill: #10B981; }
-    .badge-bg { fill: #10B981; fill-opacity: 0.1; stroke: #10B981; stroke-opacity: 0.2; stroke-width: 1px; }
-    .conn-line { stroke: #4B5563; stroke-opacity: 0.25; stroke-dasharray: 4 4; }
-    .network-node { fill: #8B5CF6; fill-opacity: 0.8; }
-    .network-node-active { fill: #10B981; filter: url(#glow-node); }
-    .pulse { animation: blink 3s infinite ease-in-out; }
-    @keyframes blink { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+    .title { font-family: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif; font-weight: 800; font-size: 38px; fill: #FFFFFF; letter-spacing: 4px; }
+    .subtitle { font-family: 'Inter', system-ui, -apple-system, sans-serif; font-weight: 500; font-size: 14px; fill: #94A3B8; letter-spacing: 0.5px; }
+    .tagline { font-family: 'Inter', system-ui, -apple-system, sans-serif; font-weight: 400; font-size: 12px; fill: #64748B; }
+    .badge-text { font-family: 'Inter', system-ui, -apple-system, sans-serif; font-weight: 600; font-size: 11px; fill: #38BDF8; }
+    .badge-bg { fill: url(#badge-glow); stroke: #38BDF8; stroke-opacity: 0.25; stroke-width: 1px; }
+    .conn-line { stroke: #475569; stroke-opacity: 0.15; stroke-dasharray: 3 3; }
+    .network-node { fill: #475569; fill-opacity: 0.3; }
   </style>
 
   <!-- Background Layer -->
-  <rect width="800" height="320" fill="url(#bg-grad)" />
-  <rect width="800" height="320" fill="url(#glow-purple)" />
-  <rect width="800" height="320" fill="url(#glow-emerald)" />
+  <rect width="800" height="300" fill="url(#bg-grad)" />
 
-  <!-- Network / Mesh Background (Connecting Lines) -->
-  <g class="pulse">
-    <line x1="50" y1="60" x2="180" y2="120" class="conn-line" />
-    <line x1="180" y1="120" x2="120" y2="240" class="conn-line" />
-    <line x1="120" y1="240" x2="280" y2="200" class="conn-line" />
-    <line x1="180" y1="120" x2="280" y2="200" class="conn-line" />
-    
-    <!-- Right side connections -->
-    <line x1="520" y1="90" x2="640" y2="50" class="conn-line" />
-    <line x1="640" y1="50" x2="720" y2="160" class="conn-line" />
-    <line x1="640" y1="50" x2="600" y2="220" class="conn-line" />
-    <line x1="600" y1="220" x2="720" y2="160" class="conn-line" />
-    <line x1="720" y1="160" x2="750" y2="260" class="conn-line" />
-
-    <!-- Cross connections to Logo center -->
-    <line x1="280" y1="200" x2="380" y2="160" class="conn-line" stroke-width="0.5" />
-    <line x1="600" y1="220" x2="420" y2="160" class="conn-line" stroke-width="0.5" />
-    <line x1="520" y1="90" x2="420" y2="100" class="conn-line" stroke-width="0.5" />
-  </g>
-
-  <!-- Network Nodes -->
+  <!-- Clean, Static Network Background (No animations, extremely subtle) -->
   <g>
-    <circle cx="50" cy="60" r="3" class="network-node" />
-    <circle cx="180" cy="120" r="4.5" class="network-node" />
-    <circle cx="120" cy="240" r="3.5" class="network-node" />
-    <circle cx="280" cy="200" r="5" class="network-node-active" />
+    <line x1="60" y1="50" x2="180" y2="100" class="conn-line" />
+    <line x1="180" y1="100" x2="120" y2="200" class="conn-line" />
+    <line x1="120" y1="200" x2="260" y2="170" class="conn-line" />
+    <line x1="180" y1="100" x2="260" y2="170" class="conn-line" />
+    <line x1="260" y1="170" x2="350" y2="110" class="conn-line" />
     
-    <circle cx="520" cy="90" r="3.5" class="network-node" />
-    <circle cx="640" cy="50" r="4" class="network-node" />
-    <circle cx="720" cy="160" r="5.5" class="network-node-active" />
-    <circle cx="600" cy="220" r="3" class="network-node" />
-    <circle cx="750" cy="260" r="4" class="network-node" />
+    <line x1="540" y1="80" x2="640" y2="40" class="conn-line" />
+    <line x1="640" y1="40" x2="720" y2="140" class="conn-line" />
+    <line x1="640" y1="40" x2="580" y2="190" class="conn-line" />
+    <line x1="580" y1="190" x2="720" y2="140" class="conn-line" />
+    <line x1="450" y1="110" x2="540" y2="80" class="conn-line" />
+
+    <circle cx="60" cy="50" r="2.5" class="network-node" />
+    <circle cx="180" cy="100" r="3" class="network-node" />
+    <circle cx="120" cy="200" r="2.5" class="network-node" />
+    <circle cx="260" cy="170" r="3.5" class="network-node" />
+    
+    <circle cx="540" cy="80" r="3" class="network-node" />
+    <circle cx="640" cy="40" r="2.5" class="network-node" />
+    <circle cx="720" cy="140" r="3.5" class="network-node" />
+    <circle cx="580" cy="190" r="2.5" class="network-node" />
   </g>
 
-  <!-- Central Synapse Logo Graphic -->
-  <g transform="translate(400, 115)" filter="url(#glow-logo)">
-    <!-- Inner glowing network core -->
-    <circle cx="0" cy="0" r="32" fill="#8B5CF6" fill-opacity="0.15" />
-    
-    <!-- Outer ring -->
-    <circle cx="0" cy="0" r="36" fill="none" stroke="#8B5CF6" stroke-width="1.5" stroke-opacity="0.4" />
-    
-    <!-- Interlocking Synapse paths (Representing P2P sync and synapses) -->
-    <path d="M -22 -12 C -8 -26, 8 -26, 22 -12 C 10 -4, -10 -4, -22 -12 Z" fill="#8B5CF6" fill-opacity="0.75" />
-    <path d="M 22 12 C 8 26, -8 26, -22 12 C -10 4, 10 4, 22 12 Z" fill="#10B981" fill-opacity="0.75" />
-    <circle cx="-22" cy="-12" r="4" fill="#8B5CF6" />
-    <circle cx="22" cy="-12" r="4" fill="#8B5CF6" />
-    <circle cx="-22" cy="12" r="4" fill="#10B981" />
-    <circle cx="22" cy="12" r="4" fill="#10B981" />
-    
-    <!-- Connecting central synapse junctions -->
-    <line x1="-22" y1="-12" x2="22" y2="12" stroke="#FFFFFF" stroke-opacity="0.3" stroke-width="1" />
-    <line x1="22" y1="-12" x2="-22" y2="12" stroke="#FFFFFF" stroke-opacity="0.3" stroke-width="1" />
-    <circle cx="0" cy="0" r="6" fill="#FFFFFF" />
+  <!-- Central App Logo (Cleanly embedded without glow) -->
+  <g transform="translate(364, 45)">
+    <!-- Subtle circular backplate for logo contrast -->
+    <rect width="72" height="72" rx="16" fill="#1E293B" stroke="#334155" stroke-width="1" />
+    <image href="data:image/png;base64,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" x="4" y="4" width="64" height="64" />
   </g>
 
   <!-- Brand Typography -->
-  <text x="400" y="212" text-anchor="middle" class="title">SYNAPSE</text>
-  <text x="400" y="238" text-anchor="middle" class="subtitle">A Modern, Premium Cross-Platform client for Syncthing</text>
-  <text x="400" y="258" text-anchor="middle" class="tagline">Built with Compose Multiplatform &amp; Kotlin</text>
+  <text x="400" y="162" text-anchor="middle" class="title">SYNAPSE</text>
+  <text x="400" y="190" text-anchor="middle" class="subtitle">A Professional Cross-Platform Client for Syncthing</text>
+  <text x="400" y="210" text-anchor="middle" class="tagline">Built with Compose Multiplatform &amp; Kotlin</text>
 
   <!-- Platform Badges -->
-  <g transform="translate(210, 278)">
+  <g transform="translate(283, 235)">
     <!-- Android -->
     <g transform="translate(0, 0)">
       <rect width="76" height="20" rx="10" class="badge-bg" />
@@ -121,15 +75,10 @@
       <rect width="78" height="20" rx="10" class="badge-bg" />
       <text x="39" y="14" text-anchor="middle" class="badge-text">Desktop</text>
     </g>
-    <!-- Web (Wasm) -->
+    <!-- Web -->
     <g transform="translate(174, 0)">
-      <rect width="98" height="20" rx="10" class="badge-bg" />
-      <text x="49" y="14" text-anchor="middle" class="badge-text">Web (Wasm)</text>
-    </g>
-    <!-- Server -->
-    <g transform="translate(282, 0)">
-      <rect width="78" height="20" rx="10" class="badge-bg" />
-      <text x="39" y="14" text-anchor="middle" class="badge-text">Ktor API</text>
+      <rect width="60" height="20" rx="10" class="badge-bg" />
+      <text x="30" y="14" text-anchor="middle" class="badge-text">Web</text>
     </g>
   </g>
 </svg>
