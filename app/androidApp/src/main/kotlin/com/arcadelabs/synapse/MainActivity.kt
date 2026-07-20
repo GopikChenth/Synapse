@@ -21,10 +21,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import android.content.res.Configuration
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.LayerDrawable
+import android.view.Gravity
+import android.graphics.Color as AndroidColor
 import com.arcadelabs.synapse.service.SyncthingService
 import com.arcadelabs.synapse.features.status.ui.RunBehavior
-
-import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.arcadelabs.synapse.core.prefs.PreferencesHelper
+import org.koin.android.ext.android.inject
 
 class MainActivity : ComponentActivity() {
 
@@ -43,8 +49,10 @@ class MainActivity : ComponentActivity() {
     private val prefChangeListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
         // Custom dynamic island settings listener disabled
     }
+    private val preferencesHelper: PreferencesHelper by inject()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        applyThemeSplashBackground()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
@@ -317,6 +325,47 @@ class MainActivity : ComponentActivity() {
         shortcutHandler.handleIntent(intent) { scannedId ->
             initialDeviceId = scannedId
             initialOpenAddDevice = true
+        }
+    }
+
+        private fun applyThemeSplashBackground() {
+        try {
+            val selectedTheme = preferencesHelper.selectedTheme
+            val themeMode = preferencesHelper.themeMode
+
+            val isNight = when (themeMode) {
+                "Light" -> false
+                "Dark" -> true
+                else -> {
+                    val nightModeFlags = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+                    nightModeFlags == Configuration.UI_MODE_NIGHT_YES
+                }
+            }
+
+            val colorHex = when (selectedTheme) {
+                "DeepSpace" -> if (isNight) "#0B0C10" else "#F4F6F9"
+                "TacticalHUD" -> if (isNight) "#000000" else "#EAEFF2"
+                "MidnightGreen" -> if (isNight) "#171615" else "#F7F8F6"
+                else -> if (isNight) "#1C1B1F" else "#FFFBFE"
+            }
+
+            val backgroundColor = AndroidColor.parseColor(colorHex)
+            val logoDrawable = ContextCompat.getDrawable(this, R.drawable.transparent_logo)
+
+            if (logoDrawable != null) {
+                val backgroundDrawable = ColorDrawable(backgroundColor)
+                val layers = arrayOf(backgroundDrawable, logoDrawable)
+                val layerDrawable = LayerDrawable(layers).apply {
+                    val logoSize = (120 * resources.displayMetrics.density).toInt()
+                    setLayerSize(1, logoSize, logoSize)
+                    setLayerGravity(1, Gravity.CENTER)
+                }
+                window.setBackgroundDrawable(layerDrawable)
+            } else {
+                window.setBackgroundDrawable(ColorDrawable(backgroundColor))
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
