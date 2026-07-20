@@ -174,6 +174,14 @@ class MockSyncthingApiClient(
         return dummyResponse()
     }
 
+    override suspend fun setFolderPaused(folderId: String, paused: Boolean): HttpResponse {
+        foldersList.find { it.id == folderId }?.let {
+            val idx = foldersList.indexOf(it)
+            foldersList[idx] = it.copy(paused = paused)
+        }
+        return dummyResponse()
+    }
+
     override suspend fun restart(): HttpResponse {
         delay(1000)
         return dummyResponse()

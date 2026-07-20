@@ -64,6 +64,8 @@ class FolderViewModel(
     private val pendingDeletions = mutableSetOf<String>()
     // Folders being added — kept in state even if a poll runs before server confirms
     private val pendingCreations = mutableListOf<Folder>()
+    // Folder IDs with in-flight pause/resume — prevents polling from overwriting the optimistic UI update
+    private val pendingPauseChanges = mutableMapOf<String, Boolean>()
 
     init {
         loadFolders()
@@ -80,7 +82,12 @@ class FolderViewModel(
                     // Merge in any pending creations not yet confirmed by server
                     val serverIds = filtered.map { it.id }.toSet()
                     val unconfirmedCreations = pendingCreations.filter { it.id !in serverIds }
-                    _foldersState.value = filtered + unconfirmedCreations
+                    // Protect in-flight pause/resume from being overwritten by stale poll data
+                    val merged = (filtered + unconfirmedCreations).map { folder ->
+                        val pendingPaused = pendingPauseChanges[folder.id]
+                        if (pendingPaused != null) folder.copy(paused = pendingPaused) else folder
+                    }
+                    _foldersState.value = merged
                     fetchMyIdAndConnections()
                     updateDevicesState(config.devices)
                     try {
@@ -234,19 +241,23 @@ class FolderViewModel(
         _foldersState.value = _foldersState.value.map {
             if (it.id == folderId) it.copy(paused = paused) else it
         }
+        // Block polling from overwriting the optimistic state before server confirms
+        pendingPauseChanges[folderId] = paused
         viewModelScope.launch {
             try {
-                val current = apiClient.systemConfig()
-                val updated = current.copy(folders = current.folders.map {
-                    if (it.id == folderId) it.copy(paused = paused) else it
-                })
-                apiClient.updateSystemConfig(updated)
+                // PATCH /rest/config/folders/{id} is the ONLY correct way to pause/resume a folder.
+                // /rest/system/pause and /rest/system/resume are device-only — Syncthing silently ignores folder param.
+                apiClient.setFolderPaused(folderId, paused)
+                _error.value = null
             } catch (e: Exception) {
-                // Rollback
+                // Rollback on failure
                 _foldersState.value = _foldersState.value.map {
                     if (it.id == folderId) it.copy(paused = !paused) else it
                 }
                 _error.value = e.message ?: "Failed to update folder"
+            } finally {
+                // Release the poll guard so server state is reflected again
+                pendingPauseChanges.remove(folderId)
             }
         }
     }

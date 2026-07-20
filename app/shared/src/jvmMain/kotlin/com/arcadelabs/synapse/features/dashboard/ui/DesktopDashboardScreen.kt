@@ -517,9 +517,11 @@ fun FoldersCardSection(
                     onClick = {
                         coroutineScope.launch {
                             try {
-                                val current = apiClient.systemConfig()
-                                val updated = current.folders.map { it.copy(paused = !allPaused) }
-                                apiClient.updateSystemConfig(current.copy(folders = updated))
+                                val targetPaused = !allPaused
+                                // PATCH each folder with setFolderPaused (persists immediately, no restart needed)
+                                folders.forEach { f ->
+                                    apiClient.setFolderPaused(f.id, targetPaused)
+                                }
                             } catch (_: Exception) {}
                         }
                     },

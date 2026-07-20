@@ -85,7 +85,16 @@ interface SyncthingApiClient {
      * @return the [HttpResponse] from the server.
      */
     suspend fun resumeDevice(deviceId: String): HttpResponse
-    
+
+    /**
+     * Pauses or resumes synchronization for the specified folder.
+     * Uses PATCH /rest/config/folders/{id} — the ONLY correct folder endpoint.
+     * NOTE: /rest/system/pause and /rest/system/resume are DEVICE-ONLY endpoints;
+     * passing a 'folder' param to them is silently ignored by Syncthing.
+     * @param paused true to pause, false to resume.
+     */
+    suspend fun setFolderPaused(folderId: String, paused: Boolean): HttpResponse
+
     /**
      * Restarts the Syncthing daemon.
      * @return the [HttpResponse] from the server.
@@ -357,6 +366,18 @@ internal class SyncthingApiClientImpl(
         return client.post("$baseUrl/rest/system/resume") {
             header("X-API-Key", key)
             parameter("device", deviceId)
+        }
+    }
+
+    override suspend fun setFolderPaused(folderId: String, paused: Boolean): HttpResponse {
+        val key = getOrResolveApiKey()
+        // PATCH /rest/config/folders/{id} is the correct endpoint for toggling folder pause.
+        // /rest/system/pause and /rest/system/resume are DEVICE-ONLY — Syncthing silently ignores the folder param.
+        val body = buildJsonObject { put("paused", paused) }.toString()
+        return client.patch("$baseUrl/rest/config/folders/$folderId") {
+            header("X-API-Key", key)
+            contentType(ContentType.Application.Json)
+            setBody(body)
         }
     }
     
