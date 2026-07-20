@@ -1,6 +1,6 @@
 <!-- Hero Banner -->
 <p align="center">
-  <img src="assets/readme/hero.svg" alt="Synapse Hero Banner" width="100%">
+  <img src="assets/readme/hero.svg?v=2" alt="Synapse Hero Banner" width="100%">
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@
 ### 🖥️ Architecture & Workflow
 
 <p align="center">
-  <img src="assets/readme/workflow.svg" alt="Synapse Architecture & Workflow" width="100%">
+  <img src="assets/readme/workflow.svg?v=2" alt="Synapse Architecture & Workflow" width="100%">
 </p>
 
 * **Synapse GUI:** Communicates with the daemon REST API and opens WebSockets to receive instant, real-time sync state updates.
