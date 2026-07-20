@@ -41,8 +41,8 @@
     <text x="90" y="32" text-anchor="middle" class="label-title">Synapse GUI App</text>
     <!-- Subtitle/Details -->
     <text x="90" y="60" text-anchor="middle" class="label-desc">Compose Multiplatform</text>
-    <text x="90" y="80" text-anchor="middle" class="label-desc">Android • iOS • Web</text>
-    <text x="90" y="100" text-anchor="middle" class="label-desc">Desktop (JVM)</text>
+    <text x="90" y="82" text-anchor="middle" class="label-desc">Android • Desktop • Web</text>
+    <text x="90" y="104" text-anchor="middle" class="label-desc">Ktor Integration</text>
   </g>
 
   <!-- 2. LOCAL SYNCTHING DAEMON BLOCK -->

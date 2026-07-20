@@ -16,7 +16,7 @@
 
 ---
 
-**Synapse** is a unified dashboard and user interface for managing [Syncthing](https://syncthing.net/) file synchronization states. Built using Kotlin Multiplatform and Jetpack Compose, it brings a consistent, native, and premium Material 3 experience to Android, iOS, Desktop (JVM), and Web browsers.
+**Synapse** is a unified dashboard and user interface for managing [Syncthing](https://syncthing.net/) file synchronization states. Built using Kotlin Multiplatform and Jetpack Compose, it brings a consistent, native, and premium Material 3 experience to Android, Desktop (JVM), and Web browsers.
 
 ---
 
@@ -44,7 +44,7 @@
 
 * **[`/app/shared`](./app/shared/src)**: The core UI and business logic shared across all platforms using Compose Multiplatform.
   * **[`commonMain`](./app/shared/src/commonMain/kotlin)**: Shared layouts, controllers, and resources.
-  * **`androidMain`**, **`iosMain`**, **`jvmMain`**: Target-specific hooks for native APIs.
+  * **`androidMain`**, **`jvmMain`**: Target-specific hooks for native APIs.
 * **[`/app/androidApp`](./app/androidApp)**: Native entry point and services for the Android application.
 * **[`/app/desktopApp`](./app/desktopApp)**: Entry point for the JVM Desktop target, system tray configurations, and native Windows bindings.
 * **[`/app/webApp`](./app/webApp)**: Builds the WASM and JS browser packages.
@@ -57,12 +57,11 @@
 
 You can run these configurations directly from Android Studio / IntelliJ IDEA's run widget, or run them from the terminal:
 
-#### 📱 Mobile Targets
+#### 📱 Android Target
 * **Android App:**
   ```bash
   ./gradlew :app:androidApp:assembleDebug
   ```
-* **iOS App:** Open the [`/app/iosApp`](./app/iosApp) folder in Xcode and build/run.
 
 #### 💻 Desktop Target
 * **Development (Hot Reload):**
@@ -100,7 +99,6 @@ Run tests inside your IDE gutter or run them from the command line:
 * **Desktop:** `./gradlew :app:shared:jvmTest`
 * **Web (Wasm):** `./gradlew :app:shared:wasmJsTest`
 * **Web (JS):** `./gradlew :app:shared:jsTest`
-* **iOS:** `./gradlew :app:shared:iosSimulatorArm64Test`
 * **Server:** `./gradlew :server:test`
 
 ---

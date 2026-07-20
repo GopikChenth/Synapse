@@ -110,29 +110,24 @@
   <text x="400" y="258" text-anchor="middle" class="tagline">Built with Compose Multiplatform &amp; Kotlin</text>
 
   <!-- Platform Badges -->
-  <g transform="translate(185, 278)">
+  <g transform="translate(210, 278)">
     <!-- Android -->
     <g transform="translate(0, 0)">
       <rect width="76" height="20" rx="10" class="badge-bg" />
       <text x="38" y="14" text-anchor="middle" class="badge-text">Android</text>
     </g>
-    <!-- iOS -->
-    <g transform="translate(86, 0)">
-      <rect width="60" height="20" rx="10" class="badge-bg" />
-      <text x="30" y="14" text-anchor="middle" class="badge-text">iOS</text>
-    </g>
     <!-- Desktop -->
-    <g transform="translate(156, 0)">
+    <g transform="translate(86, 0)">
       <rect width="78" height="20" rx="10" class="badge-bg" />
       <text x="39" y="14" text-anchor="middle" class="badge-text">Desktop</text>
     </g>
     <!-- Web (Wasm) -->
-    <g transform="translate(244, 0)">
+    <g transform="translate(174, 0)">
       <rect width="98" height="20" rx="10" class="badge-bg" />
       <text x="49" y="14" text-anchor="middle" class="badge-text">Web (Wasm)</text>
     </g>
     <!-- Server -->
-    <g transform="translate(352, 0)">
+    <g transform="translate(282, 0)">
       <rect width="78" height="20" rx="10" class="badge-bg" />
       <text x="39" y="14" text-anchor="middle" class="badge-text">Ktor API</text>
     </g>
