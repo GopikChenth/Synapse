@@ -3,9 +3,6 @@ package com.arcadelabs.synapse
 import androidx.compose.material3.*
 import androidx.compose.animation.core.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.graphics.painter.BitmapPainter
-import androidx.compose.ui.graphics.painter.Painter
-import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.Notification
@@ -20,7 +17,7 @@ import com.arcadelabs.synapse.di.appDiModule
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.koin.core.context.startKoin
-import java.awt.image.BufferedImage
+import org.jetbrains.compose.resources.painterResource
 import synapse.app.shared.generated.resources.Res
 import synapse.app.shared.generated.resources.logo
 
@@ -117,13 +114,13 @@ fun main() {
             }
         }
 
-        // Create tray painter
-        val trayIconPainter = remember { createTrayIconPainter() }
+        // Use actual app icon for system tray and window
+        val appIconPainter = painterResource(Res.drawable.logo)
         val trayState = rememberTrayState()
 
         Tray(
             state = trayState,
-            icon = trayIconPainter,
+            icon = appIconPainter,
             tooltip = "Synapse",
             onAction = {
                 isWindowVisible = true
@@ -161,7 +158,7 @@ fun main() {
                     }
                 },
                 title = "Synapse",
-                icon = org.jetbrains.compose.resources.painterResource(Res.drawable.logo)
+                icon = appIconPainter
             ) {
                 val composeWindow = this.window
                 
@@ -246,36 +243,6 @@ fun main() {
             }
         }
     }
-}
-
-private fun createTrayIconPainter(): Painter {
-    val image = BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB)
-    val g = image.createGraphics()
-    
-    // Transparent background
-    g.color = java.awt.Color(0, 0, 0, 0)
-    g.fillRect(0, 0, 32, 32)
-    
-    // Enable anti-aliasing
-    g.setRenderingHint(
-        java.awt.RenderingHints.KEY_ANTIALIASING,
-        java.awt.RenderingHints.VALUE_ANTIALIAS_ON
-    )
-    
-    // Outer semi-transparent purple glow ring (0xC084FC)
-    g.color = java.awt.Color(0xC0, 0x84, 0xFC, 140)
-    g.fillOval(3, 3, 26, 26)
-    
-    // Inner solid purple circle
-    g.color = java.awt.Color(0xC0, 0x84, 0xFC)
-    g.fillOval(7, 7, 18, 18)
-    
-    // White core representing connection point
-    g.color = java.awt.Color.WHITE
-    g.fillOval(12, 12, 8, 8)
-    
-    g.dispose()
-    return BitmapPainter(image.toComposeImageBitmap())
 }
 
 private interface DWMAPI : com.sun.jna.win32.StdCallLibrary {
