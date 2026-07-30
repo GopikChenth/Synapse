@@ -1,0 +1,153 @@
+name: Release Synapse
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Native Linux Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build Native Linux Distributable
+        run: ./gradlew :app:desktopApp:createDistributable --no-daemon
+
+      - name: Compress Linux Binary to tar.gz
+        run: |
+          cd app/desktopApp/build/compose/binaries/main/app/Synapse
+          tar -czvf ${{ github.workspace }}/Synapse-Linux-x64.tar.gz .
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-distributable
+          path: Synapse-Linux-x64.tar.gz
+
+  build-windows:
+    name: Build Windows Installers
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Build Windows Installers
+        run: .\gradlew.bat :app:desktopApp:packageDistributionForCurrentOS --no-daemon
+
+      - name: Rename & Upload Windows Artifacts
+        run: |
+          Copy-Item "app/desktopApp/build/compose/binaries/main/exe/Synapse-1.0.0.exe" "Synapse-Setup-v1.0.0.exe"
+          Copy-Item "app/desktopApp/build/compose/binaries/main/msi/Synapse-1.0.0.msi" "Synapse-Setup-v1.0.0.msi"
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: |
+            Synapse-Setup-v1.0.0.exe
+            Synapse-Setup-v1.0.0.msi
+
+  build-android:
+    name: Build Android Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build Android Release APK
+        run: ./gradlew :app:androidApp:assembleRelease --no-daemon
+
+      - name: Prepare APK Artifact
+        run: cp app/androidApp/build/outputs/apk/release/androidApp-release.apk Synapse-v1.0.0.apk
+
+      - name: Upload Android Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: Synapse-v1.0.0.apk
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-linux, build-windows, build-android]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-distributable
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installers
+
+      - name: Download Android Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Synapse-Linux-x64.tar.gz
+            Synapse-Setup-v1.0.0.exe
+            Synapse-Setup-v1.0.0.msi
+            Synapse-v1.0.0.apk
+          name: Synapse ${{ github.ref_name }}
+          body: |
+            ## Synapse Release 🎉
+
+            Continuous peer-to-peer file synchronization client powered by Syncthing & Kotlin Multiplatform.
+
+            ### 📥 Downloads:
+            - 🐧 **Linux (Arch, Ubuntu, Fedora)**: `Synapse-Linux-x64.tar.gz` (Native standalone executable)
+            - 💻 **Windows**: `Synapse-Setup-v1.0.0.exe` or `Synapse-Setup-v1.0.0.msi`
+            - 📱 **Android**: `Synapse-v1.0.0.apk`
+          draft: false
+          prerelease: false
