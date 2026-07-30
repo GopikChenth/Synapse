@@ -1,0 +1,40 @@
+# Maintainer: ArcadeLabs <contact@arcadelabs.com>
+pkgname=synapse
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Continuous Peer-to-Peer File Synchronization Client"
+arch=('x86_64' 'aarch64')
+url="https://github.com/GopikChenth/Synapse"
+license=('GPL3')
+depends=('java-runtime>=17' 'hicolor-icon-theme')
+provides=('synapse')
+conflicts=('synapse-git')
+
+source=("synapse.desktop")
+sha256sums=('SKIP')
+
+build() {
+    cd "${srcdir}/../.../"
+    ./gradlew :app:desktopApp:packageUberJarForCurrentOS
+}
+
+package() {
+    # Install application JAR
+    install -Dm755 "${srcdir}/../../app/desktopApp/build/compose/jars/Synapse-${pkgver}.jar" "${pkgdir}/usr/share/synapse/Synapse.jar"
+
+    # Create executable launcher script in /usr/bin/synapse
+    mkdir -p "${pkgdir}/usr/bin"
+    cat << 'EOF' > "${pkgdir}/usr/bin/synapse"
+#!/bin/sh
+exec java -jar /usr/share/synapse/Synapse.jar "$@"
+EOF
+    chmod 755 "${pkgdir}/usr/bin/synapse"
+
+    # Install desktop launcher menu entry
+    install -Dm644 "${srcdir}/synapse.desktop" "${pkgdir}/usr/share/applications/synapse.desktop"
+
+    # Install application icon
+    if [ -f "${srcdir}/../../transparent_logo.png" ]; then
+        install -Dm644 "${srcdir}/../../transparent_logo.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/synapse.png"
+    fi
+}

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Synapse
+Comment=Continuous Peer-to-Peer File Synchronization Client
+Exec=synapse
+Icon=synapse
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;Utility;
+Keywords=sync;syncthing;p2p;backup;
