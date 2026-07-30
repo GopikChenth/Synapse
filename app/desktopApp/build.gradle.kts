@@ -27,12 +27,15 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Exe)
-            packageName = "com.arcadelabs.synapse"
+            packageName = "Synapse"
             packageVersion = "1.0.0"
+            description = "Synapse - Continuous Peer-to-Peer File Synchronization"
+            vendor = "ArcadeLabs"
             windows {
                 dirChooser = true
                 shortcut = true
                 menu = true
+                menuGroup = "Synapse"
                 iconFile.set(project.file("icon.ico"))
             }
         }
