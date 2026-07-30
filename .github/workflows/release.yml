@@ -141,13 +141,36 @@ jobs:
             Synapse-v1.0.0.apk
           name: Synapse ${{ github.ref_name }}
           body: |
-            ## Synapse Release 🎉
+            ## Synapse ${{ github.ref_name }} 🎉
 
-            Continuous peer-to-peer file synchronization client powered by Syncthing & Kotlin Multiplatform.
+            Synapse is an open-source, continuous peer-to-peer file synchronization app built with Kotlin Multiplatform and powered by Syncthing.
 
-            ### 📥 Downloads:
-            - 🐧 **Linux (Arch, Ubuntu, Fedora)**: `Synapse-Linux-x64.tar.gz` (Native standalone executable)
-            - 💻 **Windows**: `Synapse-Setup-v1.0.0.exe` or `Synapse-Setup-v1.0.0.msi`
-            - 📱 **Android**: `Synapse-v1.0.0.apk`
+            ### 💻 Windows PC
+            * Full system tray support (runs quietly in background)
+            * Windows dark mode title bar integration
+            * Custom installer (`.exe` / `.msi`) with auto-start configuration
+
+            ### 📱 Android
+            * Native mobile interface with smooth folder & device management
+            * Built-in QR scanner for quick device pairing
+            * Custom dynamic splash screen matching your selected app theme
+
+            ### 🐧 Linux (Arch Linux, Ubuntu, Fedora)
+            * Standalone native Linux executable (`.tar.gz`) with bundled JVM runtime (no Java required)
+
+            ### 🎨 Themes & Customization
+            Includes 4 built-in theme presets: **Standard Purple**, **Deep Space**, **Midnight Green**, and **Tactical HUD**.
+
+            ---
+
+            ### 📥 Installation Guide
+
+            * **Windows:** Download `Synapse-Setup-v1.0.0.exe` and run the installer.
+            * **Android:** Download `Synapse-v1.0.0.apk` and open it on your phone to install.
+            * **Linux:** Download `Synapse-Linux-x64.tar.gz`, extract it, and run `./Synapse`.
+
+            ---
+            *License: GNU General Public License v3.0 (GPL-3.0)*
+          generate_release_notes: true
           draft: false
           prerelease: false
