@@ -50,12 +50,21 @@ fun DaemonStartupScreen(
                     .fillMaxWidth()
                     .padding(vertical = 32.dp, horizontal = 24.dp)
             ) {
-                Text(
-                    text = "Synapse",
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    com.arcadelabs.synapse.core.designsystem.SynapseLogo(
+                        size = 40.dp,
+                        cornerRadius = 12.dp
+                    )
+                    Text(
+                        text = "Synapse",
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "Connecting your node...",

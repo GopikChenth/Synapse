@@ -147,6 +147,12 @@ fun DesktopApp(
 
 
 
+    val isDarkTheme = when (themeMode) {
+        "Light" -> false
+        "Dark" -> true
+        else -> androidx.compose.foundation.isSystemInDarkTheme()
+    }
+
     SynapseTheme(selectedTheme = selectedTheme, themeMode = themeMode) {
         Box(modifier = Modifier.fillMaxSize()) {
             Row(modifier = Modifier.fillMaxSize()) {
@@ -156,11 +162,10 @@ fun DesktopApp(
                             modifier = Modifier.padding(vertical = 24.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = DevicesIcon,
-                                contentDescription = "Synapse Logo",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(28.dp)
+                            SynapseLogo(
+                                size = 40.dp,
+                                cornerRadius = 12.dp,
+                                isDarkTheme = isDarkTheme
                             )
                         }
                     },

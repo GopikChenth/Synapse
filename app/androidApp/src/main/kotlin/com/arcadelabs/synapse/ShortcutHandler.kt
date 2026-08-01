@@ -52,16 +52,34 @@ class ShortcutHandler(private val context: Context) {
 
     private fun triggerQrScanner(onQrScanned: (String) -> Unit) {
         try {
-            val scanner = GmsBarcodeScanning.getClient(context)
+            val options = com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions.Builder()
+                .setBarcodeFormats(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE)
+                .enableAutoZoom()
+                .build()
+            val scanner = GmsBarcodeScanning.getClient(context, options)
             scanner.startScan()
                 .addOnSuccessListener { barcode ->
-                    barcode.rawValue?.let { onQrScanned(it) }
+                    barcode.rawValue?.let { scannedText ->
+                        if (scannedText.isNotEmpty()) {
+                            onQrScanned(scannedText)
+                        }
+                    }
                 }
                 .addOnFailureListener { e ->
                     e.printStackTrace()
+                    android.widget.Toast.makeText(
+                        context,
+                        "QR Scan failed: ${e.localizedMessage ?: "Scanner error"}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
                 }
         } catch (e: Exception) {
             e.printStackTrace()
+            android.widget.Toast.makeText(
+                context,
+                "Error starting scanner: ${e.localizedMessage}",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
         }
     }
 }

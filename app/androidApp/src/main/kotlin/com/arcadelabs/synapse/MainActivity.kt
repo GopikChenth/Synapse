@@ -128,7 +128,7 @@ class MainActivity : ComponentActivity() {
                                 e.printStackTrace()
                                 android.widget.Toast.makeText(
                                     this@MainActivity,
-                                    "QR Scanner failed: ${e.localizedMessage ?: "Please check Google Play Services"}",
+                                    "QR Scan failed: ${e.localizedMessage ?: "Scanner error"}",
                                     android.widget.Toast.LENGTH_LONG
                                 ).show()
                             }

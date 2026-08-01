@@ -4,6 +4,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -201,6 +202,12 @@ fun App(
         }
     }
 
+    val isDarkTheme = when (themeMode) {
+        "Light" -> false
+        "Dark" -> true
+        else -> isSystemInDarkTheme()
+    }
+
     SynapseTheme(selectedTheme = selectedTheme, themeMode = themeMode) {
         ModalNavigationDrawer(
             drawerState = drawerState,
@@ -222,11 +229,10 @@ fun App(
                             .padding(horizontal = 20.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = DevicesIcon,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(28.dp)
+                        SynapseLogo(
+                            size = 36.dp,
+                            cornerRadius = 10.dp,
+                            isDarkTheme = isDarkTheme
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(

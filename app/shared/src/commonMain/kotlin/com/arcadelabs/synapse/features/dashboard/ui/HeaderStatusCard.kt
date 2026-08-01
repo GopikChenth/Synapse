@@ -37,12 +37,21 @@ fun HeaderStatusCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Synapse Sync",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    com.arcadelabs.synapse.core.designsystem.SynapseLogo(
+                        size = 32.dp,
+                        cornerRadius = 8.dp
+                    )
+                    Text(
+                        text = "Synapse Sync",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
                 
                 Surface(
                     shape = RoundedCornerShape(12.dp),
