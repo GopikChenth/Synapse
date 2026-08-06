@@ -30,17 +30,6 @@ class SyncthingService : Service() {
     private var runConditionMonitor: RunConditionMonitor? = null
     private var widgetPollingJob: Job? = null
 
-    private val prefChangeListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
-        if (key == "enable_dynamic_island") {
-            val enabled = prefs.getBoolean("enable_dynamic_island", false)
-            if (enabled) {
-                startDynamicIsland()
-            } else {
-                stopDynamicIsland()
-            }
-        }
-    }
-
     inner class SyncthingBinder : Binder() {
         fun getService(): SyncthingService = this@SyncthingService
     }
@@ -54,9 +43,6 @@ class SyncthingService : Service() {
         startForeground(NOTIFICATION_ID, createNotification("Synapse is starting..."))
         acquireLocks()
         isInstanceRunning = true
-
-        val prefs = android.preference.PreferenceManager.getDefaultSharedPreferences(this)
-        prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
 
         runConditionMonitor = RunConditionMonitor(this) { isMet ->
             val prefs = getSharedPreferences("${packageName}_preferences", Context.MODE_PRIVATE)
@@ -162,26 +148,35 @@ class SyncthingService : Service() {
             val downloadHistory = mutableListOf<Long>()
             val uploadHistory = mutableListOf<Long>()
 
+            val koin = org.koin.core.context.GlobalContext.get()
+            val apiClient = koin.get<com.arcadelabs.synapse.core.network.SyncthingApiClient>()
+
             while (isActive) {
                 try {
-                    val koin = org.koin.core.context.GlobalContext.get()
-                    val apiClient = koin.get<com.arcadelabs.synapse.core.network.SyncthingApiClient>()
-
                     val status = apiClient.systemStatus()
                     val connections = apiClient.systemConnections()
                     val config = apiClient.systemConfig()
+
+                    val dbStatuses = coroutineScope {
+                        config.folders.map { folder ->
+                            async {
+                                try {
+                                    apiClient.dbStatus(folder.id)
+                                } catch (_: Exception) {
+                                    null
+                                }
+                            }
+                        }.awaitAll()
+                    }
 
                     var totalBytes = 0L
                     var totalInSyncBytes = 0L
                     var totalGlobalBytes = 0L
 
-                    config.folders.forEach { folder ->
-                        try {
-                            val dbStatus = apiClient.dbStatus(folder.id)
-                            totalBytes += dbStatus.localBytes
-                            totalInSyncBytes += dbStatus.inSyncBytes
-                            totalGlobalBytes += dbStatus.globalBytes
-                        } catch (_: Exception) {}
+                    dbStatuses.filterNotNull().forEach { dbStatus ->
+                        totalBytes += dbStatus.localBytes
+                        totalInSyncBytes += dbStatus.inSyncBytes
+                        totalGlobalBytes += dbStatus.globalBytes
                     }
 
                     val progressPercent = if (totalGlobalBytes > 0L) {
@@ -329,15 +324,11 @@ class SyncthingService : Service() {
     }
 
     override fun onDestroy() {
-        val prefs = android.preference.PreferenceManager.getDefaultSharedPreferences(this)
-        prefs.unregisterOnSharedPreferenceChangeListener(prefChangeListener)
-
         isInstanceRunning = false
         super.onDestroy()
         runConditionMonitor?.stop()
         stopSyncthing()
         releaseLocks()
-        stopDynamicIsland()
         serviceScope.cancel()
     }
 

@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arcadelabs.synapse.core.domain.models.*
 import com.arcadelabs.synapse.core.network.*
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -107,29 +109,34 @@ class DeviceViewModel(
         }
     }
 
-    private suspend fun updateDeviceStates() {
-        val config = apiClient.systemConfig()
-        val connectionsResp = apiClient.systemConnections()
-        val connections = connectionsResp.connections
+    private suspend fun updateDeviceStates() = coroutineScope {
+        val configDeferred = async { apiClient.systemConfig() }
+        val connectionsDeferred = async { apiClient.systemConnections() }
+        val statusDeferred = async { runCatching { apiClient.systemStatus() }.getOrNull() }
+        val pendingDevicesDeferred = async { runCatching { apiClient.getPendingDevices() }.getOrNull() }
+        val pendingFoldersDeferred = async { runCatching { apiClient.getPendingFolders() }.getOrNull() }
+
+        val config = configDeferred.await()
+        val connectionsResp = connectionsDeferred.await()
+        val status = statusDeferred.await()
+        val pendingDevices = pendingDevicesDeferred.await()
+        val pendingFolders = pendingFoldersDeferred.await()
 
         _folders.value = config.folders
 
-        try {
-            val status = apiClient.systemStatus()
+        if (status != null) {
             _myId.value = status.myID
-        } catch (_: Exception) {}
-
-        try {
-            _pendingDevices.value = apiClient.getPendingDevices()
-        } catch (e: Exception) {
-            _pendingDevices.value = emptyMap()
         }
 
-        try {
-            _pendingFolders.value = apiClient.getPendingFolders()
-        } catch (e: Exception) {
-            _pendingFolders.value = emptyMap()
+        if (pendingDevices != null) {
+            _pendingDevices.value = pendingDevices
         }
+
+        if (pendingFolders != null) {
+            _pendingFolders.value = pendingFolders
+        }
+
+        val connections = connectionsResp.connections
 
         val uiDevices = config.devices.map { device ->
             val conn = connections[device.deviceID]

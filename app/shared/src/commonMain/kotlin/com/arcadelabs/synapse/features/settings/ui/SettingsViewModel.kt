@@ -179,13 +179,21 @@ class SettingsViewModel(
                 val listenList = state.listenAddresses.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                 val serversList = state.globalAnnounceServers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
+                val maxSend = state.maxSendKbps.toIntOrNull()
+                val maxRecv = state.maxRecvKbps.toIntOrNull()
+
+                if (maxSend == null || maxSend < 0 || maxRecv == null || maxRecv < 0) {
+                    _uiState.update { it.copy(isSaving = false, saveError = "Rate limits must be valid non-negative integers (0 for unlimited)") }
+                    return@launch
+                }
+
                 val updatedOptions = baseOptions.copy(
                     listenAddresses = listenList.ifEmpty { listOf("default") },
                     globalAnnounceServers = serversList.ifEmpty { listOf("default") },
                     globalAnnounceEnabled = state.globalAnnounceEnabled,
                     localAnnounceEnabled = state.localAnnounceEnabled,
-                    maxSendKbps = state.maxSendKbps.toIntOrNull() ?: 0,
-                    maxRecvKbps = state.maxRecvKbps.toIntOrNull() ?: 0,
+                    maxSendKbps = maxSend,
+                    maxRecvKbps = maxRecv,
                     relaysEnabled = state.relaysEnabled,
                     natEnabled = state.natEnabled,
                     urAccepted = state.urAccepted,

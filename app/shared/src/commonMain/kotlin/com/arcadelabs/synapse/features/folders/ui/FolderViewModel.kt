@@ -67,6 +67,10 @@ class FolderViewModel(
     // Folder IDs with in-flight pause/resume — prevents polling from overwriting the optimistic UI update
     private val pendingPauseChanges = mutableMapOf<String, Boolean>()
 
+    private fun getPendingDeletionsSet(): Set<String> = synchronized(pendingDeletions) { pendingDeletions.toSet() }
+    private fun getPendingCreationsList(): List<Folder> = synchronized(pendingCreations) { pendingCreations.toList() }
+    private fun getPendingPauseChangesMap(): Map<String, Boolean> = synchronized(pendingPauseChanges) { pendingPauseChanges.toMap() }
+
     init {
         loadFolders()
         startPolling()
@@ -77,14 +81,18 @@ class FolderViewModel(
             while (isActive) {
                 try {
                     val config = apiClient.systemConfig()
+                    val currentDeletions = getPendingDeletionsSet()
+                    val currentCreations = getPendingCreationsList()
+                    val currentPauseChanges = getPendingPauseChangesMap()
+
                     // Filter out folders pending deletion so polls can't resurrect them
-                    val filtered = config.folders.filter { it.id !in pendingDeletions }
+                    val filtered = config.folders.filter { it.id !in currentDeletions }
                     // Merge in any pending creations not yet confirmed by server
                     val serverIds = filtered.map { it.id }.toSet()
-                    val unconfirmedCreations = pendingCreations.filter { it.id !in serverIds }
+                    val unconfirmedCreations = currentCreations.filter { it.id !in serverIds }
                     // Protect in-flight pause/resume from being overwritten by stale poll data
                     val merged = (filtered + unconfirmedCreations).map { folder ->
-                        val pendingPaused = pendingPauseChanges[folder.id]
+                        val pendingPaused = currentPauseChanges[folder.id]
                         if (pendingPaused != null) folder.copy(paused = pendingPaused) else folder
                     }
                     _foldersState.value = merged
@@ -165,7 +173,7 @@ class FolderViewModel(
         )
 
         // Track creation so polling can't lose it before server confirms
-        pendingCreations.add(newFolder)
+        synchronized(pendingCreations) { pendingCreations.add(newFolder) }
         // Optimistic update — show immediately in UI
         val snapshot = _foldersState.value
         _foldersState.value = snapshot + newFolder
@@ -179,15 +187,15 @@ class FolderViewModel(
 
                 // Confirm from server
                 val confirmed = apiClient.systemConfig()
-                pendingCreations.removeAll { it.id == newFolder.id }
-                _foldersState.value = confirmed.folders.filter { it.id !in pendingDeletions }
+                synchronized(pendingCreations) { pendingCreations.removeAll { it.id == newFolder.id } }
+                _foldersState.value = confirmed.folders.filter { it.id !in getPendingDeletionsSet() }
                 fetchMyIdAndConnections()
                 updateDevicesState(confirmed.devices)
 
                 onSuccess()
             } catch (e: Exception) {
                 // Rollback on failure
-                pendingCreations.removeAll { it.id == newFolder.id }
+                synchronized(pendingCreations) { pendingCreations.removeAll { it.id == newFolder.id } }
                 _foldersState.value = snapshot
                 _error.value = when (e) {
                     is ApiKeyNotConfiguredException  -> "Syncthing API key is missing or not configured."
@@ -213,7 +221,7 @@ class FolderViewModel(
 
     fun deleteFolder(folderId: String) {
         // Track the deletion so polling can't resurrect it
-        pendingDeletions.add(folderId)
+        synchronized(pendingDeletions) { pendingDeletions.add(folderId) }
         // Optimistic update — remove immediately from UI
         val snapshot = _foldersState.value
         _foldersState.value = snapshot.filter { it.id != folderId }
@@ -224,7 +232,7 @@ class FolderViewModel(
                 apiClient.deleteFolder(folderId)
                 // Confirm from server
                 val confirmed = apiClient.systemConfig()
-                _foldersState.value = confirmed.folders.filter { it.id !in pendingDeletions }
+                _foldersState.value = confirmed.folders.filter { it.id !in getPendingDeletionsSet() }
                 fetchMyIdAndConnections()
                 updateDevicesState(confirmed.devices)
             } catch (e: Exception) {
@@ -232,7 +240,7 @@ class FolderViewModel(
                 _foldersState.value = snapshot
                 _error.value = e.message ?: "Failed to delete folder"
             } finally {
-                pendingDeletions.remove(folderId)
+                synchronized(pendingDeletions) { pendingDeletions.remove(folderId) }
             }
         }
     }
@@ -242,7 +250,7 @@ class FolderViewModel(
             if (it.id == folderId) it.copy(paused = paused) else it
         }
         // Block polling from overwriting the optimistic state before server confirms
-        pendingPauseChanges[folderId] = paused
+        synchronized(pendingPauseChanges) { pendingPauseChanges[folderId] = paused }
         viewModelScope.launch {
             try {
                 // PATCH /rest/config/folders/{id} is the ONLY correct way to pause/resume a folder.
@@ -257,7 +265,7 @@ class FolderViewModel(
                 _error.value = e.message ?: "Failed to update folder"
             } finally {
                 // Release the poll guard so server state is reflected again
-                pendingPauseChanges.remove(folderId)
+                synchronized(pendingPauseChanges) { pendingPauseChanges.remove(folderId) }
             }
         }
     }
