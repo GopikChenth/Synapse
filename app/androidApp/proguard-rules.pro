@@ -35,3 +35,9 @@
 -keep class com.arcadelabs.synapse.MainActivity
 -keep class com.arcadelabs.synapse.service.SyncthingService
 -keep class com.arcadelabs.synapse.service.SyncthingRunnable
+
+# Google Play Services & MLKit Code Scanner
+-keep class com.google.android.gms.** { *; }
+-dontwarn com.google.android.gms.**
+-keep class com.google.mlkit.** { *; }
+-dontwarn com.google.mlkit.**

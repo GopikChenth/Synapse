@@ -111,16 +111,34 @@ class MainActivity : ComponentActivity() {
                 },
                 scanQrCode = { onQrScanned ->
                     try {
-                        val scanner = GmsBarcodeScanning.getClient(this)
+                        val options = com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions.Builder()
+                            .setBarcodeFormats(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE)
+                            .enableAutoZoom()
+                            .build()
+                        val scanner = GmsBarcodeScanning.getClient(this, options)
                         scanner.startScan()
                             .addOnSuccessListener { barcode ->
-                                barcode.rawValue?.let { onQrScanned(it) }
+                                barcode.rawValue?.let { scannedValue ->
+                                    if (scannedValue.isNotEmpty()) {
+                                        onQrScanned(scannedValue)
+                                    }
+                                }
                             }
                             .addOnFailureListener { e ->
                                 e.printStackTrace()
+                                android.widget.Toast.makeText(
+                                    this@MainActivity,
+                                    "QR Scanner failed: ${e.localizedMessage ?: "Please check Google Play Services"}",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
                             }
                     } catch (e: Exception) {
                         e.printStackTrace()
+                        android.widget.Toast.makeText(
+                            this@MainActivity,
+                            "Could not open QR scanner: ${e.localizedMessage ?: "Unknown error"}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
                     }
                 },
                 openUrl = { url ->
