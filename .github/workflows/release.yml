@@ -5,13 +5,42 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+      custom_notes:
+        description: 'Optional custom release notes'
+        required: false
+        default: ''
 
 permissions:
   contents: write
 
 jobs:
+  version-env:
+    name: Determine Release Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set_version.outputs.version }}
+      raw_version: ${{ steps.set_version.outputs.raw_version }}
+    steps:
+      - name: Calculate Version
+        id: set_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          RAW_VER=$(echo "$TAG" | sed 's/^v//')
+          echo "version=${TAG}" >> $GITHUB_OUTPUT
+          echo "raw_version=${RAW_VER}" >> $GITHUB_OUTPUT
+
   build-linux:
     name: Build Native Linux Release
+    needs: version-env
     runs-on: ubuntu-latest
 
     steps:
@@ -34,16 +63,17 @@ jobs:
       - name: Compress Linux Binary to tar.gz
         run: |
           cd app/desktopApp/build/compose/binaries/main/app/Synapse
-          tar -czvf ${{ github.workspace }}/Synapse-Linux-x64.tar.gz .
+          tar -czvf ${{ github.workspace }}/Synapse-Linux-x64-${{ needs.version-env.outputs.version }}.tar.gz .
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-distributable
-          path: Synapse-Linux-x64.tar.gz
+          path: Synapse-Linux-x64-${{ needs.version-env.outputs.version }}.tar.gz
 
   build-windows:
     name: Build Windows Installers
+    needs: version-env
     runs-on: windows-latest
 
     steps:
@@ -60,21 +90,27 @@ jobs:
       - name: Build Windows Installers
         run: .\gradlew.bat :app:desktopApp:packageDistributionForCurrentOS --no-daemon
 
-      - name: Rename & Upload Windows Artifacts
+      - name: Rename & Prepare Windows Artifacts
+        shell: powershell
         run: |
-          Copy-Item "app/desktopApp/build/compose/binaries/main/exe/Synapse-1.0.0.exe" "Synapse-Setup-v1.0.0.exe"
-          Copy-Item "app/desktopApp/build/compose/binaries/main/msi/Synapse-1.0.0.msi" "Synapse-Setup-v1.0.0.msi"
+          $ver = "${{ needs.version-env.outputs.version }}"
+          $exeFile = Get-ChildItem -Path "app/desktopApp/build/compose/binaries/main/exe/*.exe" | Select-Object -First 1
+          $msiFile = Get-ChildItem -Path "app/desktopApp/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
+          
+          if ($exeFile) { Copy-Item $exeFile.FullName "Synapse-Setup-$ver.exe" }
+          if ($msiFile) { Copy-Item $msiFile.FullName "Synapse-Setup-$ver.msi" }
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-installers
           path: |
-            Synapse-Setup-v1.0.0.exe
-            Synapse-Setup-v1.0.0.msi
+            Synapse-Setup-${{ needs.version-env.outputs.version }}.exe
+            Synapse-Setup-${{ needs.version-env.outputs.version }}.msi
 
   build-android:
     name: Build Android Release APK
+    needs: version-env
     runs-on: ubuntu-latest
 
     steps:
@@ -98,17 +134,17 @@ jobs:
         run: ./gradlew :app:androidApp:assembleRelease --no-daemon
 
       - name: Prepare APK Artifact
-        run: cp app/androidApp/build/outputs/apk/release/androidApp-release.apk Synapse-v1.0.0.apk
+        run: cp app/androidApp/build/outputs/apk/release/androidApp-release.apk Synapse-${{ needs.version-env.outputs.version }}.apk
 
       - name: Upload Android Artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: Synapse-v1.0.0.apk
+          path: Synapse-${{ needs.version-env.outputs.version }}.apk
 
   publish-release:
     name: Publish GitHub Release
-    needs: [build-linux, build-windows, build-android]
+    needs: [version-env, build-linux, build-windows, build-android]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
 
@@ -131,46 +167,58 @@ jobs:
         with:
           name: android-apk
 
+      - name: Create Dynamic Release Body
+        id: release_body
+        run: |
+          VER="${{ needs.version-env.outputs.version }}"
+          CUSTOM_NOTES="${{ github.event.inputs.custom_notes }}"
+          
+          cat << EOF > release_body.md
+          ## Synapse ${VER} 🎉
+
+          ${CUSTOM_NOTES}
+
+          Synapse is an open-source, continuous peer-to-peer file synchronization app built with Kotlin Multiplatform and powered by Syncthing.
+
+          ### 💻 Windows PC
+          * Full system tray support (runs quietly in background)
+          * Windows dark mode title bar integration
+          * Custom installer (\`.exe\` / \`.msi\`) with auto-start configuration
+
+          ### 📱 Android
+          * Native mobile interface with smooth folder & device management
+          * Built-in QR scanner for quick device pairing
+          * Custom dynamic splash screen matching your selected app theme
+
+          ### 🐧 Linux (Arch Linux, Ubuntu, Fedora)
+          * Standalone native Linux executable (\`.tar.gz\`) with bundled JVM runtime (no Java required)
+
+          ### 🎨 Themes & Customization
+          Includes 4 built-in theme presets: **Standard Purple**, **Deep Space**, **Midnight Green**, and **Tactical HUD**.
+
+          ---
+
+          ### 📥 Installation Guide
+
+          * **Windows:** Download \`Synapse-Setup-${VER}.exe\` and run the installer.
+          * **Android:** Download \`Synapse-${VER}.apk\` and open it on your phone to install.
+          * **Linux:** Download \`Synapse-Linux-x64-${VER}.tar.gz\`, extract it, and run \`./Synapse\`.
+
+          ---
+          *License: GNU General Public License v3.0 (GPL-3.0)*
+          EOF
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.version-env.outputs.version }}
           files: |
-            Synapse-Linux-x64.tar.gz
-            Synapse-Setup-v1.0.0.exe
-            Synapse-Setup-v1.0.0.msi
-            Synapse-v1.0.0.apk
-          name: Synapse ${{ github.ref_name }}
-          body: |
-            ## Synapse ${{ github.ref_name }} 🎉
-
-            Synapse is an open-source, continuous peer-to-peer file synchronization app built with Kotlin Multiplatform and powered by Syncthing.
-
-            ### 💻 Windows PC
-            * Full system tray support (runs quietly in background)
-            * Windows dark mode title bar integration
-            * Custom installer (`.exe` / `.msi`) with auto-start configuration
-
-            ### 📱 Android
-            * Native mobile interface with smooth folder & device management
-            * Built-in QR scanner for quick device pairing
-            * Custom dynamic splash screen matching your selected app theme
-
-            ### 🐧 Linux (Arch Linux, Ubuntu, Fedora)
-            * Standalone native Linux executable (`.tar.gz`) with bundled JVM runtime (no Java required)
-
-            ### 🎨 Themes & Customization
-            Includes 4 built-in theme presets: **Standard Purple**, **Deep Space**, **Midnight Green**, and **Tactical HUD**.
-
-            ---
-
-            ### 📥 Installation Guide
-
-            * **Windows:** Download `Synapse-Setup-v1.0.0.exe` and run the installer.
-            * **Android:** Download `Synapse-v1.0.0.apk` and open it on your phone to install.
-            * **Linux:** Download `Synapse-Linux-x64.tar.gz`, extract it, and run `./Synapse`.
-
-            ---
-            *License: GNU General Public License v3.0 (GPL-3.0)*
+            Synapse-Linux-x64-${{ needs.version-env.outputs.version }}.tar.gz
+            Synapse-Setup-${{ needs.version-env.outputs.version }}.exe
+            Synapse-Setup-${{ needs.version-env.outputs.version }}.msi
+            Synapse-${{ needs.version-env.outputs.version }}.apk
+          name: Synapse ${{ needs.version-env.outputs.version }}
+          body_path: release_body.md
           generate_release_notes: true
           draft: false
           prerelease: false
