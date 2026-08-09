@@ -25,6 +25,11 @@ compose.desktop {
     application {
         mainClass = "com.arcadelabs.synapse.MainKt"
 
+        buildTypes.release.proguard {
+            isEnabled.set(false)
+            configurationFiles.from(project.file("proguard-rules.pro"))
+        }
+
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Exe)
             packageName = "Synapse"

@@ -8,7 +8,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
-import java.net.URL
+import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
 
 sealed class DaemonState {
@@ -28,13 +28,24 @@ class DesktopDaemonManager {
     private var isStopped = false
 
     companion object {
-        private const val VERSION      = "1.27.8"
-        private const val DOWNLOAD_URL = "https://github.com/syncthing/syncthing/releases/download/v$VERSION/syncthing-windows-amd64-v$VERSION.zip"
+        private const val VERSION = "1.27.8"
 
-        // Fixed credentials used when Synapse manages the daemon itself.
-        // Because we inject these at launch, we never need to parse config.xml.
+        private val osName = System.getProperty("os.name").lowercase()
+        val isWindows = osName.contains("win")
+        val isMac = osName.contains("mac")
+        val isLinux = !isWindows && !isMac
+        val exeName = if (isWindows) "syncthing.exe" else "syncthing"
+
         const val MANAGED_API_KEY  = "synapse-managed-api-key-2025"
         const val MANAGED_BASE_URL = "http://127.0.0.1:8384"
+
+        private fun getDownloadUrl(): String {
+            return when {
+                isWindows -> "https://github.com/syncthing/syncthing/releases/download/v$VERSION/syncthing-windows-amd64-v$VERSION.zip"
+                isMac -> "https://github.com/syncthing/syncthing/releases/download/v$VERSION/syncthing-macos-amd64-v$VERSION.zip"
+                else -> "https://github.com/syncthing/syncthing/releases/download/v$VERSION/syncthing-linux-amd64-v$VERSION.tar.gz"
+            }
+        }
     }
 
     fun start() {
@@ -65,38 +76,54 @@ class DesktopDaemonManager {
     }
 
     private fun runDaemonLifecycle() {
-        val localAppData = System.getenv("LOCALAPPDATA") ?: System.getProperty("user.home")
+        val userHome = System.getProperty("user.home") ?: "."
+        val localAppData = System.getenv("LOCALAPPDATA") ?: userHome
         val synapseDir = File(localAppData, "Synapse")
         val binDir = File(synapseDir, "bin")
-        val binFile = File(binDir, "syncthing.exe")
+        binDir.mkdirs()
+
         val homeDir = File(synapseDir, "syncthing-home")
         homeDir.mkdirs()
 
         // ── Step 1: Check if Syncthing is ALREADY running on 8384 ──────────────
-        // If so, find its API key and connect directly — no new process needed.
-        val existingResult = tryConnectToRunning(localAppData)
+        val existingResult = tryConnectToRunning(localAppData, synapseDir)
         if (existingResult != null) {
             println("[Synapse] Connected to existing Syncthing instance at ${existingResult.second}")
             _state.value = DaemonState.Ready(existingResult.first, existingResult.second)
             return
         }
 
-        // ── Step 2: Download binary if missing ─────────────────────────────────
-        if (!binFile.exists()) {
+        // ── Step 2: Resolve daemon binary (System PATH -> Local bin -> Download) ──
+        var binFile = resolveExecutableFile(binDir)
+
+        if (!binFile.exists() || binFile.isDirectory) {
             _state.value = DaemonState.Downloading(0f)
-            val tempZip = File(System.getProperty("java.io.tmpdir"), "syncthing.zip")
+            val downloadUrl = getDownloadUrl()
+            val tempArchive = File(System.getProperty("java.io.tmpdir"), if (downloadUrl.endsWith(".tar.gz")) "syncthing.tar.gz" else "syncthing.zip")
             try {
-                downloadZip(DOWNLOAD_URL, tempZip) { progress ->
+                downloadFile(downloadUrl, tempArchive) { progress ->
                     _state.value = DaemonState.Downloading(progress)
                 }
                 _state.value = DaemonState.Starting
-                extractExeFromZip(tempZip, binFile)
-                tempZip.delete()
+                val targetFile = File(binDir, exeName)
+                extractBinaryFromArchive(tempArchive, targetFile)
+                tempArchive.delete()
+                targetFile.setExecutable(true, false)
+                binFile = targetFile
             } catch (e: Exception) {
-                tempZip.delete()
+                tempArchive.delete()
                 _state.value = DaemonState.Error("Failed to download Syncthing: ${e.message}")
                 return
             }
+        }
+
+        if (!binFile.exists() || binFile.isDirectory) {
+            _state.value = DaemonState.Error("Invalid Syncthing executable path: ${binFile.absolutePath}")
+            return
+        }
+
+        if (!isWindows) {
+            binFile.setExecutable(true, false)
         }
 
         // ── Step 3: Start our own managed daemon ───────────────────────────────
@@ -133,7 +160,7 @@ class DesktopDaemonManager {
 
                 Runtime.getRuntime().addShutdownHook(Thread { proc.destroy() })
 
-                // ── Step 4: Ping until the REST API is up (no config parsing needed) ──
+                // ── Step 4: Ping until the REST API is up ─────────────────────
                 var ready = false
                 repeat(60) { // up to 30 seconds
                     if (!ready && pingApi(MANAGED_BASE_URL, MANAGED_API_KEY)) {
@@ -165,27 +192,49 @@ class DesktopDaemonManager {
         }
     }
 
+    private fun resolveExecutableFile(binDir: File): File {
+        val localExe = File(binDir, exeName)
+        if (localExe.exists() && localExe.isFile) return localExe
 
-    /**
-     * Checks if Syncthing is already running on localhost. Searches several
-     * well-known config locations for the API key, then verifies connectivity.
-     * Returns Pair(apiKey, baseUrl) on success, null otherwise.
-     */
-    private fun tryConnectToRunning(localAppData: String): Pair<String, String>? {
+        val localAltExe = File(binDir, if (isWindows) "syncthing" else "syncthing.exe")
+        if (localAltExe.exists() && localAltExe.isFile) return localAltExe
+
+        // Check system installation paths on Linux/macOS
+        val systemCandidates = listOf(
+            "/usr/bin/syncthing",
+            "/usr/local/bin/syncthing",
+            "/opt/homebrew/bin/syncthing"
+        )
+        for (path in systemCandidates) {
+            val f = File(path)
+            if (f.exists() && f.isFile && f.canExecute()) return f
+        }
+
+        // Check PATH environment
+        val pathEnv = System.getenv("PATH") ?: ""
+        for (dir in pathEnv.split(File.pathSeparator)) {
+            if (dir.isBlank()) continue
+            val f = File(dir, exeName)
+            if (f.exists() && f.isFile && f.canExecute()) return f
+        }
+
+        return localExe
+    }
+
+    private fun tryConnectToRunning(localAppData: String, synapseDir: File): Pair<String, String>? {
+        val userHome = System.getProperty("user.home") ?: ""
         val candidateConfigs = listOf(
-            // Standard Syncthing install on Windows
             File(localAppData, "Syncthing${File.separator}config.xml"),
-            // Synapse-managed Syncthing
-            File(localAppData, "Synapse${File.separator}syncthing-home${File.separator}config.xml"),
-            // Roaming AppData fallback
-            File(System.getenv("APPDATA") ?: "", "Syncthing${File.separator}config.xml")
+            File(synapseDir, "syncthing-home${File.separator}config.xml"),
+            File(System.getenv("APPDATA") ?: "", "Syncthing${File.separator}config.xml"),
+            File(userHome, ".config/syncthing/config.xml"),
+            File(userHome, "Library/Application Support/Syncthing/config.xml")
         )
 
         for (configFile in candidateConfigs) {
             if (!configFile.exists()) continue
             val parsed = parseApiKeyAndAddress(configFile) ?: continue
             val (apiKey, baseUrl) = parsed
-            // Verify the running instance responds with this key
             if (pingApi(baseUrl, apiKey)) {
                 return Pair(apiKey, baseUrl)
             }
@@ -193,7 +242,6 @@ class DesktopDaemonManager {
         return null
     }
 
-    /** Parses the first <gui> block in config.xml for apikey + address. */
     private fun parseApiKeyAndAddress(configFile: File): Pair<String, String>? {
         return try {
             val content = configFile.readText()
@@ -209,7 +257,6 @@ class DesktopDaemonManager {
         } catch (_: Exception) { null }
     }
 
-    /** Returns true if the Syncthing REST API responds to a ping with this key. */
     private fun pingApi(baseUrl: String, apiKey: String): Boolean {
         return try {
             val url = java.net.URI.create("$baseUrl/rest/system/ping").toURL()
@@ -221,8 +268,7 @@ class DesktopDaemonManager {
         } catch (_: Exception) { false }
     }
 
-
-    private fun downloadZip(urlStr: String, destFile: File, onProgress: (Float) -> Unit) {
+    private fun downloadFile(urlStr: String, destFile: File, onProgress: (Float) -> Unit) {
         val url = java.net.URI.create(urlStr).toURL()
         val connection = url.openConnection() as HttpURLConnection
         connection.connectTimeout = 25000
@@ -245,18 +291,23 @@ class DesktopDaemonManager {
         }
     }
 
-    private fun extractExeFromZip(zipFile: File, destFile: File) {
+    private fun extractBinaryFromArchive(archiveFile: File, destFile: File) {
+        destFile.parentFile?.mkdirs()
+        if (archiveFile.name.endsWith(".tar.gz")) {
+            extractBinaryFromTarGz(archiveFile, destFile)
+        } else {
+            extractBinaryFromZip(archiveFile, destFile)
+        }
+    }
+
+    private fun extractBinaryFromZip(zipFile: File, destFile: File) {
         ZipInputStream(BufferedInputStream(zipFile.inputStream())).use { zipIn ->
             var entry = zipIn.nextEntry
             while (entry != null) {
-                if (!entry.isDirectory && entry.name.endsWith("syncthing.exe")) {
-                    destFile.parentFile?.mkdirs()
+                val entryName = entry.name.substringAfterLast("/")
+                if (!entry.isDirectory && (entryName == exeName || entryName == "syncthing.exe" || entryName == "syncthing")) {
                     FileOutputStream(destFile).use { out ->
-                        val buffer = ByteArray(16384)
-                        var len: Int
-                        while (zipIn.read(buffer).also { len = it } != -1) {
-                            out.write(buffer, 0, len)
-                        }
+                        zipIn.copyTo(out)
                     }
                     zipIn.closeEntry()
                     return
@@ -265,6 +316,59 @@ class DesktopDaemonManager {
                 entry = zipIn.nextEntry
             }
         }
-        throw IOException("Could not locate 'syncthing.exe' in the downloaded release archive.")
+        throw IOException("Could not locate '$exeName' in downloaded zip archive.")
+    }
+
+    private fun extractBinaryFromTarGz(tarGzFile: File, destFile: File) {
+        GZIPInputStream(BufferedInputStream(tarGzFile.inputStream())).use { gzipIn ->
+            val buffer = ByteArray(512)
+            while (true) {
+                var bytesRead = 0
+                while (bytesRead < 512) {
+                    val count = gzipIn.read(buffer, bytesRead, 512 - bytesRead)
+                    if (count == -1) break
+                    bytesRead += count
+                }
+                if (bytesRead < 512) break
+
+                val headerName = String(buffer, 0, 100, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
+                if (headerName.isBlank()) break
+
+                val sizeStr = String(buffer, 124, 12, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
+                val fileSize = try { sizeStr.toLong(8) } catch (_: Exception) { 0L }
+                val typeFlag = buffer[156]
+
+                val fileName = headerName.substringAfterLast("/")
+                val isTarget = (typeFlag == '0'.code.toByte() || typeFlag == 0.toByte()) &&
+                        (fileName == exeName || fileName == "syncthing")
+
+                if (isTarget && fileSize > 0) {
+                    FileOutputStream(destFile).use { out ->
+                        var remaining = fileSize
+                        val readBuffer = ByteArray(8192)
+                        while (remaining > 0) {
+                            val toRead = minOf(remaining, readBuffer.size.toLong()).toInt()
+                            val numRead = gzipIn.read(readBuffer, 0, toRead)
+                            if (numRead == -1) break
+                            out.write(readBuffer, 0, numRead)
+                            remaining -= numRead
+                        }
+                    }
+                    return
+                } else {
+                    var remaining = fileSize
+                    val padding = if (fileSize % 512 != 0L) 512 - (fileSize % 512) else 0L
+                    remaining += padding
+                    val skipBuffer = ByteArray(8192)
+                    while (remaining > 0) {
+                        val toSkip = minOf(remaining, skipBuffer.size.toLong()).toInt()
+                        val numRead = gzipIn.read(skipBuffer, 0, toSkip)
+                        if (numRead == -1) break
+                        remaining -= numRead
+                    }
+                }
+            }
+        }
+        throw IOException("Could not locate '$exeName' in downloaded tar.gz archive.")
     }
 }

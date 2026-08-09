@@ -1,0 +1,25 @@
+#!/bin/sh
+# Synapse CachyOS x86 CPU Hardware Optimized Launcher
+
+# Ensure Linux daemon directory and symlink exist for Synapse
+mkdir -p "$HOME/Synapse/bin"
+SYSTEM_SYNCTHING=$(which syncthing 2>/dev/null || echo "/usr/bin/syncthing")
+if [ -x "$SYSTEM_SYNCTHING" ] && [ ! -x "$HOME/Synapse/bin/syncthing.exe" ]; then
+    ln -sf "$SYSTEM_SYNCTHING" "$HOME/Synapse/bin/syncthing.exe"
+fi
+
+JVM_OPT_FLAGS="-XX:+UnlockExperimentalVMOptions -XX:+UseVectorCmov -XX:+UseAES -XX:+UseSHA -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CompileThreshold=1000"
+
+# Probe CPU microarchitecture level & instruction sets via /proc/cpuinfo
+if [ -f /proc/cpuinfo ]; then
+    # Check for x86-64-v4 (AVX-512)
+    if grep -qE "avx512f|avx512bw|avx512cd" /proc/cpuinfo 2>/dev/null; then
+        JVM_OPT_FLAGS="${JVM_OPT_FLAGS} -XX:+UseAVX=3"
+    # Check for x86-64-v3 (AVX2 + BMI1 + BMI2 + FMA)
+    elif grep -qE "avx2" /proc/cpuinfo 2>/dev/null; then
+        JVM_OPT_FLAGS="${JVM_OPT_FLAGS} -XX:+UseAVX=2"
+    fi
+fi
+
+# Execute Synapse with CachyOS x86 hardware acceleration options
+exec java ${JVM_OPT_FLAGS} -jar /usr/share/synapse-cachyos/Synapse.jar "$@"

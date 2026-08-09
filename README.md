@@ -73,6 +73,18 @@ You can run these configurations directly from Android Studio / IntelliJ IDEA's 
   ./gradlew :app:desktopApp:run
   ```
 
+#### 🐧 Linux Packaging (Arch Linux & CachyOS)
+* **Arch Linux Build (`PKGBUILD`):**
+  ```bash
+  cd packaging/arch
+  makepkg -si
+  ```
+* **CachyOS x86-64 Microarchitecture Optimized Build:**
+  ```bash
+  cd packaging/cachyos
+  ./build-cachyos.sh
+  ```
+
 #### 🌐 Web Target
 * **Modern Web (WasmJs - Faster):**
   ```bash

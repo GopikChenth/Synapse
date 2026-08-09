@@ -6,7 +6,7 @@ pkgdesc="Continuous Peer-to-Peer File Synchronization Client"
 arch=('x86_64' 'aarch64')
 url="https://github.com/GopikChenth/Synapse"
 license=('GPL3')
-depends=('java-runtime>=17' 'hicolor-icon-theme')
+depends=('java-runtime>=17' 'syncthing' 'hicolor-icon-theme')
 provides=('synapse')
 conflicts=('synapse-git')
 
@@ -14,18 +14,28 @@ source=("synapse.desktop")
 sha256sums=('SKIP')
 
 build() {
-    cd "${srcdir}/../.../"
-    ./gradlew :app:desktopApp:packageUberJarForCurrentOS
+    cd "${srcdir}/../.."
+    ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
 }
 
 package() {
+    # Find compiled UberJar dynamically
+    JAR_FILE=$(find "${srcdir}/../../app/desktopApp/build/compose/jars" -name "*.jar" | head -n 1)
+
     # Install application JAR
-    install -Dm755 "${srcdir}/../../app/desktopApp/build/compose/jars/Synapse-${pkgver}.jar" "${pkgdir}/usr/share/synapse/Synapse.jar"
+    install -Dm755 "${JAR_FILE}" "${pkgdir}/usr/share/synapse/Synapse.jar"
 
     # Create executable launcher script in /usr/bin/synapse
     mkdir -p "${pkgdir}/usr/bin"
     cat << 'EOF' > "${pkgdir}/usr/bin/synapse"
 #!/bin/sh
+# Ensure Linux daemon directory and symlink exist for Synapse
+mkdir -p "$HOME/Synapse/bin"
+SYSTEM_SYNCTHING=$(which syncthing 2>/dev/null || echo "/usr/bin/syncthing")
+if [ -x "$SYSTEM_SYNCTHING" ] && [ ! -x "$HOME/Synapse/bin/syncthing.exe" ]; then
+    ln -sf "$SYSTEM_SYNCTHING" "$HOME/Synapse/bin/syncthing.exe"
+fi
+
 exec java -jar /usr/share/synapse/Synapse.jar "$@"
 EOF
     chmod 755 "${pkgdir}/usr/bin/synapse"
@@ -34,7 +44,9 @@ EOF
     install -Dm644 "${srcdir}/synapse.desktop" "${pkgdir}/usr/share/applications/synapse.desktop"
 
     # Install application icon
-    if [ -f "${srcdir}/../../transparent_logo.png" ]; then
+    if [ -f "${srcdir}/../../synapse_logo_silhouette.png" ]; then
+        install -Dm644 "${srcdir}/../../synapse_logo_silhouette.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/synapse.png"
+    elif [ -f "${srcdir}/../../transparent_logo.png" ]; then
         install -Dm644 "${srcdir}/../../transparent_logo.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/synapse.png"
     fi
 }

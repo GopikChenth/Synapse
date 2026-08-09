@@ -39,7 +39,7 @@ jobs:
           echo "raw_version=${RAW_VER}" >> $GITHUB_OUTPUT
 
   build-linux:
-    name: Build Native Linux Release
+    name: Build Native Linux Release & JAR
     needs: version-env
     runs-on: ubuntu-latest
 
@@ -57,19 +57,74 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Build Native Linux Distributable
-        run: ./gradlew :app:desktopApp:createDistributable --no-daemon
+      - name: Build Native Linux Distributable & Release UberJar
+        run: |
+          ./gradlew :app:desktopApp:createDistributable --no-daemon
+          ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
 
       - name: Compress Linux Binary to tar.gz
         run: |
           cd app/desktopApp/build/compose/binaries/main/app/Synapse
           tar -czvf ${{ github.workspace }}/Synapse-Linux-x64-${{ needs.version-env.outputs.version }}.tar.gz .
 
-      - name: Upload Linux Artifact
+      - name: Prepare Desktop JAR Artifact
+        run: |
+          JAR_FILE=$(find app/desktopApp/build/compose/jars -name "*.jar" | head -n 1)
+          cp "$JAR_FILE" ${{ github.workspace }}/Synapse-Desktop-${{ needs.version-env.outputs.version }}.jar
+
+      - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-distributable
-          path: Synapse-Linux-x64-${{ needs.version-env.outputs.version }}.tar.gz
+          path: |
+            Synapse-Linux-x64-${{ needs.version-env.outputs.version }}.tar.gz
+            Synapse-Desktop-${{ needs.version-env.outputs.version }}.jar
+
+  build-arch-packages:
+    name: Build Arch Linux & CachyOS Packages
+    needs: version-env
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build Desktop UberJar for Arch Packaging
+        run: ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
+
+      - name: Build Arch Linux & CachyOS Packages in Docker
+        run: |
+          mkdir -p arch-artifacts
+          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace/packaging/arch archlinux:latest bash -c "
+            pacman -Sy --noconfirm base-devel java-runtime-headless git &&
+            useradd -m builder &&
+            chown -R builder /workspace &&
+            su builder -c 'makepkg -s --noconfirm'
+          "
+          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace/packaging/cachyos archlinux:latest bash -c "
+            pacman -Sy --noconfirm base-devel java-runtime-headless git &&
+            useradd -m builder &&
+            chown -R builder /workspace &&
+            su builder -c 'makepkg -s --noconfirm'
+          "
+          find packaging/arch/ -name "*.pkg.tar.zst" -exec cp {} arch-artifacts/ \;
+          find packaging/cachyos/ -name "*.pkg.tar.zst" -exec cp {} arch-artifacts/ \;
+
+      - name: Upload Arch & CachyOS Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-cachyos-packages
+          path: arch-artifacts/*
 
   build-windows:
     name: Build Windows Installers
@@ -144,7 +199,7 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    needs: [version-env, build-linux, build-windows, build-android]
+    needs: [version-env, build-linux, build-arch-packages, build-windows, build-android]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
 
@@ -152,10 +207,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download Linux Artifact
+      - name: Download Linux Artifacts
         uses: actions/download-artifact@v4
         with:
           name: linux-distributable
+
+      - name: Download Arch & CachyOS Packages
+        uses: actions/download-artifact@v4
+        with:
+          name: arch-cachyos-packages
 
       - name: Download Windows Artifacts
         uses: actions/download-artifact@v4
@@ -190,8 +250,10 @@ jobs:
           * Built-in QR scanner for quick device pairing
           * Custom dynamic splash screen matching your selected app theme
 
-          ### 🐧 Linux (Arch Linux, Ubuntu, Fedora)
-          * Standalone native Linux executable (\`.tar.gz\`) with bundled JVM runtime (no Java required)
+          ### 🐧 Linux (Arch Linux, CachyOS, Ubuntu, Fedora)
+          * **CachyOS (x86-64 Microarchitecture Optimized):** \`synapse-cachyos-*.pkg.tar.zst\` with hardware AVX2/AVX512 vectorization
+          * **Arch Linux Package:** \`synapse-*.pkg.tar.zst\`
+          * **Universal Desktop Executable:** \`Synapse-Desktop-${VER}.jar\` & \`Synapse-Linux-x64-${VER}.tar.gz\`
 
           ### 🎨 Themes & Customization
           Includes 4 built-in theme presets: **Standard Purple**, **Deep Space**, **Midnight Green**, and **Tactical HUD**.
@@ -200,9 +262,11 @@ jobs:
 
           ### 📥 Installation Guide
 
+          * **CachyOS:** Download \`synapse-cachyos-*.pkg.tar.zst\` and install via \`sudo pacman -U synapse-cachyos-*.pkg.tar.zst\`.
+          * **Arch Linux:** Download \`synapse-*.pkg.tar.zst\` and install via \`sudo pacman -U synapse-*.pkg.tar.zst\`.
+          * **Universal Linux/Desktop:** Download \`Synapse-Desktop-${VER}.jar\` and run \`java -jar Synapse-Desktop-${VER}.jar\`.
           * **Windows:** Download \`Synapse-Setup-${VER}.exe\` and run the installer.
           * **Android:** Download \`Synapse-${VER}.apk\` and open it on your phone to install.
-          * **Linux:** Download \`Synapse-Linux-x64-${VER}.tar.gz\`, extract it, and run \`./Synapse\`.
 
           ---
           *License: GNU General Public License v3.0 (GPL-3.0)*
@@ -214,6 +278,8 @@ jobs:
           tag_name: ${{ needs.version-env.outputs.version }}
           files: |
             Synapse-Linux-x64-${{ needs.version-env.outputs.version }}.tar.gz
+            Synapse-Desktop-${{ needs.version-env.outputs.version }}.jar
+            *.pkg.tar.zst
             Synapse-Setup-${{ needs.version-env.outputs.version }}.exe
             Synapse-Setup-${{ needs.version-env.outputs.version }}.msi
             Synapse-${{ needs.version-env.outputs.version }}.apk

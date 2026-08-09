@@ -1,0 +1,48 @@
+# Maintainer: ArcadeLabs <contact@arcadelabs.com>
+pkgname=synapse-cachyos
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Continuous Peer-to-Peer File Synchronization Client (CachyOS x86-64 Microarchitecture Optimized)"
+arch=('x86_64' 'x86_64_v3' 'x86_64_v4')
+url="https://github.com/GopikChenth/Synapse"
+license=('GPL3')
+depends=('java-runtime>=17' 'syncthing' 'hicolor-icon-theme' 'glibc')
+provides=('synapse' 'synapse-cachyos')
+conflicts=('synapse' 'synapse-git')
+
+source=("synapse-cachyos.desktop" "synapse-cachyos")
+sha256sums=('SKIP' 'SKIP')
+
+build() {
+    # Apply CachyOS x86-64-v3 / v4 microarchitecture flags
+    export CFLAGS="-march=x86-64-v3 -O3 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection"
+    export CXXFLAGS="-march=x86-64-v3 -O3 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection"
+    
+    cd "${srcdir}/../.."
+    ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
+}
+
+package() {
+    # Find compiled UberJar dynamically
+    JAR_FILE=$(find "${srcdir}/../../app/desktopApp/build/compose/jars" -name "*.jar" | head -n 1)
+
+    # Install application JAR
+    install -Dm755 "${JAR_FILE}" "${pkgdir}/usr/share/synapse-cachyos/Synapse.jar"
+
+    # Install CachyOS optimized executable launcher script
+    install -Dm755 "${srcdir}/synapse-cachyos" "${pkgdir}/usr/bin/synapse-cachyos"
+
+    # Symlink default synapse launcher to synapse-cachyos
+    mkdir -p "${pkgdir}/usr/bin"
+    ln -sf /usr/bin/synapse-cachyos "${pkgdir}/usr/bin/synapse"
+
+    # Install desktop launcher menu entry
+    install -Dm644 "${srcdir}/synapse-cachyos.desktop" "${pkgdir}/usr/share/applications/synapse-cachyos.desktop"
+
+    # Install application icon
+    if [ -f "${srcdir}/../../synapse_logo_silhouette.png" ]; then
+        install -Dm644 "${srcdir}/../../synapse_logo_silhouette.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/synapse.png"
+    elif [ -f "${srcdir}/../../transparent_logo.png" ]; then
+        install -Dm644 "${srcdir}/../../transparent_logo.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/synapse.png"
+    fi
+}
