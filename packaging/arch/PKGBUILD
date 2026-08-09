@@ -14,15 +14,25 @@ source=("synapse.desktop")
 sha256sums=('SKIP')
 
 build() {
-    cd "${srcdir}/../../.."
+    # If a JAR already exists in local directory or build output, skip Gradle
+    if ls *.jar 1>/dev/null 2>&1 || ls "${startdir}"/*.jar 1>/dev/null 2>&1; then
+        echo "Using existing local JAR file..."
+        return 0
+    fi
+    cd "${srcdir}/../../.." 2>/dev/null || true
     if ! find app/desktopApp/build/compose/jars -name "*.jar" 2>/dev/null | grep -q .; then
         ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
     fi
 }
 
 package() {
-    # Find compiled UberJar dynamically
-    JAR_FILE=$(find "${srcdir}/../../.." -path "*/app/desktopApp/build/compose/jars/*.jar" | head -n 1)
+    # Find JAR file (checks startdir, srcdir, repo root)
+    JAR_FILE=$(find "${startdir}" "${srcdir}" "${srcdir}/../../.." -maxdepth 5 -name "*.jar" 2>/dev/null | head -n 1)
+
+    if [ -z "$JAR_FILE" ]; then
+        echo "ERROR: No JAR file found!"
+        exit 1
+    fi
 
     # Install application JAR
     install -Dm755 "${JAR_FILE}" "${pkgdir}/usr/share/synapse/Synapse.jar"
