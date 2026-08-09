@@ -18,7 +18,7 @@ build() {
     export CFLAGS="-march=x86-64-v3 -O3 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection"
     export CXXFLAGS="-march=x86-64-v3 -O3 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection"
     
-    cd "${srcdir}/../.."
+    cd "${srcdir}/../../.."
     if ! find app/desktopApp/build/compose/jars -name "*.jar" 2>/dev/null | grep -q .; then
         ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
     fi
@@ -26,7 +26,7 @@ build() {
 
 package() {
     # Find compiled UberJar dynamically
-    JAR_FILE=$(find "${srcdir}/../../app/desktopApp/build/compose/jars" -name "*.jar" | head -n 1)
+    JAR_FILE=$(find "${srcdir}/../../.." -path "*/app/desktopApp/build/compose/jars/*.jar" | head -n 1)
 
     # Install application JAR
     install -Dm755 "${JAR_FILE}" "${pkgdir}/usr/share/synapse-cachyos/Synapse.jar"

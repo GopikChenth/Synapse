@@ -48,7 +48,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -90,7 +90,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -105,24 +105,26 @@ jobs:
       - name: Build Arch Linux & CachyOS Packages in Docker
         run: |
           mkdir -p arch-artifacts
-          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace/packaging/arch archlinux:latest bash -c "
+          docker run --rm -v ${{ github.workspace }}:/workspace archlinux:latest bash -c "
             pacman -Sy --noconfirm base-devel java-runtime-headless syncthing hicolor-icon-theme git &&
-            git config --global --add safe.directory '*' &&
             useradd -m builder &&
-            su builder -c 'git config --global --add safe.directory \"*\"' &&
-            chown -R builder /workspace &&
-            su builder -c 'makepkg -d --noconfirm'
+            git config --global --add safe.directory '*' &&
+            cp -r /workspace /tmp/pkgbuild &&
+            chown -R builder /tmp/pkgbuild &&
+            cd /tmp/pkgbuild/packaging/arch &&
+            su builder -c 'git config --global --add safe.directory \"*\"; makepkg -d --noconfirm' &&
+            cp *.pkg.tar.zst /workspace/arch-artifacts/
           "
-          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace/packaging/cachyos archlinux:latest bash -c "
+          docker run --rm -v ${{ github.workspace }}:/workspace archlinux:latest bash -c "
             pacman -Sy --noconfirm base-devel java-runtime-headless syncthing hicolor-icon-theme git &&
-            git config --global --add safe.directory '*' &&
             useradd -m builder &&
-            su builder -c 'git config --global --add safe.directory \"*\"' &&
-            chown -R builder /workspace &&
-            su builder -c 'makepkg -d --noconfirm'
+            git config --global --add safe.directory '*' &&
+            cp -r /workspace /tmp/pkgbuild &&
+            chown -R builder /tmp/pkgbuild &&
+            cd /tmp/pkgbuild/packaging/cachyos &&
+            su builder -c 'git config --global --add safe.directory \"*\"; makepkg -d --noconfirm' &&
+            cp *.pkg.tar.zst /workspace/arch-artifacts/
           "
-          find packaging/arch/ -name "*.pkg.tar.zst" -exec cp {} arch-artifacts/ \;
-          find packaging/cachyos/ -name "*.pkg.tar.zst" -exec cp {} arch-artifacts/ \;
 
       - name: Upload Arch & CachyOS Packages
         uses: actions/upload-artifact@v4
@@ -140,7 +142,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -177,7 +179,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
