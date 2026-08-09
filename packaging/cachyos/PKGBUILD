@@ -19,7 +19,9 @@ build() {
     export CXXFLAGS="-march=x86-64-v3 -O3 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection"
     
     cd "${srcdir}/../.."
-    ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
+    if ! find app/desktopApp/build/compose/jars -name "*.jar" 2>/dev/null | grep -q .; then
+        ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
+    fi
 }
 
 package() {

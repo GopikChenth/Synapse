@@ -15,7 +15,9 @@ sha256sums=('SKIP')
 
 build() {
     cd "${srcdir}/../.."
-    ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
+    if ! find app/desktopApp/build/compose/jars -name "*.jar" 2>/dev/null | grep -q .; then
+        ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
+    fi
 }
 
 package() {
