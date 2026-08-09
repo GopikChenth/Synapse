@@ -106,16 +106,16 @@ jobs:
         run: |
           mkdir -p arch-artifacts
           docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace/packaging/arch archlinux:latest bash -c "
-            pacman -Sy --noconfirm base-devel java-runtime-headless git &&
+            pacman -Sy --noconfirm base-devel java-runtime-headless syncthing hicolor-icon-theme git &&
             useradd -m builder &&
             chown -R builder /workspace &&
-            su builder -c 'makepkg -s --noconfirm'
+            su builder -c 'makepkg -d --noconfirm'
           "
           docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace/packaging/cachyos archlinux:latest bash -c "
-            pacman -Sy --noconfirm base-devel java-runtime-headless git &&
+            pacman -Sy --noconfirm base-devel java-runtime-headless syncthing hicolor-icon-theme git &&
             useradd -m builder &&
             chown -R builder /workspace &&
-            su builder -c 'makepkg -s --noconfirm'
+            su builder -c 'makepkg -d --noconfirm'
           "
           find packaging/arch/ -name "*.pkg.tar.zst" -exec cp {} arch-artifacts/ \;
           find packaging/cachyos/ -name "*.pkg.tar.zst" -exec cp {} arch-artifacts/ \;
