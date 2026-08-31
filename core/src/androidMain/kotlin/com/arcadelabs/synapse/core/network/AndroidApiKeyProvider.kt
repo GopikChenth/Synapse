@@ -3,6 +3,7 @@ package com.arcadelabs.synapse.core.network
 import android.content.Context
 import com.arcadelabs.synapse.core.prefs.PreferencesHelper
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -19,9 +20,18 @@ class AndroidApiKeyProvider(
         } else {
             File(context.filesDir, "config.xml")
         }
-        if (!configFile.exists()) return@withContext null
-        val content = configFile.readText()
-        val match = API_KEY_REGEX.find(content)
-        match?.groupValues?.get(1)?.trim()
+
+        repeat(10) {
+            if (configFile.exists()) {
+                val content = try { configFile.readText() } catch (_: Exception) { "" }
+                val match = API_KEY_REGEX.find(content)
+                val key = match?.groupValues?.get(1)?.trim()
+                if (!key.isNullOrEmpty()) {
+                    return@withContext key
+                }
+            }
+            delay(500)
+        }
+        null
     }
 }
