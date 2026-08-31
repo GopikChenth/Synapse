@@ -4,7 +4,7 @@
 </p>
 
 <p align="center">
-  <strong>A premium, modern, cross-platform Compose Multiplatform client for Syncthing.</strong>
+  <strong>Cross-platform Compose Multiplatform client for Syncthing.</strong>
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
 
 ---
 
-**Synapse** is a unified dashboard and user interface for managing [Syncthing](https://syncthing.net/) file synchronization states. Built using Kotlin Multiplatform and Jetpack Compose, it brings a consistent, native, and premium Material 3 experience to Android, Desktop (JVM), and Web browsers.
+**Synapse** is a dashboard and user interface for managing [Syncthing](https://syncthing.net/) file synchronization states. Built using Kotlin Multiplatform and Compose Multiplatform, it provides a Material 3 interface across Android, Desktop (JVM), and Web browsers.
 
 ---
 
@@ -26,17 +26,17 @@
   <img src="assets/readme/workflow.svg?v=3" alt="Synapse Architecture & Workflow" width="100%">
 </p>
 
-* **Synapse GUI:** Communicates with the daemon REST API and opens WebSockets to receive instant, real-time sync state updates.
-* **Syncthing Daemon:** Runs in the background, handling the low-level block index exchanges and peer-to-peer file transfer protocols (BEP).
+* **Synapse GUI:** Communicates with the daemon REST API and opens WebSockets to receive real-time sync state updates.
+* **Syncthing Daemon:** Runs in the background, handling block index exchanges and peer-to-peer file transfer protocols (BEP).
 
 ---
 
 ### ✨ Features
 
-* **Sleek Material 3 Theme:** Dynamic styling supporting system dark and light modes, customized status colors (emerald green for connected, amber for paused, crimson for disconnected).
-* **Tray Integration (Desktop):** Minimize to system tray on Windows/macOS with background memory optimization and instant desktop notifications.
+* **Material 3 Theme:** Styling for dark and light modes with status indicators (green for connected, amber for paused, red for disconnected).
+* **Tray Integration (Desktop):** Minimize to system tray on Windows/macOS with background operation and desktop notifications.
 * **Auto-Start on Boot:** Support for automatic startup registration on Windows target.
-* **Wasm & JS Web Targets:** High-performance Kotlin/Wasm web client alongside standard JS fallback.
+* **Wasm & JS Web Targets:** Kotlin/Wasm web client with JS fallback.
 
 ---
 
@@ -79,18 +79,18 @@ You can run these configurations directly from Android Studio / IntelliJ IDEA's 
   cd packaging/arch
   makepkg -si
   ```
-* **CachyOS x86-64 Microarchitecture Optimized Build:**
+* **CachyOS Build (`PKGBUILD`):**
   ```bash
   cd packaging/cachyos
   ./build-cachyos.sh
   ```
 
 #### 🌐 Web Target
-* **Modern Web (WasmJs - Faster):**
+* **Web (WasmJs):**
   ```bash
   ./gradlew :app:webApp:wasmJsBrowserDevelopmentRun
   ```
-* **Legacy Web (JS):**
+* **Web (JS):**
   ```bash
   ./gradlew :app:webApp:jsBrowserDevelopmentRun
   ```

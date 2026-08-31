@@ -106,7 +106,7 @@
 
   <!-- Brand Typography -->
   <text x="400" y="212" text-anchor="middle" class="title">SYNAPSE</text>
-  <text x="400" y="238" text-anchor="middle" class="subtitle">A Modern, Premium Cross-Platform client for Syncthing</text>
+  <text x="400" y="238" text-anchor="middle" class="subtitle">Cross-Platform Client for Syncthing</text>
   <text x="400" y="258" text-anchor="middle" class="tagline">Built with Compose Multiplatform &amp; Kotlin</text>
 
   <!-- Platform Badges -->
