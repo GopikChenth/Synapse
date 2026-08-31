@@ -105,6 +105,9 @@ jobs:
       - name: Build Arch Linux & CachyOS Packages in Docker
         run: |
           mkdir -p arch-artifacts
+          RAW_VER="${{ needs.version-env.outputs.raw_version }}"
+          sed -i "s/pkgver=1.0.0/pkgver=${RAW_VER}/g" packaging/arch/PKGBUILD
+          sed -i "s/pkgver=1.0.0/pkgver=${RAW_VER}/g" packaging/cachyos/PKGBUILD
           docker run --rm -v ${{ github.workspace }}:/workspace archlinux:latest bash -c "
             pacman -Sy --noconfirm base-devel java-runtime-headless syncthing hicolor-icon-theme git &&
             useradd -m builder &&
