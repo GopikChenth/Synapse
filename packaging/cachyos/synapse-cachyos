@@ -14,10 +14,10 @@ JVM_OPT_FLAGS="-XX:+UnlockExperimentalVMOptions -XX:+UseVectorCmov -XX:+UseAES -
 if [ -f /proc/cpuinfo ]; then
     # Check for x86-64-v4 (AVX-512)
     if grep -qE "avx512f|avx512bw|avx512cd" /proc/cpuinfo 2>/dev/null; then
-        JVM_OPT_FLAGS="${JVM_OPT_FLAGS} -XX:+UseAVX=3"
+        JVM_OPT_FLAGS="${JVM_OPT_FLAGS} -XX:UseAVX=3"
     # Check for x86-64-v3 (AVX2 + BMI1 + BMI2 + FMA)
     elif grep -qE "avx2" /proc/cpuinfo 2>/dev/null; then
-        JVM_OPT_FLAGS="${JVM_OPT_FLAGS} -XX:+UseAVX=2"
+        JVM_OPT_FLAGS="${JVM_OPT_FLAGS} -XX:UseAVX=2"
     fi
 fi
 
