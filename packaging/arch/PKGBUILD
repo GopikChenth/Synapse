@@ -26,8 +26,14 @@ build() {
 }
 
 package() {
-    # Find JAR file (checks startdir, srcdir, repo root)
-    JAR_FILE=$(find "${startdir}" "${srcdir}" "${srcdir}/../../.." -maxdepth 5 -name "*.jar" 2>/dev/null | head -n 1)
+    # Find target Compose Desktop UberJar file (prioritize app/desktopApp/build/compose/jars and >10MB JARs)
+    JAR_FILE=$(find "${startdir}" "${srcdir}" "${srcdir}/../../.." -path "*/app/desktopApp/build/compose/jars/*.jar" 2>/dev/null | head -n 1)
+    if [ -z "$JAR_FILE" ]; then
+        JAR_FILE=$(find "${startdir}" "${srcdir}" "${srcdir}/../../.." -name "*Desktop*.jar" -o -name "*release*.jar" 2>/dev/null | head -n 1)
+    fi
+    if [ -z "$JAR_FILE" ]; then
+        JAR_FILE=$(find "${startdir}" "${srcdir}" "${srcdir}/../../.." -name "*.jar" -size +10M 2>/dev/null | head -n 1)
+    fi
 
     if [ -z "$JAR_FILE" ]; then
         echo "ERROR: No JAR file found!"
