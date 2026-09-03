@@ -23,6 +23,10 @@ import com.arcadelabs.synapse.features.status.ui.StatusViewModel
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.compose.koinInject
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.domain.models.FolderDbStatus
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 @Composable
 fun MobileDashboardScreen(
@@ -71,21 +75,27 @@ fun MobileDashboardScreen(
         if (folders.isNotEmpty()) {
             while (true) {
                 try {
+                    val dbStatuses: List<FolderDbStatus?> = coroutineScope {
+                        val deferreds = folders.map { folder ->
+                            async {
+                                try { apiClient.dbStatus(folder.id) } catch (_: Exception) { null }
+                            }
+                        }
+                        deferreds.awaitAll()
+                    }
+
                     var totalBytes = 0L
                     var totalInSyncBytes = 0L
                     var totalGlobalBytes = 0L
                     var totalConflicts = 0L
-                    
-                    folders.forEach { folder ->
-                        try {
-                            val dbStatus = apiClient.dbStatus(folder.id)
-                            totalBytes += dbStatus.localBytes
-                            totalInSyncBytes += dbStatus.inSyncBytes
-                            totalGlobalBytes += dbStatus.globalBytes
-                            totalConflicts += dbStatus.pullErrors
-                        } catch (_: Exception) {}
+
+                    dbStatuses.filterNotNull().forEach { dbStatus ->
+                        totalBytes += dbStatus.localBytes
+                        totalInSyncBytes += dbStatus.inSyncBytes
+                        totalGlobalBytes += dbStatus.globalBytes
+                        totalConflicts += dbStatus.pullErrors
                     }
-                    
+
                     totalLocalBytes = totalBytes
                     syncConflictsCount = totalConflicts
                     globalCompletionPercentage = if (totalGlobalBytes > 0L) {
@@ -93,14 +103,14 @@ fun MobileDashboardScreen(
                     } else {
                         100.0
                     }
-                    
+
                     try {
                         val events = apiClient.getEvents(since = 0, limit = 100)
                         syncActivityCount = events.count { it.type == "ItemFinished" }
                     } catch (_: Exception) {}
-                    
+
                 } catch (_: Exception) {}
-                
+
                 // Poll every 5 seconds
                 kotlinx.coroutines.delay(5000)
             }
