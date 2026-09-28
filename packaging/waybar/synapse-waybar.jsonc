@@ -1,0 +1,19 @@
+{
+  "custom/synapse": {
+    "format": "{icon} {}",
+    "return-type": "json",
+    "exec": "synapse --waybar",
+    "interval": 3,
+    "on-click": "synapse --toggle",
+    "on-click-right": "synapse --toggle-sync",
+    "on-click-middle": "synapse --rescan",
+    "format-icons": {
+      "synced": "󰄬",
+      "idle": "󰄬",
+      "paused": "󰏤",
+      "error": "󰅚",
+      "offline": "󰅚"
+    },
+    "tooltip": true
+  }
+}

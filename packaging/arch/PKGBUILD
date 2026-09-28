@@ -7,6 +7,11 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/GopikChenth/Synapse"
 license=('GPL3')
 depends=('java-runtime>=17' 'syncthing' 'hicolor-icon-theme')
+optdepends=(
+    'hyprland: dynamic tiling Wayland compositor support and scratchpad integration'
+    'libnotify: desktop notifications on hotkey triggers'
+    'waybar: continuous status bar integration'
+)
 provides=('synapse')
 conflicts=('synapse-git')
 
@@ -47,6 +52,20 @@ package() {
     mkdir -p "${pkgdir}/usr/bin"
     cat << 'EOF' > "${pkgdir}/usr/bin/synapse"
 #!/bin/sh
+# Fast Hyprland scratchpad toggle optimization (sub-millisecond response)
+if [ "$1" = "--toggle" ] || [ "$1" = "-t" ] || [ "$1" = "toggle" ]; then
+    if [ -n "$HYPRLAND_INSTANCE_SIGNATURE" ] || which hyprctl >/dev/null 2>&1; then
+        CLIENTS=$(hyprctl clients -j 2>/dev/null)
+        if echo "$CLIENTS" | grep -qiE '"class": *"Synapse"|"class": *"com-arcadelabs-synapse-MainKt"|"initialClass": *"Synapse"'; then
+            if echo "$CLIENTS" | grep -qi 'special:synapse'; then
+                exec hyprctl dispatch togglespecialworkspace synapse
+            else
+                exec hyprctl dispatch focuswindow class:Synapse
+            fi
+        fi
+    fi
+fi
+
 # Ensure Linux daemon directory and symlink exist for Synapse
 mkdir -p "$HOME/Synapse/bin"
 SYSTEM_SYNCTHING=$(which syncthing 2>/dev/null || echo "/usr/bin/syncthing")
@@ -67,4 +86,9 @@ EOF
     elif [ -f "${srcdir}/../../transparent_logo.png" ]; then
         install -Dm644 "${srcdir}/../../transparent_logo.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/synapse.png"
     fi
+
+    # Install Hyprland & Waybar integration presets
+    install -Dm644 "${srcdir}/../../packaging/hyprland/synapse.conf" "${pkgdir}/usr/share/synapse/hyprland/synapse.conf"
+    install -Dm644 "${srcdir}/../../packaging/waybar/synapse-waybar.jsonc" "${pkgdir}/usr/share/synapse/waybar/config.jsonc"
+    install -Dm644 "${srcdir}/../../packaging/waybar/synapse-waybar.css" "${pkgdir}/usr/share/synapse/waybar/style.css"
 }

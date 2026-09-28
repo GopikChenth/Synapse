@@ -7,6 +7,11 @@ arch=('x86_64' 'x86_64_v3' 'x86_64_v4')
 url="https://github.com/GopikChenth/Synapse"
 license=('GPL3')
 depends=('java-runtime>=17' 'syncthing' 'hicolor-icon-theme' 'glibc')
+optdepends=(
+    'hyprland: dynamic tiling Wayland compositor support and scratchpad integration'
+    'libnotify: desktop notifications on hotkey triggers'
+    'waybar: continuous status bar integration'
+)
 provides=('synapse' 'synapse-cachyos')
 conflicts=('synapse' 'synapse-git')
 
@@ -63,4 +68,9 @@ package() {
     elif [ -f "${srcdir}/../../transparent_logo.png" ]; then
         install -Dm644 "${srcdir}/../../transparent_logo.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/synapse.png"
     fi
+
+    # Install Hyprland & Waybar integration presets
+    install -Dm644 "${srcdir}/../../packaging/hyprland/synapse.conf" "${pkgdir}/usr/share/synapse/hyprland/synapse.conf"
+    install -Dm644 "${srcdir}/../../packaging/waybar/synapse-waybar.jsonc" "${pkgdir}/usr/share/synapse/waybar/config.jsonc"
+    install -Dm644 "${srcdir}/../../packaging/waybar/synapse-waybar.css" "${pkgdir}/usr/share/synapse/waybar/style.css"
 }

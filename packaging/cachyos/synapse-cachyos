@@ -1,6 +1,20 @@
 #!/bin/sh
 # Synapse CachyOS x86 CPU Hardware Optimized Launcher
 
+# Fast Hyprland scratchpad toggle optimization (sub-millisecond response)
+if [ "$1" = "--toggle" ] || [ "$1" = "-t" ] || [ "$1" = "toggle" ]; then
+    if [ -n "$HYPRLAND_INSTANCE_SIGNATURE" ] || which hyprctl >/dev/null 2>&1; then
+        CLIENTS=$(hyprctl clients -j 2>/dev/null)
+        if echo "$CLIENTS" | grep -qiE '"class": *"Synapse"|"class": *"com-arcadelabs-synapse-MainKt"|"initialClass": *"Synapse"'; then
+            if echo "$CLIENTS" | grep -qi 'special:synapse'; then
+                exec hyprctl dispatch togglespecialworkspace synapse
+            else
+                exec hyprctl dispatch focuswindow class:Synapse
+            fi
+        fi
+    fi
+fi
+
 # Ensure Linux daemon directory and symlink exist for Synapse
 mkdir -p "$HOME/Synapse/bin"
 SYSTEM_SYNCTHING=$(which syncthing 2>/dev/null || echo "/usr/bin/syncthing")

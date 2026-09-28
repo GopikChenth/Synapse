@@ -20,8 +20,16 @@ import org.koin.core.context.startKoin
 import org.jetbrains.compose.resources.painterResource
 import synapse.app.shared.generated.resources.Res
 import synapse.app.shared.generated.resources.logo
+import com.arcadelabs.synapse.cli.LinuxHyprlandCli
 
-fun main() {
+fun main(args: Array<String>) {
+    if (args.isNotEmpty()) {
+        val handled = LinuxHyprlandCli.handle(args)
+        if (handled) {
+            kotlin.system.exitProcess(0)
+        }
+    }
+
     startKoin {
         allowOverride(true)
         modules(

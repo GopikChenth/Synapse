@@ -1,9 +1,34 @@
 [Desktop Entry]
-Name=Synapse (CachyOS Optimized)
-Comment=Continuous Peer-to-Peer File Synchronization Client (CachyOS x86-64 Optimized)
-Exec=synapse-cachyos
-Icon=synapse
+Name=Synapse
+Comment=Continuous Peer-to-Peer File Synchronization Client
+Exec=synapse-cachyos %U
+Icon=synapse-cachyos
 Terminal=false
 Type=Application
 Categories=Network;FileTransfer;Utility;
-Keywords=sync;syncthing;p2p;backup;cachyos;
+Keywords=sync;syncthing;p2p;backup;
+Actions=ToggleWindow;PauseAll;ResumeAll;ToggleSync;RescanAll;Status;
+
+[Desktop Action ToggleWindow]
+Name=Toggle Window / Scratchpad
+Exec=synapse-cachyos --toggle
+
+[Desktop Action PauseAll]
+Name=Pause All Synchronization
+Exec=synapse-cachyos --pause
+
+[Desktop Action ResumeAll]
+Name=Resume All Synchronization
+Exec=synapse-cachyos --resume
+
+[Desktop Action ToggleSync]
+Name=Toggle Pause / Resume
+Exec=synapse-cachyos --toggle-sync
+
+[Desktop Action RescanAll]
+Name=Rescan All Folders
+Exec=synapse-cachyos --rescan
+
+[Desktop Action Status]
+Name=Sync Status
+Exec=synapse-cachyos --status

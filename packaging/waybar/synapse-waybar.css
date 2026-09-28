@@ -1,0 +1,27 @@
+/* Synapse Waybar Module Styling */
+#custom-synapse {
+    padding: 0 10px;
+    margin: 0 4px;
+    border-radius: 8px;
+    color: #ffffff;
+    background-color: rgba(30, 30, 46, 0.7);
+    transition: all 0.3s ease;
+}
+
+#custom-synapse.synced,
+#custom-synapse.idle {
+    color: #10B981;
+}
+
+#custom-synapse.paused {
+    color: #F59E0B;
+}
+
+#custom-synapse.error,
+#custom-synapse.offline {
+    color: #EF4444;
+}
+
+#custom-synapse:hover {
+    background-color: rgba(69, 71, 90, 0.8);
+}
