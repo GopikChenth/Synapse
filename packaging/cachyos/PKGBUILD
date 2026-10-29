@@ -63,14 +63,23 @@ package() {
     install -Dm644 "${srcdir}/synapse-cachyos.desktop" "${pkgdir}/usr/share/applications/synapse-cachyos.desktop"
 
     # Install application icon
-    if [ -f "${srcdir}/../../synapse_logo_silhouette.png" ]; then
-        install -Dm644 "${srcdir}/../../synapse_logo_silhouette.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/synapse.png"
-    elif [ -f "${srcdir}/../../transparent_logo.png" ]; then
-        install -Dm644 "${srcdir}/../../transparent_logo.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/synapse.png"
+    ICON_FILE=$(find "${startdir}/../.." "${srcdir}/../../.." -maxdepth 2 -name "synapse_logo_silhouette.png" 2>/dev/null | head -n 1)
+    if [ -n "$ICON_FILE" ]; then
+        install -Dm644 "$ICON_FILE" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/synapse.png"
     fi
 
     # Install Hyprland & Waybar integration presets
-    install -Dm644 "${srcdir}/../../packaging/hyprland/synapse.conf" "${pkgdir}/usr/share/synapse/hyprland/synapse.conf"
-    install -Dm644 "${srcdir}/../../packaging/waybar/synapse-waybar.jsonc" "${pkgdir}/usr/share/synapse/waybar/config.jsonc"
-    install -Dm644 "${srcdir}/../../packaging/waybar/synapse-waybar.css" "${pkgdir}/usr/share/synapse/waybar/style.css"
+    HYPR_CONF=$(find "${startdir}/../hyprland" "${srcdir}/../../hyprland" -name "synapse.conf" 2>/dev/null | head -n 1)
+    WAYBAR_JSON=$(find "${startdir}/../waybar" "${srcdir}/../../waybar" -name "synapse-waybar.jsonc" 2>/dev/null | head -n 1)
+    WAYBAR_CSS=$(find "${startdir}/../waybar" "${srcdir}/../../waybar" -name "synapse-waybar.css" 2>/dev/null | head -n 1)
+
+    if [ -n "$HYPR_CONF" ]; then
+        install -Dm644 "$HYPR_CONF" "${pkgdir}/usr/share/synapse/hyprland/synapse.conf"
+    fi
+    if [ -n "$WAYBAR_JSON" ]; then
+        install -Dm644 "$WAYBAR_JSON" "${pkgdir}/usr/share/synapse/waybar/config.jsonc"
+    fi
+    if [ -n "$WAYBAR_CSS" ]; then
+        install -Dm644 "$WAYBAR_CSS" "${pkgdir}/usr/share/synapse/waybar/style.css"
+    fi
 }
