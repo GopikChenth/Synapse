@@ -17,7 +17,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import com.arcadelabs.synapse.core.designsystem.DevicesIcon
+import com.arcadelabs.synapse.core.designsystem.*
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -101,9 +101,13 @@ fun DevicesScreen(
         deviceToDelete?.let { device ->
             AlertDialog(
                 onDismissRequest = { deviceToDelete = null },
-                title = { Text("Delete Device?") },
+                shape = SynapseDialogShape,
+                title = { Text("Delete Device?", style = MaterialTheme.typography.titleLarge) },
                 text = {
-                    Text("Are you sure you want to delete ${device.name.ifEmpty { "this device" }}?\n\nID: ${device.id.chunked(4).joinToString(" ")}")
+                    Text(
+                        "Are you sure you want to delete ${device.name.ifEmpty { "this device" }}?\n\nID: ${device.id.chunked(4).joinToString(" ")}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 },
                 confirmButton = {
                     Button(
@@ -111,6 +115,7 @@ fun DevicesScreen(
                             viewModel.deleteDevice(device.id)
                             deviceToDelete = null
                         },
+                        shape = SynapsePillShape,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.error,
                             contentColor = MaterialTheme.colorScheme.onError
@@ -120,7 +125,10 @@ fun DevicesScreen(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { deviceToDelete = null }) {
+                    TextButton(
+                        onClick = { deviceToDelete = null },
+                        shape = SynapsePillShape
+                    ) {
                         Text("Cancel")
                     }
                 }
@@ -183,7 +191,7 @@ fun DeviceItemCard(
                 Spacer(modifier = Modifier.height(2.dp))
                 
                 val statusText = if (device.paused) "Paused" else if (device.connected) "Connected" else "Disconnected"
-                val statusColor = if (device.paused) Color(0xFFF59E0B) else if (device.connected) Color(0xFF10B981) else Color(0xFFEF4444)
+                val statusColor = if (device.paused) com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Paused else if (device.connected) com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected else com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Disconnected
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(

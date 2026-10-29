@@ -54,9 +54,9 @@ fun HeaderStatusCard(
                 }
                 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isRunning) Color(0xFF10B981) else Color(0xFFEF4444),
-                    modifier = Modifier.clip(RoundedCornerShape(12.dp))
+                    shape = com.arcadelabs.synapse.core.designsystem.SynapseCardShape,
+                    color = if (isRunning) com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected else com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Disconnected,
+                    modifier = Modifier.clip(com.arcadelabs.synapse.core.designsystem.SynapseCardShape)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),

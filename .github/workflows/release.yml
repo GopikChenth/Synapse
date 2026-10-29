@@ -263,9 +263,15 @@ jobs:
           * **CachyOS (x86-64 Microarchitecture Optimized):** \`synapse-cachyos-*.pkg.tar.zst\` with hardware AVX2/AVX512 vectorization
           * **Arch Linux Package:** \`synapse-*.pkg.tar.zst\`
           * **Universal Desktop Executable:** \`Synapse-Desktop-${VER}.jar\` & \`Synapse-Linux-x64-${VER}.tar.gz\`
+          * **Hyprland & Wayland Desktop Integration:** Headless CLI (\`--toggle\`, \`--pause\`, \`--resume\`, \`--rescan\`), scratchpad bindings, and live Waybar status widget (\`--waybar\`)
+          * **FreeDesktop Desktop Actions:** Quick Actions menu in application launchers (Rofi, Wofi, Walker)
 
-          ### 🎨 Themes & Customization
-          Includes 4 built-in theme presets: **Standard Purple**, **Deep Space**, **Midnight Green**, and **Tactical HUD**.
+          ### 🎨 Design & Interface (Material 3 Expressive)
+          * Upgraded to Material 3 Expressive design standard with 4dp typography hierarchy
+          * Expressive pill-shape segmented controls with bouncy spring animations
+          * Unified 28dp rounded dialogs and animated Floating Action Buttons
+          * Centralized semantic status color tokens (Emerald Connected, Amber Paused, Crimson Disconnected)
+          * Includes 4 built-in theme presets: **Standard Purple**, **Deep Space**, **Midnight Green**, and **Tactical HUD**
 
           ---
 

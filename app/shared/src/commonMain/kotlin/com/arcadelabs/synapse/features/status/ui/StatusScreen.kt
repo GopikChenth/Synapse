@@ -133,7 +133,7 @@ fun StatusScreen(
         // Running state text
         val isRunning = uiState.isRunning
         val statusText = if (isRunning) "Syncthing is running." else "Syncthing is not running."
-        val statusColor = if (isRunning) Color(0xFF10B981) else Color(0xFFEF4444)
+        val statusColor = if (isRunning) com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected else com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Disconnected
 
         Text(
             text = statusText,

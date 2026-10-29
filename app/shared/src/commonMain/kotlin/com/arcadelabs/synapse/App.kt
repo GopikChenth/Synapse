@@ -733,22 +733,24 @@ fun App(
                     val (pendingId, pendingDevice) = pendingDevices.entries.first()
                     AlertDialog(
                         onDismissRequest = { /* Keep open until action taken */ },
-                        title = { Text("Incoming Connection Request") },
+                        shape = SynapseDialogShape,
+                        title = { Text("Incoming Connection Request", style = MaterialTheme.typography.titleLarge) },
                         text = {
                             Column {
-                                Text("A remote device wants to pair with you:")
+                                Text("A remote device wants to pair with you:", style = MaterialTheme.typography.bodyMedium)
                                 Spacer(modifier = Modifier.height(12.dp))
-                                Text("Name: ${pendingDevice.name.ifEmpty { "Unnamed Device" }}", fontWeight = FontWeight.Bold)
+                                Text("Name: ${pendingDevice.name.ifEmpty { "Unnamed Device" }}", style = MaterialTheme.typography.titleMedium)
                                 Spacer(modifier = Modifier.height(4.dp))
-                                Text("ID: ${pendingId.chunked(4).joinToString(" ")}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                Text("ID: ${pendingId.chunked(4).joinToString(" ")}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                                 if (pendingDevice.address.isNotEmpty()) {
                                     Spacer(modifier = Modifier.height(4.dp))
-                                    Text("Address: ${pendingDevice.address}", fontSize = 12.sp)
+                                    Text("Address: ${pendingDevice.address}", style = MaterialTheme.typography.bodySmall)
                                 }
                             }
                         },
                         confirmButton = {
                             Button(
+                                shape = SynapsePillShape,
                                 onClick = {
                                     prefilledDeviceId = pendingId
                                     prefilledDeviceName = pendingDevice.name
@@ -760,6 +762,7 @@ fun App(
                         },
                         dismissButton = {
                             TextButton(
+                                shape = SynapsePillShape,
                                 onClick = {
                                     deviceViewModel.dismissPendingDevice(pendingId)
                                 }
@@ -778,20 +781,22 @@ fun App(
                     val folderDetails = pendingOffer.offeredBy[offeringDeviceId] ?: PendingFolder()
                     AlertDialog(
                         onDismissRequest = { /* Keep open until action taken */ },
-                        title = { Text("Folder Share Offered") },
+                        shape = SynapseDialogShape,
+                        title = { Text("Folder Share Offered", style = MaterialTheme.typography.titleLarge) },
                         text = {
                             Column {
-                                Text("A remote device wants to share a folder with you:")
+                                Text("A remote device wants to share a folder with you:", style = MaterialTheme.typography.bodyMedium)
                                 Spacer(modifier = Modifier.height(12.dp))
-                                Text("Folder Label: ${folderDetails.label.ifEmpty { "Unnamed Folder" }}", fontWeight = FontWeight.Bold)
+                                Text("Folder Label: ${folderDetails.label.ifEmpty { "Unnamed Folder" }}", style = MaterialTheme.typography.titleMedium)
                                 Spacer(modifier = Modifier.height(4.dp))
-                                Text("Folder ID: $folderId", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                Text("Folder ID: $folderId", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                                 Spacer(modifier = Modifier.height(4.dp))
-                                Text("Offered By Device ID: ${offeringDeviceId.chunked(4).joinToString(" ")}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                                Text("Offered By Device ID: ${offeringDeviceId.chunked(4).joinToString(" ")}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                             }
                         },
                         confirmButton = {
                             Button(
+                                shape = SynapsePillShape,
                                 onClick = {
                                     prefilledFolderId = folderId
                                     prefilledFolderLabel = folderDetails.label
@@ -804,6 +809,7 @@ fun App(
                         },
                         dismissButton = {
                             TextButton(
+                                shape = SynapsePillShape,
                                 onClick = {
                                     deviceViewModel.dismissPendingFolder(
                                         folderId = folderId,
@@ -823,12 +829,14 @@ fun App(
                 if (isRestartConfirmOpen) {
                     AlertDialog(
                         onDismissRequest = { isRestartConfirmOpen = false },
-                        title = { Text("Restart Syncthing Daemon?") },
+                        shape = SynapseDialogShape,
+                        title = { Text("Restart Syncthing Daemon?", style = MaterialTheme.typography.titleLarge) },
                         text = {
-                            Text("Are you sure you want to restart the Syncthing daemon? This will briefly disconnect all active synchronizations.")
+                            Text("Are you sure you want to restart the Syncthing daemon? This will briefly disconnect all active synchronizations.", style = MaterialTheme.typography.bodyMedium)
                         },
                         confirmButton = {
                             Button(
+                                shape = SynapsePillShape,
                                 onClick = {
                                     isRestartConfirmOpen = false
                                     coroutineScope.launch {
@@ -845,6 +853,7 @@ fun App(
                         },
                         dismissButton = {
                             TextButton(
+                                shape = SynapsePillShape,
                                 onClick = {
                                     isRestartConfirmOpen = false
                                 }

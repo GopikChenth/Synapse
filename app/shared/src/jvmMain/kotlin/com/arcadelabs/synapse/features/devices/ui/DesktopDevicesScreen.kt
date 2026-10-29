@@ -1,5 +1,7 @@
 package com.arcadelabs.synapse.features.devices.ui
 
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -16,6 +18,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import com.arcadelabs.synapse.core.designsystem.DevicesIcon
+import com.arcadelabs.synapse.core.designsystem.SynapseStatusColors
+import com.arcadelabs.synapse.core.designsystem.SynapseDialogShape
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,12 +47,25 @@ fun DesktopDevicesScreen(
 
     Scaffold(
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { onAddDeviceClick("", "") },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary
+            AnimatedVisibility(
+                visible = true,
+                enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + fadeIn(),
+                exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + fadeOut()
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Add Device")
+                ExtendedFloatingActionButton(
+                    onClick = { onAddDeviceClick("", "") },
+                    shape = FloatingActionButtonDefaults.extendedFabShape,
+                    elevation = FloatingActionButtonDefaults.elevation(
+                        defaultElevation = 6.dp,
+                        pressedElevation = 8.dp,
+                        focusedElevation = 6.dp,
+                        hoveredElevation = 6.dp
+                    ),
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    text = { Text("Add device", style = MaterialTheme.typography.bodyMedium) }
+                )
             }
         }
     ) { paddingValues ->
@@ -111,7 +128,8 @@ fun DesktopDevicesScreen(
         deviceToDelete?.let { device ->
             AlertDialog(
                 onDismissRequest = { deviceToDelete = null },
-                title = { Text("Delete Device?") },
+                shape = SynapseDialogShape,
+                title = { Text("Delete Device?", style = MaterialTheme.typography.titleLarge) },
                 text = {
                     Text("Are you sure you want to delete ${device.name.ifEmpty { "this device" }}?\n\nID: ${device.id.chunked(4).joinToString(" ")}")
                 },
@@ -192,7 +210,7 @@ fun DesktopDeviceItemCard(
                 Spacer(modifier = Modifier.height(2.dp))
                 
                 val statusText = if (device.paused) "Paused" else if (device.connected) "Connected" else "Disconnected"
-                val statusColor = if (device.paused) Color(0xFFF59E0B) else if (device.connected) Color(0xFF10B981) else Color(0xFFEF4444)
+                val statusColor = if (device.paused) SynapseStatusColors.Paused else if (device.connected) SynapseStatusColors.Connected else SynapseStatusColors.Disconnected
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(

@@ -127,9 +127,9 @@ fun RecentChangeItemCard(change: RecentChangeUiModel) {
     
     // Choose status color based on action type
     val (statusColor, statusBgColor) = when (change.action.lowercase()) {
-        "update" -> Color(0xFF10B981) to Color(0xFF10B981).copy(alpha = 0.15f) // Green
-        "delete" -> Color(0xFFEF4444) to Color(0xFFEF4444).copy(alpha = 0.15f) // Red
-        else -> Color(0xFFF59E0B) to Color(0xFFF59E0B).copy(alpha = 0.15f) // Amber for metadata, etc.
+        "update" -> com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected to com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected.copy(alpha = 0.15f)
+        "delete" -> com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Disconnected to com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Disconnected.copy(alpha = 0.15f)
+        else -> com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Paused to com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Paused.copy(alpha = 0.15f)
     }
 
     Card(

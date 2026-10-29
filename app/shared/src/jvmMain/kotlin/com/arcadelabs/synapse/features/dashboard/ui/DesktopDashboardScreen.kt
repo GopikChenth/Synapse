@@ -108,7 +108,7 @@ fun DesktopDashboardScreen(
                         modifier = Modifier
                             .size(10.dp)
                             .background(
-                                color = if (isRunning) Color(0xFF10B981) else Color(0xFFEF4444),
+                                color = if (isRunning) SynapseStatusColors.Connected else SynapseStatusColors.Disconnected,
                                 shape = RoundedCornerShape(5.dp)
                             )
                     )
@@ -117,7 +117,7 @@ fun DesktopDashboardScreen(
                         text = if (isRunning) "Connected" else "Disconnected",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
-                        color = if (isRunning) Color(0xFF10B981) else Color(0xFFEF4444)
+                        color = if (isRunning) SynapseStatusColors.Connected else SynapseStatusColors.Disconnected
                     )
                 }
             }
@@ -405,7 +405,7 @@ fun FoldersCardSection(
                                 )
                             }
 
-                            val stateColor = if (folder.paused) Color(0xFFF59E0B) else Color(0xFF10B981)
+                            val stateColor = if (folder.paused) SynapseStatusColors.Paused else SynapseStatusColors.Connected
                             Text(
                                 text = if (folder.paused) "Paused" else "Up to Date",
                                 style = MaterialTheme.typography.bodySmall,
@@ -977,7 +977,7 @@ fun ThisDeviceSection(
                     label = "Download",
                     currentSpeed = statusState.downloadSpeed,
                     totalBytes = statusState.totalDownload,
-                    color = Color(0xFF10B981), // Emerald
+                    color = SynapseStatusColors.Connected, // Emerald
                     modifier = Modifier.weight(1f)
                 )
                 SpeedGraph(
@@ -1050,7 +1050,7 @@ fun ThisDeviceSection(
                                 Icon(
                                     imageVector = if (copiedIdFeedback == myId) Icons.Default.Check else CopyIcon,
                                     contentDescription = "Copy ID",
-                                    tint = if (copiedIdFeedback == myId) Color(0xFF10B981) else MaterialTheme.colorScheme.primary,
+                                    tint = if (copiedIdFeedback == myId) SynapseStatusColors.Connected else MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(16.dp)
                                 )
                             }
@@ -1077,8 +1077,8 @@ fun ThisDeviceSection(
                     modifier = Modifier.padding(start = 24.dp)
                 ) {
                     val isRunning = statusState.isRunning
-                    val activeColor = Color(0xFF10B981) // Connected Emerald
-                    val inactiveColor = Color(0xFFEF4444) // Disconnected Crimson
+                    val activeColor = SynapseStatusColors.Connected // Connected Emerald
+                    val inactiveColor = SynapseStatusColors.Disconnected // Disconnected Crimson
                     
                     DonutChart(
                         label = "Listeners",
@@ -1264,7 +1264,7 @@ fun RemoteDevicesSection(
                             }
 
                             val statusText = if (device.paused) "Paused" else if (device.connected) "Connected" else "Disconnected"
-                            val statusColor = if (device.paused) Color(0xFFF59E0B) else if (device.connected) Color(0xFF10B981) else Color(0xFFEF4444)
+                            val statusColor = if (device.paused) SynapseStatusColors.Paused else if (device.connected) SynapseStatusColors.Connected else SynapseStatusColors.Disconnected
 
                             Text(
                                 text = statusText,
@@ -1382,9 +1382,13 @@ fun RemoteDevicesSection(
         deviceToDelete?.let { device ->
             AlertDialog(
                 onDismissRequest = { deviceToDelete = null },
-                title = { Text("Delete Device?") },
+                shape = SynapseDialogShape,
+                title = { Text("Delete Device?", style = MaterialTheme.typography.titleLarge) },
                 text = {
-                    Text("Are you sure you want to delete ${device.name.ifEmpty { "this device" }}?\n\nID: ${device.id.chunked(4).joinToString(" ")}")
+                    Text(
+                        "Are you sure you want to delete ${device.name.ifEmpty { "this device" }}?\n\nID: ${device.id.chunked(4).joinToString(" ")}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 },
                 confirmButton = {
                     Button(
@@ -1392,6 +1396,7 @@ fun RemoteDevicesSection(
                             deviceViewModel.deleteDevice(device.id)
                             deviceToDelete = null
                         },
+                        shape = SynapsePillShape,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.error,
                             contentColor = MaterialTheme.colorScheme.onError
@@ -1401,7 +1406,10 @@ fun RemoteDevicesSection(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { deviceToDelete = null }) {
+                    TextButton(
+                        onClick = { deviceToDelete = null },
+                        shape = SynapsePillShape
+                    ) {
                         Text("Cancel")
                     }
                 }

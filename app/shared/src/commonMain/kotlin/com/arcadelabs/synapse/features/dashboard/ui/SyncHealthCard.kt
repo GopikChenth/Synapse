@@ -62,7 +62,7 @@ fun SyncHealthCard(
             WavyProgressIndicator(
                 progress = animatedPercent / 100f,
                 targetProgress = targetPercent / 100f,
-                color = if (globalCompletionPercentage == 100.0) Color(0xFF10B981) else MaterialTheme.colorScheme.primary,
+                color = if (globalCompletionPercentage == 100.0) com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected else MaterialTheme.colorScheme.primary,
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -70,7 +70,7 @@ fun SyncHealthCard(
             Text(
                 text = if (globalCompletionPercentage == 100.0) "In Sync" else "Syncing...",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (globalCompletionPercentage == 100.0) Color(0xFF10B981) else MaterialTheme.colorScheme.primary,
+                color = if (globalCompletionPercentage == 100.0) com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected else MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.Bold
             )
         }

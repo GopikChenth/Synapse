@@ -21,7 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.arcadelabs.synapse.SynapseBackHandler
-import com.arcadelabs.synapse.core.designsystem.FolderIcon
+import com.arcadelabs.synapse.core.designsystem.*
 import com.arcadelabs.synapse.core.domain.models.Folder
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import org.koin.compose.viewmodel.koinViewModel
@@ -404,9 +404,13 @@ fun EditFolderDialog(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Delete Folder?") },
+            shape = SynapseDialogShape,
+            title = { Text("Delete Folder?", style = MaterialTheme.typography.titleLarge) },
             text = {
-                Text("Remove \"${folder.label.ifEmpty { folder.id }}\" from Syncthing?\n\nThis will stop syncing but will NOT delete the files on disk.")
+                Text(
+                    "Remove \"${folder.label.ifEmpty { folder.id }}\" from Syncthing?\n\nThis will stop syncing but will NOT delete the files on disk.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
             },
             confirmButton = {
                 Button(
@@ -415,6 +419,7 @@ fun EditFolderDialog(
                         showDeleteConfirm = false
                         onDismiss()
                     },
+                    shape = SynapsePillShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
@@ -424,7 +429,10 @@ fun EditFolderDialog(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
+                TextButton(
+                    onClick = { showDeleteConfirm = false },
+                    shape = SynapsePillShape
+                ) {
                     Text("Cancel")
                 }
             }

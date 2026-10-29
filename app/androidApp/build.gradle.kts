@@ -31,8 +31,8 @@ android {
         applicationId = "com.arcadelabs.synapse"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 5
+        versionName = "1.0.5"
     }
     packaging {
         jniLibs {

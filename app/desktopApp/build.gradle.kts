@@ -33,7 +33,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Exe)
             packageName = "Synapse"
-            packageVersion = "1.0.0"
+            packageVersion = "1.0.5"
             description = "Synapse - Continuous Peer-to-Peer File Synchronization"
             vendor = "ArcadeLabs"
             windows {

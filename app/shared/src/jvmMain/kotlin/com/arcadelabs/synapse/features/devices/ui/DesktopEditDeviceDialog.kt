@@ -19,7 +19,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.arcadelabs.synapse.core.designsystem.FolderIcon
+import com.arcadelabs.synapse.core.designsystem.*
 import org.koin.compose.viewmodel.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -71,9 +71,13 @@ fun DesktopEditDeviceDialog(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Delete Device?") },
+            shape = SynapseDialogShape,
+            title = { Text("Delete Device?", style = MaterialTheme.typography.titleLarge) },
             text = {
-                Text("Are you sure you want to delete ${device.name.ifEmpty { "this device" }}?\n\nID: ${device.id.chunked(4).joinToString(" ")}")
+                Text(
+                    "Are you sure you want to delete ${device.name.ifEmpty { "this device" }}?\n\nID: ${device.id.chunked(4).joinToString(" ")}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
             },
             confirmButton = {
                 Button(
@@ -82,6 +86,7 @@ fun DesktopEditDeviceDialog(
                         showDeleteConfirm = false
                         onDismiss()
                     },
+                    shape = SynapsePillShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
@@ -91,7 +96,10 @@ fun DesktopEditDeviceDialog(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
+                TextButton(
+                    onClick = { showDeleteConfirm = false },
+                    shape = SynapsePillShape
+                ) {
                     Text("Cancel")
                 }
             }
@@ -101,6 +109,7 @@ fun DesktopEditDeviceDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = SynapseDialogShape,
         title = {
             Text(
                 "Edit Device Options",
@@ -235,7 +244,7 @@ fun DesktopEditDeviceDialog(
                                     onValueChange = { pwd ->
                                         folderPasswords[folder.id] = pwd
                                     },
-                                    label = { Text("If untrusted, enter encryption password", fontSize = 12.sp) },
+                                    label = { Text("If untrusted, enter encryption password", style = MaterialTheme.typography.bodySmall) },
                                     singleLine = true,
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -323,8 +332,7 @@ fun DesktopEditDeviceDialog(
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = "All folders shared with this device must be protected by a password, such that all sent data is unreadable without the given password.",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -350,8 +358,7 @@ fun DesktopEditDeviceDialog(
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = "Allows you to specify exceptions to the global run conditions.",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(4.dp))
@@ -375,6 +382,7 @@ fun DesktopEditDeviceDialog(
                 // Delete Button
                 Button(
                     onClick = { showDeleteConfirm = true },
+                    shape = SynapsePillShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
@@ -407,6 +415,7 @@ fun DesktopEditDeviceDialog(
                             onSuccess = onDismiss
                         )
                     },
+                    shape = SynapsePillShape,
                     enabled = !isLoading
                 ) {
                     if (isLoading) {
@@ -418,7 +427,10 @@ fun DesktopEditDeviceDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                shape = SynapsePillShape
+            ) {
                 Text("Cancel")
             }
         }

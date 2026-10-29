@@ -49,7 +49,7 @@ fun SyncConflictsCard(
                 text = if (conflictCount > 0) "${animatedConflicts.toInt()} issues" else "No issues",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = if (conflictCount > 0) MaterialTheme.colorScheme.error else Color(0xFF10B981)
+                color = if (conflictCount > 0) MaterialTheme.colorScheme.error else com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected
             )
             
             Spacer(modifier = Modifier.height(4.dp))

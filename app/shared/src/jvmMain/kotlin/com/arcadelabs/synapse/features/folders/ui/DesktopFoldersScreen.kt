@@ -1,5 +1,7 @@
 package com.arcadelabs.synapse.features.folders.ui
 
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.clickable
 
 import androidx.compose.foundation.layout.*
@@ -24,6 +26,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.arcadelabs.synapse.core.designsystem.FolderIcon
+import com.arcadelabs.synapse.core.designsystem.SynapseDialogShape
 import com.arcadelabs.synapse.features.status.ui.StatusViewModel
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
@@ -48,12 +51,25 @@ fun DesktopFoldersScreen(
 
     Scaffold(
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = onAddFolderClick,
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary
+            AnimatedVisibility(
+                visible = true,
+                enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + fadeIn(),
+                exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + fadeOut()
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Add Folder")
+                ExtendedFloatingActionButton(
+                    onClick = onAddFolderClick,
+                    shape = FloatingActionButtonDefaults.extendedFabShape,
+                    elevation = FloatingActionButtonDefaults.elevation(
+                        defaultElevation = 6.dp,
+                        pressedElevation = 8.dp,
+                        focusedElevation = 6.dp,
+                        hoveredElevation = 6.dp
+                    ),
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    text = { Text("Add folder", style = MaterialTheme.typography.bodyMedium) }
+                )
             }
         }
     ) { paddingValues ->
@@ -156,6 +172,7 @@ fun DesktopCreateFolderDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = SynapseDialogShape,
         title = {
             Text(
                 "Add Folder",
@@ -530,7 +547,8 @@ fun FolderDetailDialog(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Delete Folder?") },
+            shape = SynapseDialogShape,
+            title = { Text("Delete Folder?", style = MaterialTheme.typography.titleLarge) },
             text = {
                 Text("Remove \"${livFolder.label.ifEmpty { livFolder.id }}\" from Syncthing?\n\nThis will stop syncing but will NOT delete the files on disk.")
             },
@@ -552,6 +570,7 @@ fun FolderDetailDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = SynapseDialogShape,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(

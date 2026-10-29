@@ -77,7 +77,7 @@ fun FolderSummaryCard(
             Text(
                 text = if (pausedCount > 0) "${animatedPaused.toInt()} Paused" else "All Synced",
                 style = MaterialTheme.typography.bodySmall,
-                color = if (pausedCount > 0) MaterialTheme.colorScheme.secondary else Color(0xFF10B981)
+                color = if (pausedCount > 0) MaterialTheme.colorScheme.secondary else com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected
             )
         }
     }

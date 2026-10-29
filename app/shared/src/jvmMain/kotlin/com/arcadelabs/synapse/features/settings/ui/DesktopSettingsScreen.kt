@@ -426,7 +426,7 @@ fun DesktopSettingsScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = importStatusMessage!!,
-                        color = if (isImportSuccess) Color(0xFF10B981) else MaterialTheme.colorScheme.error,
+                        color = if (isImportSuccess) SynapseStatusColors.Connected else MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Bold
                     )
@@ -716,7 +716,7 @@ private fun DesktopSegmentedButtonRow(
             .height(40.dp)
             .border(
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                shape = RoundedCornerShape(20.dp)
+                shape = RoundedCornerShape(24.dp)
             )
             .background(Color.Transparent),
         verticalAlignment = Alignment.CenterVertically
@@ -728,26 +728,26 @@ private fun DesktopSegmentedButtonRow(
             val animatedWeight by animateFloatAsState(
                 targetValue = if (isSelected) 1.6f else 0.7f,
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
                     stiffness = Spring.StiffnessMedium
                 )
             )
 
             val animatedTopStart by animateDpAsState(
                 targetValue = if (isSelected) 24.dp else if (index == 0) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
+                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
             )
             val animatedBottomStart by animateDpAsState(
                 targetValue = if (isSelected) 24.dp else if (index == 0) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
+                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
             )
             val animatedTopEnd by animateDpAsState(
                 targetValue = if (isSelected) 24.dp else if (index == options.size - 1) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
+                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
             )
             val animatedBottomEnd by animateDpAsState(
                 targetValue = if (isSelected) 24.dp else if (index == options.size - 1) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
+                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
             )
 
             val animatedShape = RoundedCornerShape(
@@ -780,7 +780,7 @@ private fun DesktopSegmentedButtonRow(
             val scale by animateFloatAsState(
                 targetValue = if (isPressed) 0.98f else 1.0f,
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
                     stiffness = Spring.StiffnessMedium
                 )
             )
@@ -816,8 +816,8 @@ private fun DesktopSegmentedButtonRow(
                     )
                     AnimatedVisibility(
                         visible = isSelected,
-                        enter = expandHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)) + fadeIn(),
-                        exit = shrinkHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)) + fadeOut()
+                        enter = expandHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + fadeIn(),
+                        exit = shrinkHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + fadeOut()
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Spacer(modifier = Modifier.width(4.dp))

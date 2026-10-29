@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.ui.graphics.Color
-import com.arcadelabs.synapse.core.designsystem.FolderIcon
+import com.arcadelabs.synapse.core.designsystem.*
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import com.arcadelabs.synapse.SynapseBackHandler
@@ -492,10 +492,12 @@ fun FolderCard(
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Delete Folder?") },
+            shape = SynapseDialogShape,
+            title = { Text("Delete Folder?", style = MaterialTheme.typography.titleLarge) },
             text = {
                 Text(
-                            "Remove \"${folder.label.ifEmpty { folder.id }}\" from Syncthing?\n\nThis will stop syncing but will NOT delete the files on disk."
+                    "Remove \"${folder.label.ifEmpty { folder.id }}\" from Syncthing?\n\nThis will stop syncing but will NOT delete the files on disk.",
+                    style = MaterialTheme.typography.bodyMedium
                 )
             },
             confirmButton = {
@@ -504,6 +506,7 @@ fun FolderCard(
                         onDeleteFolder(folder.id)
                         showDeleteDialog = false
                     },
+                    shape = SynapsePillShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
@@ -511,7 +514,10 @@ fun FolderCard(
                 ) { Text("Delete") }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") }
+                TextButton(
+                    onClick = { showDeleteDialog = false },
+                    shape = SynapsePillShape
+                ) { Text("Cancel") }
             }
         )
     }
@@ -571,7 +577,7 @@ fun FolderCard(
             val statusColor = if (folder.paused)
                 MaterialTheme.colorScheme.tertiary
             else
-                Color(0xFF10B981) // Premium green for Synced
+                com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected // Safe emerald tint for Synced
 
             Surface(
                 shape = RoundedCornerShape(20.dp),

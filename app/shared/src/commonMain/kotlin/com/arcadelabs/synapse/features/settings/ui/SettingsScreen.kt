@@ -505,7 +505,7 @@ private fun SegmentedButtonRow(
             .height(40.dp)
             .background(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                shape = RoundedCornerShape(20.dp)
+                shape = RoundedCornerShape(24.dp)
             )
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -520,16 +520,16 @@ private fun SegmentedButtonRow(
             val weight by animateFloatAsState(
                 targetValue = if (isSelected) 1.6f else 0.7f,
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
                     stiffness = Spring.StiffnessMedium
                 )
             )
             
-            // Shape Morphing: Active morphs to 20.dp (fully rounded), Inactive morphs to 6.dp
+            // Shape Morphing: Active morphs to 24.dp (fully rounded pill), Inactive morphs to 6.dp
             val cornerRadius by animateDpAsState(
-                targetValue = if (isSelected) 20.dp else 6.dp,
+                targetValue = if (isSelected) 24.dp else 6.dp,
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
                     stiffness = Spring.StiffnessMedium
                 )
             )
@@ -540,7 +540,7 @@ private fun SegmentedButtonRow(
                     else -> Color.Transparent
                 },
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
                     stiffness = Spring.StiffnessMedium
                 )
             )
@@ -590,10 +590,10 @@ private fun SegmentedButtonRow(
                     
                     androidx.compose.animation.AnimatedVisibility(
                         visible = isSelected,
-                        enter = fadeIn(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)) + 
-                                expandHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)),
-                        exit = fadeOut(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)) + 
-                               shrinkHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium))
+                        enter = fadeIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + 
+                                expandHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)),
+                        exit = fadeOut(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + 
+                               shrinkHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium))
                     ) {
                         Row {
                             Spacer(modifier = Modifier.width(4.dp))
