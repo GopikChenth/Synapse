@@ -24,23 +24,40 @@ class SyncthingRunnable(
 
     fun start(onExit: (exitCode: Int) -> Unit) {
         scope.launch {
-            val binary = File(context.applicationInfo.nativeLibraryDir, "libsyncthingnative.so")
+            val binary = File(context.applicationInfo.nativeLibraryDir, "libsynapse.so").let {
+                if (it.exists()) it else File(context.applicationInfo.nativeLibraryDir, "libsyncthingnative.so")
+            }
             if (!binary.exists()) {
-                Log.e(TAG, "Syncthing core binary missing at ${binary.absolutePath}")
+                Log.e(TAG, "Synapse/Syncthing core binary missing at ${binary.absolutePath}")
                 onExit(-1)
                 return@launch
             }
 
-            val command = when (commandType) {
-                CommandType.SERVE -> listOf(binary.absolutePath, "serve", "--no-browser", "--no-restart")
-                CommandType.GENERATE -> listOf(binary.absolutePath, "generate")
-                CommandType.DEVICE_ID -> listOf(binary.absolutePath, "device-id")
+            val isSynapseCore = binary.name.contains("libsynapse")
+            val command = if (isSynapseCore) {
+                when (commandType) {
+                    CommandType.SERVE -> listOf(
+                        binary.absolutePath,
+                        "-H", context.filesDir.absolutePath,
+                        "-p", "8384",
+                        "run"
+                    )
+                    CommandType.GENERATE -> listOf(binary.absolutePath, "--version")
+                    CommandType.DEVICE_ID -> listOf(binary.absolutePath, "status")
+                }
+            } else {
+                when (commandType) {
+                    CommandType.SERVE -> listOf(binary.absolutePath, "serve", "--no-browser", "--no-restart")
+                    CommandType.GENERATE -> listOf(binary.absolutePath, "generate")
+                    CommandType.DEVICE_ID -> listOf(binary.absolutePath, "device-id")
+                }
             }
 
             val pb = ProcessBuilder(command)
             val env = pb.environment()
             env["HOME"] = context.filesDir.absolutePath
             env["STHOMEDIR"] = context.filesDir.absolutePath
+            env["SYNAPSE_HOME"] = context.filesDir.absolutePath
             env["STMONITORED"] = "1"
             env["STNOUPGRADE"] = "1"
             env["SQLITE_TMPDIR"] = context.cacheDir.absolutePath

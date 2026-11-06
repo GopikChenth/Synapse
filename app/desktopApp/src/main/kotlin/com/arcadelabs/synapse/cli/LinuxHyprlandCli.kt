@@ -427,9 +427,11 @@ object LinuxHyprlandCli {
             }
         }
 
-        // Fallback: Test managed defaults
-        if (pingApi(DesktopDaemonManager.MANAGED_BASE_URL, DesktopDaemonManager.MANAGED_API_KEY)) {
-            return Pair(DesktopDaemonManager.MANAGED_BASE_URL, DesktopDaemonManager.MANAGED_API_KEY)
+        // Fallback: Test managed defaults (check default 8384 and 9090)
+        for (candidateUrl in listOf(DesktopDaemonManager.MANAGED_BASE_URL, "http://127.0.0.1:9090")) {
+            if (pingApi(candidateUrl, DesktopDaemonManager.MANAGED_API_KEY)) {
+                return Pair(candidateUrl, DesktopDaemonManager.MANAGED_API_KEY)
+            }
         }
 
         return null
@@ -453,13 +455,19 @@ object LinuxHyprlandCli {
     }
 
     private fun pingApi(baseUrl: String, apiKey: String): Boolean {
+        return pingUrl("$baseUrl/api/v1/system/status", apiKey) ||
+               pingUrl("$baseUrl/rest/system/ping", apiKey)
+    }
+
+    private fun pingUrl(urlStr: String, apiKey: String): Boolean {
         return try {
-            val url = URI.create("$baseUrl/rest/system/ping").toURL()
+            val url = URI.create(urlStr).toURL()
             val conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 1500
             conn.readTimeout = 1500
             conn.setRequestProperty("X-API-Key", apiKey)
-            conn.responseCode == 200
+            conn.setRequestProperty("Authorization", "Bearer $apiKey")
+            conn.responseCode in 200..299
         } catch (_: Exception) {
             false
         }

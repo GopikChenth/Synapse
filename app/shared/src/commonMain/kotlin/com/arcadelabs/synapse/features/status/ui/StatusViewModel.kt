@@ -110,17 +110,21 @@ class StatusViewModel(
     private fun startPolling() {
         viewModelScope.launch {
             while (isActive) {
+                var succeeded = false
                 try {
                     updateStatus()
                     consecutiveFailures = 0
                     _error.value = null
+                    succeeded = true
                 } catch (e: Exception) {
                     consecutiveFailures++
                     if (consecutiveFailures >= failureThreshold) {
                         _statusState.value = _statusState.value.copy(isRunning = false)
                     }
                 }
-                delay(2000)
+                // Adaptive polling: 2s when running, 4s backoff when disconnected/idle to save resources
+                val pollDelay = if (succeeded && _statusState.value.isRunning) 2000L else 4000L
+                delay(pollDelay)
             }
         }
     }

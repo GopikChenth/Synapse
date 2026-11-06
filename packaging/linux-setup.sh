@@ -1,12 +1,28 @@
 #!/bin/bash
 # Prepares Linux & Hyprland environment for Synapse desktop runner
 mkdir -p "$HOME/Synapse/bin"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Priority 1: Check Synapse Core binary
+SYSTEM_SYNAPSE_CORE=$(which synapse-core 2>/dev/null || echo "")
+if [ -x "$SYSTEM_SYNAPSE_CORE" ]; then
+    ln -sf "$SYSTEM_SYNAPSE_CORE" "$HOME/Synapse/bin/synapse-core"
+    echo "[Synapse] Linked $SYSTEM_SYNAPSE_CORE -> $HOME/Synapse/bin/synapse-core"
+elif [ -f "$SCRIPT_DIR/../bin/synapse-core" ]; then
+    cp "$SCRIPT_DIR/../bin/synapse-core" "$HOME/Synapse/bin/synapse-core"
+    chmod +x "$HOME/Synapse/bin/synapse-core"
+    echo "[Synapse] Installed native synapse-core -> $HOME/Synapse/bin/synapse-core"
+elif [ -f "$HOME/Projects/Synapse Core/bin/synapse-core" ]; then
+    cp "$HOME/Projects/Synapse Core/bin/synapse-core" "$HOME/Synapse/bin/synapse-core"
+    chmod +x "$HOME/Synapse/bin/synapse-core"
+    echo "[Synapse] Installed Synapse Core from projects folder -> $HOME/Synapse/bin/synapse-core"
+fi
+
+# Priority 2: Fallback to syncthing
 SYSTEM_SYNCTHING=$(which syncthing 2>/dev/null || echo "/usr/bin/syncthing")
 if [ -x "$SYSTEM_SYNCTHING" ]; then
     ln -sf "$SYSTEM_SYNCTHING" "$HOME/Synapse/bin/syncthing.exe"
     echo "[Synapse] Linked $SYSTEM_SYNCTHING -> $HOME/Synapse/bin/syncthing.exe"
-else
-    echo "[Synapse] Warning: 'syncthing' binary not found. Please install it (e.g. sudo pacman -S syncthing)."
 fi
 
 # Hyprland auto-configuration

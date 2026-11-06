@@ -35,6 +35,7 @@ class DesktopDaemonManager {
         val isMac = osName.contains("mac")
         val isLinux = !isWindows && !isMac
         val exeName = if (isWindows) "syncthing.exe" else "syncthing"
+        val synapseExeName = if (isWindows) "synapse-core.exe" else "synapse-core"
 
         const val MANAGED_API_KEY  = "synapse-managed-api-key-2025"
         const val MANAGED_BASE_URL = "http://127.0.0.1:8384"
@@ -128,17 +129,31 @@ class DesktopDaemonManager {
 
         // ── Step 3: Start our own managed daemon ───────────────────────────────
         try {
-            val pb = ProcessBuilder(
-                binFile.absolutePath,
-                "serve",
-                "--home",        homeDir.absolutePath,
-                "--no-browser",
-                "--no-restart",
-                "--no-upgrade",
-                "--gui-apikey",  MANAGED_API_KEY,
-                "--gui-address", "127.0.0.1:8384"
-            )
-            pb.environment()["STNOUPGRADE"] = "1"
+            val isSynapseCore = binFile.name.contains("synapse-core", ignoreCase = true)
+            val logTag = if (isSynapseCore) "[SynapseCore]" else "[Syncthing]"
+
+            val pb = if (isSynapseCore) {
+                ProcessBuilder(
+                    binFile.absolutePath,
+                    "-H", homeDir.absolutePath,
+                    "-p", "8384",
+                    "--token", MANAGED_API_KEY,
+                    "run"
+                )
+            } else {
+                ProcessBuilder(
+                    binFile.absolutePath,
+                    "serve",
+                    "--home",        homeDir.absolutePath,
+                    "--no-browser",
+                    "--no-restart",
+                    "--no-upgrade",
+                    "--gui-apikey",  MANAGED_API_KEY,
+                    "--gui-address", "127.0.0.1:8384"
+                ).apply {
+                    environment()["STNOUPGRADE"] = "1"
+                }
+            }
             pb.redirectErrorStream(true)
 
             while (!isStopped) {
@@ -151,7 +166,7 @@ class DesktopDaemonManager {
                         proc.inputStream.bufferedReader().use { reader ->
                             var line = reader.readLine()
                             while (line != null) {
-                                println("[Syncthing] $line")
+                                println("$logTag $line")
                                 line = reader.readLine()
                             }
                         }
@@ -160,24 +175,28 @@ class DesktopDaemonManager {
 
                 Runtime.getRuntime().addShutdownHook(Thread { proc.destroy() })
 
-                // ── Step 4: Ping until the REST API is up ─────────────────────
+                // ── Step 4: Ping until the REST API is up (optimized backoff) ───
                 var ready = false
-                repeat(60) { // up to 30 seconds
-                    if (!ready && pingApi(MANAGED_BASE_URL, MANAGED_API_KEY)) {
+                var attempts = 0
+                while (attempts < 60 && !ready && !isStopped) {
+                    if (pingApi(MANAGED_BASE_URL, MANAGED_API_KEY)) {
                         ready = true
+                        break
                     }
-                    if (!ready) Thread.sleep(500)
+                    attempts++
+                    val sleepMs = if (attempts < 5) 200L else if (attempts < 15) 350L else 500L
+                    Thread.sleep(sleepMs)
                 }
 
                 if (!ready) {
-                    _state.value = DaemonState.Error("Syncthing did not respond after 30 seconds.")
+                    _state.value = DaemonState.Error("Daemon ($logTag) did not respond after 30 seconds.")
                     return
                 }
 
                 _state.value = DaemonState.Ready(MANAGED_API_KEY, MANAGED_BASE_URL)
 
                 val exitCode = proc.waitFor()
-                println("[Syncthing] Daemon process exited with code $exitCode")
+                println("$logTag Daemon process exited with code $exitCode")
 
                 if (exitCode != 3 || isStopped) {
                     break
@@ -188,11 +207,32 @@ class DesktopDaemonManager {
             }
 
         } catch (e: Exception) {
-            _state.value = DaemonState.Error("Failed to start Syncthing daemon: ${e.message}")
+            _state.value = DaemonState.Error("Failed to start daemon: ${e.message}")
         }
     }
 
     private fun resolveExecutableFile(binDir: File): File {
+        val userHome = System.getProperty("user.home") ?: "."
+
+        // Priority 1: Check Synapse Core binary (in managed bin, project dirs, or system)
+        val synapseCandidates = listOf(
+            File(binDir, synapseExeName),
+            File("bin", synapseExeName),
+            File("app/desktopApp/bin", synapseExeName),
+            File(userHome, ".local/bin/$synapseExeName"),
+            File("/usr/local/bin/$synapseExeName"),
+            File("/usr/bin/$synapseExeName"),
+            File("/opt/homebrew/bin/$synapseExeName"),
+            File(userHome, "Projects/Synapse Core/bin/$synapseExeName")
+        )
+        for (f in synapseCandidates) {
+            if (f.exists() && f.isFile && (isWindows || f.canExecute())) {
+                println("[Synapse] Resolved native Synapse Core binary at ${f.absolutePath}")
+                return f
+            }
+        }
+
+        // Priority 2: Check Syncthing legacy binary
         val localExe = File(binDir, exeName)
         if (localExe.exists() && localExe.isFile) return localExe
 
@@ -214,6 +254,10 @@ class DesktopDaemonManager {
         val pathEnv = System.getenv("PATH") ?: ""
         for (dir in pathEnv.split(File.pathSeparator)) {
             if (dir.isBlank()) continue
+            val synapseInPath = File(dir, synapseExeName)
+            if (synapseInPath.exists() && synapseInPath.isFile && (isWindows || synapseInPath.canExecute())) {
+                return synapseInPath
+            }
             val f = File(dir, exeName)
             if (f.exists() && f.isFile && f.canExecute()) return f
         }
@@ -222,6 +266,14 @@ class DesktopDaemonManager {
     }
 
     private fun tryConnectToRunning(localAppData: String, synapseDir: File): Pair<String, String>? {
+        // Fast direct check for already running Synapse Core or Syncthing
+        for (port in listOf(8384, 9090)) {
+            val candidateUrl = "http://127.0.0.1:$port"
+            if (pingApi(candidateUrl, MANAGED_API_KEY)) {
+                return Pair(MANAGED_API_KEY, candidateUrl)
+            }
+        }
+
         val userHome = System.getProperty("user.home") ?: ""
         val candidateConfigs = listOf(
             File(localAppData, "Syncthing${File.separator}config.xml"),
@@ -258,13 +310,19 @@ class DesktopDaemonManager {
     }
 
     private fun pingApi(baseUrl: String, apiKey: String): Boolean {
+        return pingUrl("$baseUrl/api/v1/system/status", apiKey) ||
+               pingUrl("$baseUrl/rest/system/ping", apiKey)
+    }
+
+    private fun pingUrl(urlString: String, apiKey: String): Boolean {
         return try {
-            val url = java.net.URI.create("$baseUrl/rest/system/ping").toURL()
+            val url = java.net.URI.create(urlString).toURL()
             val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 2000
-            conn.readTimeout = 2000
+            conn.connectTimeout = 1500
+            conn.readTimeout = 1500
             conn.setRequestProperty("X-API-Key", apiKey)
-            conn.responseCode == 200
+            conn.setRequestProperty("Authorization", "Bearer $apiKey")
+            conn.responseCode in 200..299
         } catch (_: Exception) { false }
     }
 

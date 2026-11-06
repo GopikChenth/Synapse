@@ -25,6 +25,11 @@ compose.desktop {
     application {
         mainClass = "com.arcadelabs.synapse.MainKt"
 
+        jvmArgs += listOf(
+            "-XX:+UseG1GC",
+            "-XX:+UseStringDeduplication"
+        )
+
         buildTypes.release.proguard {
             isEnabled.set(false)
             configurationFiles.from(project.file("proguard-rules.pro"))

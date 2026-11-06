@@ -21,6 +21,10 @@ syncthing-android-main/
 syncthing-main/
 *.zip
 **/bin/
+!/bin/
+!/bin/synapse-core
+!/app/desktopApp/bin/
+!/app/desktopApp/bin/synapse-core
 **/out/
 reference_syncthing_fork
 /ArcadeLabs/

@@ -43,6 +43,9 @@ import com.arcadelabs.synapse.core.domain.models.FolderDbStatus
 import com.arcadelabs.synapse.core.domain.models.toItemFinishedData
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.jsonPrimitive
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
@@ -911,16 +914,20 @@ fun ThisDeviceSection(
             var lastEventId = 0
             while (isActive) {
                 try {
+                    val statuses = coroutineScope {
+                        folders.map { folder ->
+                            async {
+                                try { apiClient.dbStatus(folder.id) } catch (_: Exception) { null }
+                            }
+                        }.awaitAll()
+                    }
                     var filesSum = 0L
                     var dirsSum = 0L
                     var bytesSum = 0L
-                    folders.forEach { folder ->
-                        try {
-                            val status = apiClient.dbStatus(folder.id)
-                            filesSum += status.localFiles
-                            dirsSum += status.localDirectories
-                            bytesSum += status.localBytes
-                        } catch (_: Exception) {}
+                    statuses.filterNotNull().forEach { status ->
+                        filesSum += status.localFiles
+                        dirsSum += status.localDirectories
+                        bytesSum += status.localBytes
                     }
                     totalLocalFiles = filesSum
                     totalLocalDirs = dirsSum
