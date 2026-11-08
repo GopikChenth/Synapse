@@ -21,6 +21,11 @@ data class CoreFolder(
     @SerialName("local_path") val localPath: String,
     @SerialName("conflict_policy") val conflictPolicy: String = "THREE_WAY_AUTO",
     @SerialName("is_paused") val isPaused: Boolean = false,
+    @SerialName("sync_mode") val syncMode: String = "SendReceive",
+    @SerialName("pull_order") val pullOrder: String = "Alphabetical",
+    @SerialName("versioning_type") val versioningType: String = "None",
+    @SerialName("versioning_keep_days") val versioningKeepDays: Long = 30,
+    @SerialName("marker_name") val markerName: String = ".synapse-folder",
     @SerialName("files_count") val filesCount: Int = 0
 )
 
@@ -28,7 +33,61 @@ data class CoreFolder(
 data class CoreRegisterFolderRequest(
     @SerialName("folder_id") val folderId: String,
     @SerialName("local_path") val localPath: String,
-    @SerialName("conflict_policy") val conflictPolicy: String = "THREE_WAY_AUTO"
+    @SerialName("conflict_policy") val conflictPolicy: String = "THREE_WAY_AUTO",
+    @SerialName("sync_mode") val syncMode: String? = null,
+    @SerialName("pull_order") val pullOrder: String? = null,
+    @SerialName("versioning_type") val versioningType: String? = null,
+    @SerialName("versioning_keep_days") val versioningKeepDays: Long? = null,
+    @SerialName("marker_name") val markerName: String? = null
+)
+
+@Serializable
+data class CoreDevice(
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("name") val name: String,
+    @SerialName("addresses") val addresses: List<String> = emptyList(),
+    @SerialName("is_paused") val isPaused: Boolean = false,
+    @SerialName("is_trusted") val isTrusted: Boolean = false,
+    @SerialName("introducer") val introducer: Boolean = false,
+    @SerialName("cert_name") val certName: String? = null,
+    @SerialName("created_at") val createdAt: Long = 0
+)
+
+@Serializable
+data class CorePendingDevice(
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("name") val name: String,
+    @SerialName("address") val address: String,
+    @SerialName("received_at") val receivedAt: Long
+)
+
+@Serializable
+data class CorePendingFolder(
+    @SerialName("folder_id") val folderId: String,
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("folder_label") val folderLabel: String,
+    @SerialName("offered_at") val offeredAt: Long
+)
+
+@Serializable
+data class CorePeerConnectionMetrics(
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("address") val address: String,
+    @SerialName("is_connected") val isConnected: Boolean,
+    @SerialName("in_bps") val inBps: Long = 0,
+    @SerialName("out_bps") val outBps: Long = 0,
+    @SerialName("total_in_bytes") val totalInBytes: Long = 0,
+    @SerialName("total_out_bytes") val totalOutBytes: Long = 0,
+    @SerialName("latency_ms") val latencyMs: Long = 0,
+    @SerialName("client_type") val clientType: String = "synapse-core"
+)
+
+@Serializable
+data class CoreSystemVersion(
+    @SerialName("version") val version: String,
+    @SerialName("codename") val codename: String,
+    @SerialName("os") val os: String,
+    @SerialName("arch") val arch: String
 )
 
 @Serializable

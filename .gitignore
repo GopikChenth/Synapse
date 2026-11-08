@@ -29,4 +29,9 @@ syncthing-main/
 reference_syncthing_fork
 /ArcadeLabs/
 
+# Rust Native Engine Build Cache
+synapse-core/target/
+*.pkg.tar.zst
+*.apk
+
 

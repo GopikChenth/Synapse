@@ -213,12 +213,19 @@ class DesktopDaemonManager {
 
     private fun resolveExecutableFile(binDir: File): File {
         val userHome = System.getProperty("user.home") ?: "."
+        val userDir = File(System.getProperty("user.dir") ?: ".")
 
         // Priority 1: Check Synapse Core binary (in managed bin, project dirs, or system)
         val synapseCandidates = listOf(
             File(binDir, synapseExeName),
             File("bin", synapseExeName),
+            File(userDir, "bin/$synapseExeName"),
             File("app/desktopApp/bin", synapseExeName),
+            File(userDir, "app/desktopApp/bin/$synapseExeName"),
+            File("synapse-core/bin", synapseExeName),
+            File(userDir, "synapse-core/bin/$synapseExeName"),
+            File("synapse-core/target/release", synapseExeName),
+            File(userDir, "synapse-core/target/release/$synapseExeName"),
             File(userHome, ".local/bin/$synapseExeName"),
             File("/usr/local/bin/$synapseExeName"),
             File("/usr/bin/$synapseExeName"),

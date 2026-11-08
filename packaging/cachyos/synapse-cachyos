@@ -17,6 +17,10 @@ fi
 
 # Ensure Linux daemon directory and symlink exist for Synapse
 mkdir -p "$HOME/Synapse/bin"
+SYSTEM_SYNAPSE_CORE=$(which synapse-core 2>/dev/null || echo "")
+if [ -x "$SYSTEM_SYNAPSE_CORE" ] && [ ! -x "$HOME/Synapse/bin/synapse-core" ]; then
+    ln -sf "$SYSTEM_SYNAPSE_CORE" "$HOME/Synapse/bin/synapse-core"
+fi
 SYSTEM_SYNCTHING=$(which syncthing 2>/dev/null || echo "/usr/bin/syncthing")
 if [ -x "$SYSTEM_SYNCTHING" ] && [ ! -x "$HOME/Synapse/bin/syncthing.exe" ]; then
     ln -sf "$SYSTEM_SYNCTHING" "$HOME/Synapse/bin/syncthing.exe"

@@ -1,6 +1,6 @@
 # Maintainer: ArcadeLabs <contact@arcadelabs.com>
 pkgname=synapse-cachyos
-pkgver=1.0.0
+pkgver=1.0.5
 pkgrel=1
 pkgdesc="Continuous Peer-to-Peer File Synchronization Client (CachyOS x86-64 Microarchitecture Optimized)"
 arch=('x86_64' 'x86_64_v3' 'x86_64_v4')
@@ -35,13 +35,13 @@ build() {
 }
 
 package() {
-    # Find target Compose Desktop UberJar file (prioritize app/desktopApp/build/compose/jars and >10MB JARs)
-    JAR_FILE=$(find "${startdir}" "${srcdir}" "${srcdir}/../../.." -path "*/app/desktopApp/build/compose/jars/*.jar" 2>/dev/null | head -n 1)
+    # Find target Compose Desktop UberJar file (prioritize app/desktopApp/build/compose/jars and >10MB JARs, newest first)
+    JAR_FILE=$(find "${startdir}" "${srcdir}" "${srcdir}/../../.." -path "*/app/desktopApp/build/compose/jars/*.jar" -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -f2- -d" ")
     if [ -z "$JAR_FILE" ]; then
-        JAR_FILE=$(find "${startdir}" "${srcdir}" "${srcdir}/../../.." -name "*Desktop*.jar" -o -name "*release*.jar" 2>/dev/null | head -n 1)
+        JAR_FILE=$(find "${startdir}" "${srcdir}" "${srcdir}/../../.." \( -name "*Desktop*.jar" -o -name "*release*.jar" \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -f2- -d" ")
     fi
     if [ -z "$JAR_FILE" ]; then
-        JAR_FILE=$(find "${startdir}" "${srcdir}" "${srcdir}/../../.." -name "*.jar" -size +10M 2>/dev/null | head -n 1)
+        JAR_FILE=$(find "${startdir}" "${srcdir}" "${srcdir}/../../.." -name "*.jar" -size +10M -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -f2- -d" ")
     fi
 
     if [ -z "$JAR_FILE" ]; then
@@ -51,6 +51,12 @@ package() {
 
     # Install application JAR
     install -Dm755 "${JAR_FILE}" "${pkgdir}/usr/share/synapse-cachyos/Synapse.jar"
+
+    # Install native Synapse Core binary into system PATH
+    CORE_BIN=$(find "${startdir}" "${srcdir}/../../.." -path "*/bin/synapse-core" -type f 2>/dev/null | head -n 1)
+    if [ -n "$CORE_BIN" ] && [ -f "$CORE_BIN" ]; then
+        install -Dm755 "${CORE_BIN}" "${pkgdir}/usr/bin/synapse-core"
+    fi
 
     # Install CachyOS optimized executable launcher script
     install -Dm755 "${srcdir}/synapse-cachyos" "${pkgdir}/usr/bin/synapse-cachyos"

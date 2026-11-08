@@ -40,6 +40,7 @@ class SyncthingRunnable(
                         binary.absolutePath,
                         "-H", context.filesDir.absolutePath,
                         "-p", "8384",
+                        "--token", "synapse-managed-api-key-2025",
                         "run"
                     )
                     CommandType.GENERATE -> listOf(binary.absolutePath, "--version")
@@ -58,6 +59,7 @@ class SyncthingRunnable(
             env["HOME"] = context.filesDir.absolutePath
             env["STHOMEDIR"] = context.filesDir.absolutePath
             env["SYNAPSE_HOME"] = context.filesDir.absolutePath
+            env["SYNAPSE_TOKEN"] = "synapse-managed-api-key-2025"
             env["STMONITORED"] = "1"
             env["STNOUPGRADE"] = "1"
             env["SQLITE_TMPDIR"] = context.cacheDir.absolutePath

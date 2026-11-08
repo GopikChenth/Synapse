@@ -297,17 +297,39 @@ internal class SyncthingApiClientImpl(
             return try {
                 val coreFolders = client.get("$baseUrl/api/v1/folders").body<List<CoreFolder>>()
                 val mappedFolders = coreFolders.map { f ->
+                    val folderDevices = try {
+                        val devs = client.get("$baseUrl/api/v1/folders/${f.folderId}/devices").body<List<CoreDevice>>()
+                        devs.map { FolderDeviceReference(deviceID = it.deviceId) }
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
                     Folder(
                         id = f.folderId,
                         label = f.folderId,
                         path = f.localPath,
-                        paused = f.isPaused
+                        paused = f.isPaused,
+                        type = f.syncMode,
+                        devices = folderDevices
+                    )
+                }
+                val coreDevices = try {
+                    client.get("$baseUrl/api/v1/devices").body<List<CoreDevice>>()
+                } catch (_: Exception) {
+                    emptyList()
+                }
+                val mappedDevices = coreDevices.map { d ->
+                    Device(
+                        deviceID = d.deviceId,
+                        name = d.name,
+                        addresses = d.addresses,
+                        paused = d.isPaused,
+                        introducer = d.introducer
                     )
                 }
                 SyncthingConfig(
                     version = 1,
                     folders = mappedFolders,
-                    devices = emptyList()
+                    devices = mappedDevices
                 )
             } catch (_: Exception) {
                 val key = getOrResolveApiKey()
@@ -340,7 +362,24 @@ internal class SyncthingApiClientImpl(
                 parsed.folders.forEach { f ->
                     client.post("$baseUrl/api/v1/folders") {
                         contentType(ContentType.Application.Json)
-                        setBody(CoreRegisterFolderRequest(f.id, f.path, "THREE_WAY_AUTO"))
+                        setBody(CoreRegisterFolderRequest(
+                            folderId = f.id,
+                            localPath = f.path,
+                            conflictPolicy = "THREE_WAY_AUTO",
+                            syncMode = f.type,
+                            markerName = ".synapse-folder"
+                        ))
+                    }
+                    f.devices.forEach { d ->
+                        try {
+                            client.post("$baseUrl/api/v1/folders/${f.id}/devices/${d.deviceID}")
+                        } catch (_: Exception) {}
+                    }
+                }
+                parsed.devices.forEach { d ->
+                    client.post("$baseUrl/api/v1/devices") {
+                        contentType(ContentType.Application.Json)
+                        setBody(CoreDevice(deviceId = d.deviceID, name = d.name, addresses = d.addresses))
                     }
                 }
                 return
@@ -425,24 +464,32 @@ internal class SyncthingApiClientImpl(
     override suspend fun dbStatus(folderId: String): FolderDbStatus {
         if (checkIsSynapseCore()) {
             return try {
-                val coreFolders = client.get("$baseUrl/api/v1/folders").body<List<CoreFolder>>()
-                val target = coreFolders.firstOrNull { it.folderId == folderId }
-                FolderDbStatus(
-                    localFiles = target?.filesCount?.toLong() ?: 0L,
-                    localDirectories = 0L,
-                    localBytes = 0L,
-                    globalFiles = target?.filesCount?.toLong() ?: 0L,
-                    globalBytes = 0L,
-                    inSyncBytes = 0L,
-                    state = if (target?.isPaused == true) "paused" else "idle",
-                    pullErrors = 0L
-                )
-            } catch (_: Exception) {
-                val key = getOrResolveApiKey()
                 client.get("$baseUrl/rest/db/status") {
-                    header("X-API-Key", key)
                     parameter("folder", folderId)
-                }.body()
+                }.body<FolderDbStatus>()
+            } catch (_: Exception) {
+                try {
+                    val coreFolders = client.get("$baseUrl/api/v1/folders").body<List<CoreFolder>>()
+                    val target = coreFolders.firstOrNull { it.folderId == folderId }
+                    val pullErrorsCount = try {
+                        val conflicts = client.get("$baseUrl/api/v1/conflicts").body<List<CoreQuarantineConflict>>()
+                        conflicts.count { it.folderId == folderId }.toLong()
+                    } catch (_: Exception) {
+                        0L
+                    }
+                    FolderDbStatus(
+                        localFiles = target?.filesCount?.toLong() ?: 0L,
+                        localDirectories = 0L,
+                        localBytes = 0L,
+                        globalFiles = target?.filesCount?.toLong() ?: 0L,
+                        globalBytes = 0L,
+                        inSyncBytes = 0L,
+                        state = if (target?.isPaused == true) "paused" else "idle",
+                        pullErrors = pullErrorsCount
+                    )
+                } catch (_: Exception) {
+                    FolderDbStatus()
+                }
             }
         }
         val key = getOrResolveApiKey()
@@ -454,13 +501,36 @@ internal class SyncthingApiClientImpl(
 
     override suspend fun systemConnections(): ConnectionsResponse {
         if (checkIsSynapseCore()) {
-            return ConnectionsResponse(
-                connections = emptyMap(),
-                total = TotalConnection(
-                    inBytesTotal = 0L,
-                    outBytesTotal = 0L
+            return try {
+                val metricsMap = client.get("$baseUrl/api/v1/connections").body<Map<String, CorePeerConnectionMetrics>>()
+                var totalIn = 0L
+                var totalOut = 0L
+                val mapped = mutableMapOf<String, DeviceConnection>()
+                for ((k, m) in metricsMap) {
+                    totalIn += m.totalInBytes
+                    totalOut += m.totalOutBytes
+                    mapped[k] = DeviceConnection(
+                        address = m.address,
+                        clientVersion = m.clientType,
+                        connected = m.isConnected,
+                        type = "QUIC",
+                        inBytesTotal = m.totalInBytes,
+                        outBytesTotal = m.totalOutBytes
+                    )
+                }
+                ConnectionsResponse(
+                    connections = mapped,
+                    total = TotalConnection(
+                        inBytesTotal = totalIn,
+                        outBytesTotal = totalOut
+                    )
                 )
-            )
+            } catch (_: Exception) {
+                ConnectionsResponse(
+                    connections = emptyMap(),
+                    total = TotalConnection(inBytesTotal = 0L, outBytesTotal = 0L)
+                )
+            }
         }
         val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/system/connections") {
@@ -470,14 +540,21 @@ internal class SyncthingApiClientImpl(
 
     override suspend fun dbCompletion(deviceId: String, folderId: String): DeviceCompletion {
         if (checkIsSynapseCore()) {
-            return DeviceCompletion(
-                completion = 100.0,
-                globalBytes = 0L,
-                needBytes = 0L,
-                device = deviceId,
-                folder = folderId,
-                remoteState = ""
-            )
+            return try {
+                client.get("$baseUrl/rest/db/completion") {
+                    parameter("device", deviceId)
+                    parameter("folder", folderId)
+                }.body<DeviceCompletion>()
+            } catch (_: Exception) {
+                DeviceCompletion(
+                    completion = 100.0,
+                    globalBytes = 0L,
+                    needBytes = 0L,
+                    device = deviceId,
+                    folder = folderId,
+                    remoteState = ""
+                )
+            }
         }
         val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/db/completion") {
@@ -505,6 +582,13 @@ internal class SyncthingApiClientImpl(
     }
 
     override suspend fun pauseDevice(deviceId: String): HttpResponse {
+        if (checkIsSynapseCore()) {
+            return try {
+                client.post("$baseUrl/api/v1/devices/$deviceId/pause")
+            } catch (_: Exception) {
+                client.get("$baseUrl/api/v1/system/status")
+            }
+        }
         val key = getOrResolveApiKey()
         return client.post("$baseUrl/rest/system/pause") {
             header("X-API-Key", key)
@@ -513,6 +597,13 @@ internal class SyncthingApiClientImpl(
     }
 
     override suspend fun resumeDevice(deviceId: String): HttpResponse {
+        if (checkIsSynapseCore()) {
+            return try {
+                client.post("$baseUrl/api/v1/devices/$deviceId/resume")
+            } catch (_: Exception) {
+                client.get("$baseUrl/api/v1/system/status")
+            }
+        }
         val key = getOrResolveApiKey()
         return client.post("$baseUrl/rest/system/resume") {
             header("X-API-Key", key)
@@ -521,6 +612,14 @@ internal class SyncthingApiClientImpl(
     }
 
     override suspend fun setFolderPaused(folderId: String, paused: Boolean): HttpResponse {
+        if (checkIsSynapseCore()) {
+            val endpoint = if (paused) "$baseUrl/api/v1/folders/$folderId/pause" else "$baseUrl/api/v1/folders/$folderId/resume"
+            return try {
+                client.post(endpoint)
+            } catch (_: Exception) {
+                client.get("$baseUrl/api/v1/system/status")
+            }
+        }
         val key = getOrResolveApiKey()
         // PATCH /rest/config/folders/{id} is the correct endpoint for toggling folder pause.
         // /rest/system/pause and /rest/system/resume are DEVICE-ONLY — Syncthing silently ignores the folder param.
@@ -533,6 +632,13 @@ internal class SyncthingApiClientImpl(
     }
     
     override suspend fun restart(): HttpResponse {
+        if (checkIsSynapseCore()) {
+            return try {
+                client.post("$baseUrl/rest/system/restart")
+            } catch (_: Exception) {
+                client.get("$baseUrl/api/v1/system/status")
+            }
+        }
         val key = getOrResolveApiKey()
         return client.post("$baseUrl/rest/system/restart") {
             header("X-API-Key", key)
@@ -540,6 +646,13 @@ internal class SyncthingApiClientImpl(
     }
 
     override suspend fun shutdown(): HttpResponse {
+        if (checkIsSynapseCore()) {
+            return try {
+                client.post("$baseUrl/rest/system/shutdown")
+            } catch (_: Exception) {
+                client.get("$baseUrl/api/v1/system/status")
+            }
+        }
         val key = getOrResolveApiKey()
         return client.post("$baseUrl/rest/system/shutdown") {
             header("X-API-Key", key)
@@ -548,7 +661,15 @@ internal class SyncthingApiClientImpl(
 
     override suspend fun scan(folderId: String?): HttpResponse {
         if (checkIsSynapseCore()) {
-            return client.get("$baseUrl/api/v1/system/status")
+            return try {
+                if (folderId != null) {
+                    client.post("$baseUrl/api/v1/folders/$folderId/rescan")
+                } else {
+                    client.post("$baseUrl/rest/db/scan")
+                }
+            } catch (_: Exception) {
+                client.get("$baseUrl/api/v1/system/status")
+            }
         }
         val key = getOrResolveApiKey()
         val response = client.post("$baseUrl/rest/db/scan") {
@@ -565,6 +686,12 @@ internal class SyncthingApiClientImpl(
     }
 
     override suspend fun deleteFolder(folderId: String) {
+        if (checkIsSynapseCore()) {
+            try {
+                client.delete("$baseUrl/api/v1/folders/$folderId")
+            } catch (_: Exception) {}
+            return
+        }
         val key = getOrResolveApiKey()
         val response = client.delete("$baseUrl/rest/config/folders/$folderId") {
             header("X-API-Key", key)
@@ -575,6 +702,12 @@ internal class SyncthingApiClientImpl(
     }
 
     override suspend fun deleteDevice(deviceId: String) {
+        if (checkIsSynapseCore()) {
+            try {
+                client.delete("$baseUrl/api/v1/devices/$deviceId")
+            } catch (_: Exception) {}
+            return
+        }
         val key = getOrResolveApiKey()
         val response = client.delete("$baseUrl/rest/config/devices/$deviceId") {
             header("X-API-Key", key)
@@ -585,7 +718,20 @@ internal class SyncthingApiClientImpl(
     }
 
     override suspend fun getPendingDevices(): Map<String, PendingDevice> {
-        if (checkIsSynapseCore()) return emptyMap()
+        if (checkIsSynapseCore()) {
+            return try {
+                val list = client.get("$baseUrl/api/v1/cluster/pending/devices").body<List<CorePendingDevice>>()
+                list.associate { d ->
+                    d.deviceId to PendingDevice(
+                        name = d.name,
+                        address = d.address,
+                        time = d.receivedAt.toString()
+                    )
+                }
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        }
         val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/cluster/pending/devices") {
             header("X-API-Key", key)
@@ -593,6 +739,13 @@ internal class SyncthingApiClientImpl(
     }
 
     override suspend fun dismissPendingDevice(deviceId: String): HttpResponse {
+        if (checkIsSynapseCore()) {
+            return try {
+                client.post("$baseUrl/api/v1/cluster/pending/devices/$deviceId/reject")
+            } catch (_: Exception) {
+                client.get("$baseUrl/api/v1/system/status")
+            }
+        }
         val key = getOrResolveApiKey()
         val deleteResponse = client.delete("$baseUrl/rest/cluster/pending/devices") {
             header("X-API-Key", key)
@@ -622,7 +775,23 @@ internal class SyncthingApiClientImpl(
     }
 
     override suspend fun getPendingFolders(): Map<String, PendingFolderOffer> {
-        if (checkIsSynapseCore()) return emptyMap()
+        if (checkIsSynapseCore()) {
+            return try {
+                val list = client.get("$baseUrl/api/v1/cluster/pending/folders").body<List<CorePendingFolder>>()
+                list.associate { f ->
+                    f.folderId to PendingFolderOffer(
+                        offeredBy = mapOf(
+                            f.deviceId to PendingFolder(
+                                label = f.folderLabel,
+                                time = f.offeredAt.toString()
+                            )
+                        )
+                    )
+                }
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        }
         val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/cluster/pending/folders") {
             header("X-API-Key", key)
@@ -635,6 +804,13 @@ internal class SyncthingApiClientImpl(
         label: String,
         time: String
     ): HttpResponse {
+        if (checkIsSynapseCore()) {
+            return try {
+                client.post("$baseUrl/api/v1/cluster/pending/folders/$folderId/reject")
+            } catch (_: Exception) {
+                client.get("$baseUrl/api/v1/system/status")
+            }
+        }
         val key = getOrResolveApiKey()
         val deleteResponse = client.delete("$baseUrl/rest/cluster/pending/folders") {
             header("X-API-Key", key)
