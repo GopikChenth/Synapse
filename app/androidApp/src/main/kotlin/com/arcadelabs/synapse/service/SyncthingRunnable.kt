@@ -41,6 +41,7 @@ class SyncthingRunnable(
                         "-H", context.filesDir.absolutePath,
                         "-p", "8384",
                         "--token", "synapse-managed-api-key-2025",
+                        "--device-name", android.os.Build.MODEL,
                         "run"
                     )
                     CommandType.GENERATE -> listOf(binary.absolutePath, "--version")

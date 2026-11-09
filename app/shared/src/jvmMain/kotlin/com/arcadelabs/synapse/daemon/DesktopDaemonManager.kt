@@ -132,12 +132,14 @@ class DesktopDaemonManager {
             val isSynapseCore = binFile.name.contains("synapse-core", ignoreCase = true)
             val logTag = if (isSynapseCore) "[SynapseCore]" else "[Syncthing]"
 
+            val hostName = try { java.net.InetAddress.getLocalHost().hostName } catch (_: Exception) { "Desktop" }
             val pb = if (isSynapseCore) {
                 ProcessBuilder(
                     binFile.absolutePath,
                     "-H", homeDir.absolutePath,
                     "-p", "8384",
                     "--token", MANAGED_API_KEY,
+                    "--device-name", hostName,
                     "run"
                 )
             } else {

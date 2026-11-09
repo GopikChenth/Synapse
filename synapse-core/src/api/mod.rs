@@ -555,8 +555,10 @@ async fn list_devices(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn add_device(
     State(state): State<AppState>,
-    Json(payload): Json<DeviceRecord>,
+    Json(mut payload): Json<DeviceRecord>,
 ) -> impl IntoResponse {
+    payload.device_id = crate::p2p::identity::normalize_device_id(&payload.device_id)
+        .unwrap_or_else(|_| payload.device_id.trim().to_lowercase());
     match state.sync_engine.storage().add_device(&payload) {
         Ok(_) => {
             let _ = state.sync_engine.event_sender().send(CoreEvent::DevicePaired {

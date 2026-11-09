@@ -346,7 +346,7 @@ impl StorageEngine {
 
             -- Cluster & Paired Devices
             CREATE TABLE IF NOT EXISTS devices (
-                device_id TEXT PRIMARY KEY,
+                device_id TEXT PRIMARY KEY COLLATE NOCASE,
                 name TEXT NOT NULL,
                 addresses TEXT NOT NULL DEFAULT 'dynamic',
                 is_paused INTEGER NOT NULL DEFAULT 0,
@@ -358,7 +358,7 @@ impl StorageEngine {
 
             -- Pending incoming device pairings
             CREATE TABLE IF NOT EXISTS pending_devices (
-                device_id TEXT PRIMARY KEY,
+                device_id TEXT PRIMARY KEY COLLATE NOCASE,
                 name TEXT NOT NULL,
                 address TEXT NOT NULL,
                 received_at INTEGER NOT NULL
@@ -367,7 +367,7 @@ impl StorageEngine {
             -- Folder Sharing Matrix (Which folders are shared with which devices)
             CREATE TABLE IF NOT EXISTS folder_devices (
                 folder_id TEXT NOT NULL,
-                device_id TEXT NOT NULL,
+                device_id TEXT NOT NULL COLLATE NOCASE,
                 PRIMARY KEY (folder_id, device_id),
                 FOREIGN KEY (folder_id) REFERENCES folders(folder_id) ON DELETE CASCADE
             );
@@ -375,7 +375,7 @@ impl StorageEngine {
             -- Pending incoming folder invitations
             CREATE TABLE IF NOT EXISTS pending_folders (
                 folder_id TEXT NOT NULL,
-                device_id TEXT NOT NULL,
+                device_id TEXT NOT NULL COLLATE NOCASE,
                 folder_label TEXT NOT NULL,
                 offered_at INTEGER NOT NULL,
                 PRIMARY KEY (folder_id, device_id)
@@ -550,7 +550,7 @@ impl StorageEngine {
                 introducer = excluded.introducer,
                 cert_name = excluded.cert_name",
             params![
-                device.device_id,
+                device.device_id.trim(),
                 device.name,
                 addrs_json,
                 if device.is_paused { 1 } else { 0 },
@@ -560,6 +560,7 @@ impl StorageEngine {
                 device.created_at,
             ],
         )?;
+        let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![device.device_id.trim()]);
         Ok(())
     }
 
@@ -591,12 +592,14 @@ impl StorageEngine {
     }
 
     pub fn get_device(&self, device_id: &str) -> SqlResult<Option<DeviceRecord>> {
+        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
+            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at
-             FROM devices WHERE device_id = ?1",
+             FROM devices WHERE LOWER(device_id) = LOWER(?1) OR LOWER(device_id) = LOWER(?2)",
         )?;
-        let mut rows = stmt.query_map(params![device_id], |row| {
+        let mut rows = stmt.query_map(params![device_id.trim(), norm_id], |row| {
             let addrs_raw: String = row.get(2)?;
             let addresses: Vec<String> = serde_json::from_str(&addrs_raw).unwrap_or_default();
             Ok(DeviceRecord {
@@ -618,25 +621,31 @@ impl StorageEngine {
     }
 
     pub fn remove_device(&self, device_id: &str) -> SqlResult<()> {
+        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
+            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM devices WHERE device_id = ?1", params![device_id])?;
-        conn.execute("DELETE FROM folder_devices WHERE device_id = ?1", params![device_id])?;
+        conn.execute("DELETE FROM devices WHERE LOWER(device_id) = LOWER(?1) OR LOWER(device_id) = LOWER(?2)", params![device_id.trim(), norm_id])?;
+        conn.execute("DELETE FROM folder_devices WHERE LOWER(device_id) = LOWER(?1) OR LOWER(device_id) = LOWER(?2)", params![device_id.trim(), norm_id])?;
         Ok(())
     }
 
     pub fn set_device_paused(&self, device_id: &str, paused: bool) -> SqlResult<()> {
+        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
+            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE devices SET is_paused = ?1 WHERE device_id = ?2",
-            params![if paused { 1 } else { 0 }, device_id],
+            "UPDATE devices SET is_paused = ?1 WHERE LOWER(device_id) = LOWER(?2) OR LOWER(device_id) = LOWER(?3)",
+            params![if paused { 1 } else { 0 }, device_id.trim(), norm_id],
         )?;
         Ok(())
     }
 
     pub fn is_device_introducer(&self, device_id: &str) -> SqlResult<bool> {
+        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
+            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT introducer FROM devices WHERE device_id = ?1")?;
-        let mut rows = stmt.query_map(params![device_id], |row| row.get::<_, i64>(0))?;
+        let mut stmt = conn.prepare("SELECT introducer FROM devices WHERE LOWER(device_id) = LOWER(?1) OR LOWER(device_id) = LOWER(?2)")?;
+        let mut rows = stmt.query_map(params![device_id.trim(), norm_id], |row| row.get::<_, i64>(0))?;
         if let Some(r) = rows.next() {
             Ok(r? != 0)
         } else {
@@ -645,18 +654,22 @@ impl StorageEngine {
     }
 
     pub fn set_device_introducer(&self, device_id: &str, introducer: bool) -> SqlResult<()> {
+        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
+            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE devices SET introducer = ?1 WHERE device_id = ?2",
-            params![if introducer { 1 } else { 0 }, device_id],
+            "UPDATE devices SET introducer = ?1 WHERE LOWER(device_id) = LOWER(?2) OR LOWER(device_id) = LOWER(?3)",
+            params![if introducer { 1 } else { 0 }, device_id.trim(), norm_id],
         )?;
         Ok(())
     }
 
     pub fn is_device_trusted(&self, device_id: &str) -> SqlResult<bool> {
+        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
+            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT is_trusted FROM devices WHERE device_id = ?1")?;
-        let mut rows = stmt.query_map(params![device_id], |row| row.get::<_, i64>(0))?;
+        let mut stmt = conn.prepare("SELECT is_trusted FROM devices WHERE LOWER(device_id) = LOWER(?1) OR LOWER(device_id) = LOWER(?2)")?;
+        let mut rows = stmt.query_map(params![device_id.trim(), norm_id], |row| row.get::<_, i64>(0))?;
         if let Some(r) = rows.next() {
             Ok(r? != 0)
         } else {
@@ -665,10 +678,12 @@ impl StorageEngine {
     }
 
     pub fn set_device_trusted(&self, device_id: &str, is_trusted: bool) -> SqlResult<()> {
+        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
+            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE devices SET is_trusted = ?1 WHERE device_id = ?2",
-            params![if is_trusted { 1 } else { 0 }, device_id],
+            "UPDATE devices SET is_trusted = ?1 WHERE LOWER(device_id) = LOWER(?2) OR LOWER(device_id) = LOWER(?3)",
+            params![if is_trusted { 1 } else { 0 }, device_id.trim(), norm_id],
         )?;
         Ok(())
     }
@@ -832,6 +847,10 @@ impl StorageEngine {
     // =========================================================================
 
     pub fn add_pending_device(&self, rec: &PendingDeviceRecord) -> SqlResult<()> {
+        // Do not add to pending if already a configured device
+        if let Ok(Some(_)) = self.get_device(&rec.device_id) {
+            return Ok(());
+        }
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO pending_devices (device_id, name, address, received_at)
@@ -840,7 +859,7 @@ impl StorageEngine {
                 name = excluded.name,
                 address = excluded.address,
                 received_at = excluded.received_at",
-            params![rec.device_id, rec.name, rec.address, rec.received_at],
+            params![rec.device_id.trim(), rec.name, rec.address, rec.received_at],
         )?;
         Ok(())
     }
@@ -860,8 +879,19 @@ impl StorageEngine {
         })?;
 
         let mut list = Vec::new();
+        let mut to_purge = Vec::new();
         for item in rows {
-            list.push(item?);
+            let record = item?;
+            let mut check_stmt = conn.prepare("SELECT 1 FROM devices WHERE LOWER(device_id) = LOWER(?1)")?;
+            let already_paired = check_stmt.exists(params![record.device_id])?;
+            if already_paired {
+                to_purge.push(record.device_id);
+            } else {
+                list.push(record);
+            }
+        }
+        for purged_id in to_purge {
+            let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![purged_id]);
         }
         Ok(list)
     }
@@ -869,9 +899,9 @@ impl StorageEngine {
     pub fn accept_pending_device(&self, device_id: &str) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT device_id, name, address, received_at FROM pending_devices WHERE device_id = ?1",
+            "SELECT device_id, name, address, received_at FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)",
         )?;
-        let pending = stmt.query_row(params![device_id], |row| {
+        let pending = stmt.query_row(params![device_id.trim()], |row| {
             Ok(PendingDeviceRecord {
                 device_id: row.get(0)?,
                 name: row.get(1)?,
@@ -890,13 +920,13 @@ impl StorageEngine {
             params![pending.device_id, pending.name, addrs_json, pending.received_at],
         )?;
 
-        conn.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
+        conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![device_id.trim()])?;
         Ok(())
     }
 
     pub fn reject_pending_device(&self, device_id: &str) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
+        conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![device_id.trim()])?;
         Ok(())
     }
 
