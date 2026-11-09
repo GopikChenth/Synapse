@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import com.arcadelabs.synapse.core.designsystem.*
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
+import com.arcadelabs.synapse.core.domain.state.AsyncResource
 import com.arcadelabs.synapse.SynapseBackHandler
 
 fun generateRandomFolderId(): String {
@@ -43,39 +44,57 @@ fun FoldersScreen(
     openFolder: ((String) -> Unit)? = null,
     viewModel: FolderViewModel = koinViewModel()
 ) {
-    val folders by viewModel.foldersState.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val error by viewModel.error.collectAsState()
+    val state by viewModel.state.collectAsState()
+    val folders = state.folders
+    val isLoading = state.isLoading
+    val error = state.error
 
     Box(
         modifier = Modifier
             .fillMaxSize()
     ) {
-        when {
-            isLoading && folders.isEmpty() -> {
+        when (val res = state.resource) {
+            is AsyncResource.Loading -> {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center)
                 )
             }
-            error != null && folders.isEmpty() -> {
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = error ?: "An error occurred",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(onClick = { viewModel.loadFolders() }) {
-                        Text("Retry")
+            is AsyncResource.Error -> {
+                if (folders.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = res.message.ifEmpty { error ?: "An error occurred" },
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(onClick = { viewModel.loadFolders() }) {
+                            Text("Retry")
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp, top = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(folders) { folder ->
+                            FolderCard(
+                                folder = folder,
+                                onOpenClick = { onEditFolderClick(folder) },
+                                onDeleteFolder = { viewModel.deleteFolder(it) },
+                                onRescanFolder = { viewModel.rescanFolder(it) }
+                            )
+                        }
                     }
                 }
             }
-            folders.isEmpty() -> {
+            is AsyncResource.Empty -> {
                 Column(
                     modifier = Modifier
                         .align(Alignment.Center)
@@ -102,7 +121,7 @@ fun FoldersScreen(
                     )
                 }
             }
-            else -> {
+            is AsyncResource.Success, is AsyncResource.Idle -> {
                 LazyColumn(
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp, top = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),

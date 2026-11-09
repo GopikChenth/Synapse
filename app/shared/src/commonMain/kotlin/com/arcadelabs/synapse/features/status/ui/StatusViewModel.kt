@@ -3,6 +3,8 @@ package com.arcadelabs.synapse.features.status.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arcadelabs.synapse.core.domain.models.*
+import com.arcadelabs.synapse.core.domain.state.BackendEngineType
+import com.arcadelabs.synapse.core.domain.state.EngineConnectionState
 import com.arcadelabs.synapse.core.network.*
 import com.arcadelabs.synapse.core.prefs.PreferencesHelper
 import kotlin.time.TimeSource
@@ -20,6 +22,8 @@ enum class RunBehavior {
 
 data class StatusUiState(
     val isRunning: Boolean = false,
+    val engineState: EngineConnectionState = EngineConnectionState.Disconnected,
+    val engineType: BackendEngineType = BackendEngineType.UNKNOWN,
     val myId: String = "",
     val uptime: Long = 0,
     val allocBytes: Long = 0,
@@ -119,7 +123,18 @@ class StatusViewModel(
                 } catch (e: Exception) {
                     consecutiveFailures++
                     if (consecutiveFailures >= failureThreshold) {
-                        _statusState.value = _statusState.value.copy(isRunning = false)
+                        _statusState.value = _statusState.value.copy(
+                            isRunning = false,
+                            engineState = EngineConnectionState.Disconnected
+                        )
+                    } else {
+                        _statusState.value = _statusState.value.copy(
+                            engineState = EngineConnectionState.Reconnecting(
+                                consecutiveFailures = consecutiveFailures,
+                                threshold = failureThreshold,
+                                lastKnownEngine = _statusState.value.engineType
+                            )
+                        )
                     }
                 }
                 // Adaptive polling: 2s when running, 4s backoff when disconnected/idle to save resources
@@ -153,8 +168,23 @@ class StatusViewModel(
             lastInBytes = currentIn
             lastOutBytes = currentOut
 
+            val isSynapse = version.longVersion.contains("Native Rust", ignoreCase = true) ||
+                version.longVersion.contains("synapse", ignoreCase = true) ||
+                version.currentVersion.contains("synapse", ignoreCase = true)
+            val engine = if (isSynapse) BackendEngineType.SYNAPSE_CORE else BackendEngineType.SYNCTHING
+
+            val engineConn = EngineConnectionState.Connected(
+                engine = engine,
+                baseUrl = systemStatus.guiAddressUsed.ifEmpty { "http://127.0.0.1:8384" },
+                deviceId = systemStatus.myID,
+                version = version.currentVersion,
+                uptimeSeconds = systemStatus.uptime
+            )
+
             _statusState.value = StatusUiState(
                 isRunning = true,
+                engineState = engineConn,
+                engineType = engine,
                 myId = systemStatus.myID,
                 uptime = systemStatus.uptime,
                 allocBytes = systemStatus.alloc,

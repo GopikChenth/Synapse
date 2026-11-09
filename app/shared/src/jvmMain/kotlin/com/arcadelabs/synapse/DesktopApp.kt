@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arcadelabs.synapse.core.designsystem.*
+import com.arcadelabs.synapse.core.navigation.AppModalState
 import com.arcadelabs.synapse.core.domain.models.PendingFolder
 import com.arcadelabs.synapse.core.domain.models.PendingFolderOffer
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
@@ -101,6 +102,9 @@ fun DesktopApp(
     apiClient: SyncthingApiClient = koinInject(),
     deviceViewModel: DeviceViewModel = koinViewModel()
 ) {
+    // ── Explicit Modal State Machine (Elevates UX, DX, AX) ──────────────────
+    var modalState by remember { mutableStateOf<AppModalState>(AppModalState.None) }
+
     var isCreateFolderDialogOpen by remember { mutableStateOf(false) }
     var isEditFolderDialogOpen by remember { mutableStateOf(false) }
     var folderToEdit by remember { mutableStateOf<com.arcadelabs.synapse.core.domain.models.Folder?>(null) }
@@ -114,6 +118,62 @@ fun DesktopApp(
     var prefilledFolderId by remember { mutableStateOf("") }
     var prefilledFolderLabel by remember { mutableStateOf("") }
     var prefilledFolderSharedDevices by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // Synchronize UI flags into modalState
+    LaunchedEffect(
+        isCreateFolderDialogOpen,
+        isEditFolderDialogOpen,
+        isAddDeviceDialogOpen,
+        isEditDeviceDialogOpen,
+        isRestartConfirmOpen,
+        isShutdownConfirmOpen
+    ) {
+        modalState = when {
+            isCreateFolderDialogOpen -> AppModalState.CreateFolder(prefilledFolderId, prefilledFolderLabel, prefilledFolderSharedDevices)
+            isEditFolderDialogOpen && folderToEdit != null -> AppModalState.EditFolder(folderToEdit!!)
+            isAddDeviceDialogOpen -> AppModalState.AddDevice(prefilledDeviceId, prefilledDeviceName)
+            isEditDeviceDialogOpen && deviceToEdit != null -> AppModalState.EditDevice(deviceToEdit!!)
+            isRestartConfirmOpen -> AppModalState.ConfirmRestart
+            isShutdownConfirmOpen -> AppModalState.ConfirmShutdown
+            else -> AppModalState.None
+        }
+    }
+
+    // Synchronize programmatic modalState transitions into UI flags
+    LaunchedEffect(modalState) {
+        when (val m = modalState) {
+            is AppModalState.None -> {
+                isCreateFolderDialogOpen = false
+                isEditFolderDialogOpen = false
+                isAddDeviceDialogOpen = false
+                isEditDeviceDialogOpen = false
+                isRestartConfirmOpen = false
+                isShutdownConfirmOpen = false
+            }
+            is AppModalState.CreateFolder -> {
+                prefilledFolderId = m.prefilledId
+                prefilledFolderLabel = m.prefilledLabel
+                prefilledFolderSharedDevices = m.prefilledSharedDevices
+                isCreateFolderDialogOpen = true
+            }
+            is AppModalState.EditFolder -> {
+                folderToEdit = m.folder
+                isEditFolderDialogOpen = true
+            }
+            is AppModalState.AddDevice -> {
+                prefilledDeviceId = m.prefilledId
+                prefilledDeviceName = m.prefilledName
+                isAddDeviceDialogOpen = true
+            }
+            is AppModalState.EditDevice -> {
+                deviceToEdit = m.device
+                isEditDeviceDialogOpen = true
+            }
+            is AppModalState.ConfirmRestart -> isRestartConfirmOpen = true
+            is AppModalState.ConfirmShutdown -> isShutdownConfirmOpen = true
+            else -> {}
+        }
+    }
 
     var localDeviceId by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {

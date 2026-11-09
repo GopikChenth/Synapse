@@ -33,6 +33,7 @@ import com.arcadelabs.synapse.core.domain.models.PendingFolder
 import com.arcadelabs.synapse.core.domain.models.PendingFolderOffer
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.navigation.AppModalState
 import com.arcadelabs.synapse.features.devices.ui.DevicesScreen
 import com.arcadelabs.synapse.features.devices.ui.AddDeviceDialog
 import com.arcadelabs.synapse.features.devices.ui.EditDeviceDialog
@@ -152,6 +153,9 @@ fun App(
         }
     }
 
+    // ── Explicit Modal State Machine (Elevates UX, DX, AX) ──────────────────
+    var modalState by remember { mutableStateOf<AppModalState>(AppModalState.None) }
+
     var isCreateFolderDialogOpen by remember { mutableStateOf(false) }
     var isEditFolderDialogOpen by remember { mutableStateOf(false) }
     var folderToEdit by remember { mutableStateOf<com.arcadelabs.synapse.core.domain.models.Folder?>(null) }
@@ -168,6 +172,66 @@ fun App(
     var prefilledFolderId by remember { mutableStateOf("") }
     var prefilledFolderLabel by remember { mutableStateOf("") }
     var prefilledFolderSharedDevices by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // Synchronize UI flags into modalState
+    LaunchedEffect(
+        isCreateFolderDialogOpen,
+        isEditFolderDialogOpen,
+        isAddDeviceDialogOpen,
+        isEditDeviceDialogOpen,
+        isShowDeviceIdDialogOpen,
+        isImportExportDialogOpen,
+        isRestartConfirmOpen
+    ) {
+        modalState = when {
+            isCreateFolderDialogOpen -> AppModalState.CreateFolder(prefilledFolderId, prefilledFolderLabel, prefilledFolderSharedDevices)
+            isEditFolderDialogOpen && folderToEdit != null -> AppModalState.EditFolder(folderToEdit!!)
+            isAddDeviceDialogOpen -> AppModalState.AddDevice(prefilledDeviceId, prefilledDeviceName)
+            isEditDeviceDialogOpen && deviceToEdit != null -> AppModalState.EditDevice(deviceToEdit!!)
+            isShowDeviceIdDialogOpen -> AppModalState.ShowDeviceId
+            isImportExportDialogOpen -> AppModalState.ImportExportConfig
+            isRestartConfirmOpen -> AppModalState.ConfirmRestart
+            else -> AppModalState.None
+        }
+    }
+
+    // Synchronize programmatic modalState transitions into UI flags
+    LaunchedEffect(modalState) {
+        when (val m = modalState) {
+            is AppModalState.None -> {
+                isCreateFolderDialogOpen = false
+                isEditFolderDialogOpen = false
+                isAddDeviceDialogOpen = false
+                isEditDeviceDialogOpen = false
+                isShowDeviceIdDialogOpen = false
+                isImportExportDialogOpen = false
+                isRestartConfirmOpen = false
+            }
+            is AppModalState.CreateFolder -> {
+                prefilledFolderId = m.prefilledId
+                prefilledFolderLabel = m.prefilledLabel
+                prefilledFolderSharedDevices = m.prefilledSharedDevices
+                isCreateFolderDialogOpen = true
+            }
+            is AppModalState.EditFolder -> {
+                folderToEdit = m.folder
+                isEditFolderDialogOpen = true
+            }
+            is AppModalState.AddDevice -> {
+                prefilledDeviceId = m.prefilledId
+                prefilledDeviceName = m.prefilledName
+                isAddDeviceDialogOpen = true
+            }
+            is AppModalState.EditDevice -> {
+                deviceToEdit = m.device
+                isEditDeviceDialogOpen = true
+            }
+            is AppModalState.ShowDeviceId -> isShowDeviceIdDialogOpen = true
+            is AppModalState.ImportExportConfig -> isImportExportDialogOpen = true
+            is AppModalState.ConfirmRestart -> isRestartConfirmOpen = true
+            else -> {}
+        }
+    }
 
     LaunchedEffect(initialDeviceId, initialOpenAddDevice) {
         if (initialOpenAddDevice) {

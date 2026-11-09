@@ -102,7 +102,8 @@ class SyncthingService : Service() {
     private fun startSyncthingProcessOnly() {
         if (runnable != null) return
 
-        updateNotification("Syncthing is running")
+        _serviceState.value = ServiceLifecycleState.Starting
+        updateNotification("Synapse is running")
 
         runnable = SyncthingRunnable(this, SyncthingRunnable.CommandType.SERVE).apply {
             start { exitCode ->
@@ -113,9 +114,14 @@ class SyncthingService : Service() {
                 stopDynamicIsland()
                 if (exitCode == 3) {
                     startSyncthingProcessOnly()
+                } else if (exitCode != 0) {
+                    _serviceState.value = ServiceLifecycleState.Error("Process exited with code $exitCode", exitCode)
+                } else {
+                    _serviceState.value = ServiceLifecycleState.Stopped
                 }
             }
         }
+        _serviceState.value = ServiceLifecycleState.Running()
         startWidgetPolling()
         startDynamicIsland()
     }
@@ -125,8 +131,8 @@ class SyncthingService : Service() {
         runnable = null
         stopWidgetPolling()
         stopDynamicIsland()
-
-        updateNotification("Syncthing is waiting for run conditions")
+        _serviceState.value = ServiceLifecycleState.WaitingForConditions
+        updateNotification("Synapse is waiting for run conditions")
     }
 
     private fun stopSyncthing() {
@@ -134,6 +140,7 @@ class SyncthingService : Service() {
         runnable = null
         stopWidgetPolling()
         stopDynamicIsland()
+        _serviceState.value = ServiceLifecycleState.Stopped
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -431,6 +438,13 @@ class SyncthingService : Service() {
         const val ACTION_START = "com.arcadelabs.synapse.ACTION_START"
         const val ACTION_STOP = "com.arcadelabs.synapse.ACTION_STOP"
 
-        var isInstanceRunning = false
+        private val _serviceState = kotlinx.coroutines.flow.MutableStateFlow<ServiceLifecycleState>(ServiceLifecycleState.Stopped)
+        val serviceState: kotlinx.coroutines.flow.StateFlow<ServiceLifecycleState> = _serviceState
+
+        var isInstanceRunning: Boolean
+            get() = _serviceState.value is ServiceLifecycleState.Running || _serviceState.value is ServiceLifecycleState.Starting
+            set(value) {
+                if (!value) _serviceState.value = ServiceLifecycleState.Stopped
+            }
     }
 }

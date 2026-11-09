@@ -4,12 +4,14 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arcadelabs.synapse.core.domain.models.*
+import com.arcadelabs.synapse.core.domain.state.AsyncResource
 import com.arcadelabs.synapse.core.network.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -35,6 +37,11 @@ class DeviceViewModel(
     private val apiClient: SyncthingApiClient
 ) : ViewModel() {
 
+    // ── Explicit State Machine (Primary Source of Truth) ─────────────────────
+    private val _state = MutableStateFlow(DeviceCollectionState(resource = AsyncResource.Loading))
+    val state: StateFlow<DeviceCollectionState> = _state.asStateFlow()
+
+    // ── Backwards-Compatible Derived State Flows ─────────────────────────────
     private val _devices = MutableStateFlow<List<DeviceUiModel>>(emptyList())
     val devices: StateFlow<List<DeviceUiModel>> = _devices
 
@@ -50,47 +57,90 @@ class DeviceViewModel(
     private val _pendingFolders = MutableStateFlow<Map<String, PendingFolderOffer>>(emptyMap())
     val pendingFolders: StateFlow<Map<String, PendingFolderOffer>> = _pendingFolders
 
-    private val _isLoading = MutableStateFlow(false)
+    private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
+
+    private val activeOperationsMap = mutableMapOf<String, DeviceOperation>()
+
+    private fun getActiveOperations(): Map<String, DeviceOperation> = synchronized(activeOperationsMap) {
+        activeOperationsMap.toMap()
+    }
+
+    private fun putOperation(op: DeviceOperation) = synchronized(activeOperationsMap) {
+        activeOperationsMap[op.deviceId] = op
+    }
+
+    private fun removeOperation(deviceId: String) = synchronized(activeOperationsMap) {
+        activeOperationsMap.remove(deviceId)
+    }
+
+    private fun commitState(
+        resource: AsyncResource<List<DeviceUiModel>> = _state.value.resource,
+        myId: String = _state.value.myId,
+        folders: List<Folder> = _state.value.folders,
+        pendingDevices: Map<String, PendingDevice> = _state.value.pendingDevices,
+        pendingFolders: Map<String, PendingFolderOffer> = _state.value.pendingFolders
+    ) {
+        val ops = getActiveOperations()
+        val newState = DeviceCollectionState(
+            resource = resource,
+            myId = myId,
+            folders = folders,
+            pendingDevices = pendingDevices,
+            pendingFolders = pendingFolders,
+            activeOperations = ops
+        )
+        _state.value = newState
+        _devices.value = newState.devices
+        _myId.value = newState.myId
+        _folders.value = newState.folders
+        _pendingDevices.value = newState.pendingDevices
+        _pendingFolders.value = newState.pendingFolders
+        _isLoading.value = newState.isLoading
+        _error.value = newState.error
+    }
 
     init {
         loadInitial()
         startPolling()
     }
 
+    private fun mapExceptionToUserMessage(e: Exception, defaultMsg: String): String {
+        return when (e) {
+            is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
+            is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+            is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+            is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+            is SyncthingApiException -> "API Error: ${e.message}"
+            else -> {
+                val msg = e.message ?: ""
+                if (
+                    msg.contains("connect", ignoreCase = true) ||
+                    msg.contains("127.0.0.1") ||
+                    msg.contains("refused", ignoreCase = true) ||
+                    msg.contains("cert", ignoreCase = true) ||
+                    msg.contains("trust", ignoreCase = true)
+                ) {
+                    "Synapse is not started"
+                } else {
+                    msg.ifEmpty { defaultMsg }
+                }
+            }
+        }
+    }
+
     fun loadInitial() {
         viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
+            val previousData = _state.value.devices
+            commitState(resource = if (previousData.isEmpty()) AsyncResource.Loading else AsyncResource.Success(previousData, isRefreshing = true))
             try {
                 updateDeviceStates()
             } catch (e: Exception) {
-                _error.value = when (e) {
-                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
-                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
-                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
-                    is SyncthingApiException -> "API Error: ${e.message}"
-                    else -> {
-                        val msg = e.message ?: ""
-                        if (
-                            msg.contains("connect", ignoreCase = true) ||
-                            msg.contains("127.0.0.1") ||
-                            msg.contains("refused", ignoreCase = true) ||
-                            msg.contains("cert", ignoreCase = true) ||
-                            msg.contains("trust", ignoreCase = true)
-                        ) {
-                            "Synapse is not started"
-                        } else {
-                            msg.ifEmpty { "Failed to load devices" }
-                        }
-                    }
-                }
-            } finally {
-                _isLoading.value = false
+                val errMsg = mapExceptionToUserMessage(e, "Failed to load devices")
+                commitState(resource = AsyncResource.Error(errMsg, e))
             }
         }
     }
@@ -100,7 +150,6 @@ class DeviceViewModel(
             while (isActive) {
                 try {
                     updateDeviceStates()
-                    _error.value = null
                 } catch (e: Exception) {
                     // Ignore background network transient errors
                 }
@@ -121,20 +170,6 @@ class DeviceViewModel(
         val status = statusDeferred.await()
         val pendingDevices = pendingDevicesDeferred.await()
         val pendingFolders = pendingFoldersDeferred.await()
-
-        _folders.value = config.folders
-
-        if (status != null) {
-            _myId.value = status.myID
-        }
-
-        if (pendingDevices != null) {
-            _pendingDevices.value = pendingDevices
-        }
-
-        if (pendingFolders != null) {
-            _pendingFolders.value = pendingFolders
-        }
 
         val connections = connectionsResp.connections
 
@@ -162,10 +197,20 @@ class DeviceViewModel(
                 sharedFolders = sharedFolders
             )
         }
-        _devices.value = uiDevices
+
+        val res = if (uiDevices.isEmpty()) AsyncResource.Empty("No devices connected") else AsyncResource.Success(uiDevices)
+        commitState(
+            resource = res,
+            myId = status?.myID ?: _state.value.myId,
+            folders = config.folders,
+            pendingDevices = pendingDevices ?: emptyMap(),
+            pendingFolders = pendingFolders ?: emptyMap()
+        )
     }
 
     fun toggleDevicePause(deviceId: String, currentlyPaused: Boolean) {
+        putOperation(DeviceOperation.TogglingPause(deviceId, !currentlyPaused))
+        commitState()
         viewModelScope.launch {
             try {
                 if (currentlyPaused) {
@@ -173,20 +218,12 @@ class DeviceViewModel(
                 } else {
                     apiClient.pauseDevice(deviceId)
                 }
+                removeOperation(deviceId)
                 updateDeviceStates()
             } catch (e: Exception) {
-                val msg = e.message ?: ""
-                _error.value = if (
-                    msg.contains("connect", ignoreCase = true) ||
-                    msg.contains("127.0.0.1") ||
-                    msg.contains("refused", ignoreCase = true) ||
-                    msg.contains("cert", ignoreCase = true) ||
-                    msg.contains("trust", ignoreCase = true)
-                ) {
-                    "Synapse is not started"
-                } else {
-                    "Failed to update device state: $msg"
-                }
+                removeOperation(deviceId)
+                val errMsg = mapExceptionToUserMessage(e, "Failed to update device state")
+                commitState(resource = AsyncResource.Error(errMsg, e))
             }
         }
     }
@@ -202,13 +239,14 @@ class DeviceViewModel(
         sharedFolders: List<String>,
         onSuccess: () -> Unit
     ) {
+        val normalizedId = id.normalizeDeviceId()
+        putOperation(DeviceOperation.Creating(normalizedId, name))
+        commitState()
+
         viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
             try {
                 val currentConfig = apiClient.systemConfig()
                 
-                val normalizedId = id.normalizeDeviceId()
                 val newDevice = Device(
                     deviceID = normalizedId,
                     name = name,
@@ -238,34 +276,15 @@ class DeviceViewModel(
                 )
                 
                 apiClient.updateSystemConfig(updatedConfig)
+                removeOperation(normalizedId)
                 try {
                     updateDeviceStates()
                 } catch (_: Exception) {}
                 onSuccess()
             } catch (e: Exception) {
-                _error.value = when (e) {
-                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
-                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
-                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
-                    is SyncthingApiException -> "API Error: ${e.message}"
-                    else -> {
-                        val msg = e.message ?: ""
-                        if (
-                            msg.contains("connect", ignoreCase = true) ||
-                            msg.contains("127.0.0.1") ||
-                            msg.contains("refused", ignoreCase = true) ||
-                            msg.contains("cert", ignoreCase = true) ||
-                            msg.contains("trust", ignoreCase = true)
-                        ) {
-                            "Synapse is not started"
-                        } else {
-                            msg.ifEmpty { "Failed to add device" }
-                        }
-                    }
-                }
-            } finally {
-                _isLoading.value = false
+                removeOperation(normalizedId)
+                val errMsg = mapExceptionToUserMessage(e, "Failed to add device")
+                commitState(resource = AsyncResource.Error(errMsg, e))
             }
         }
     }
@@ -281,12 +300,13 @@ class DeviceViewModel(
         sharedFolders: Map<String, String>,
         onSuccess: () -> Unit
     ) {
+        val normalizedId = id.normalizeDeviceId()
+        putOperation(DeviceOperation.Updating(normalizedId))
+        commitState()
+
         viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
             try {
                 val currentConfig = apiClient.systemConfig()
-                val normalizedId = id.normalizeDeviceId()
                 
                 val existingDevice = currentConfig.devices.firstOrNull { it.deviceID.normalizeDeviceId() == normalizedId }
                 val updatedDevice = (existingDevice ?: Device(deviceID = normalizedId)).copy(
@@ -328,34 +348,15 @@ class DeviceViewModel(
                 )
                 
                 apiClient.updateSystemConfig(updatedConfig)
+                removeOperation(normalizedId)
                 try {
                     updateDeviceStates()
                 } catch (_: Exception) {}
                 onSuccess()
             } catch (e: Exception) {
-                _error.value = when (e) {
-                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
-                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
-                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
-                    is SyncthingApiException -> "API Error: ${e.message}"
-                    else -> {
-                        val msg = e.message ?: ""
-                        if (
-                            msg.contains("connect", ignoreCase = true) ||
-                            msg.contains("127.0.0.1") ||
-                            msg.contains("refused", ignoreCase = true) ||
-                            msg.contains("cert", ignoreCase = true) ||
-                            msg.contains("trust", ignoreCase = true)
-                        ) {
-                            "Synapse is not started"
-                        } else {
-                            msg.ifEmpty { "Failed to update device" }
-                        }
-                    }
-                }
-            } finally {
-                _isLoading.value = false
+                removeOperation(normalizedId)
+                val errMsg = mapExceptionToUserMessage(e, "Failed to update device")
+                commitState(resource = AsyncResource.Error(errMsg, e))
             }
         }
     }
@@ -366,18 +367,8 @@ class DeviceViewModel(
                 apiClient.dismissPendingDevice(deviceId)
                 updateDeviceStates()
             } catch (e: Exception) {
-                val msg = e.message ?: ""
-                _error.value = if (
-                    msg.contains("connect", ignoreCase = true) ||
-                    msg.contains("127.0.0.1") ||
-                    msg.contains("refused", ignoreCase = true) ||
-                    msg.contains("cert", ignoreCase = true) ||
-                    msg.contains("trust", ignoreCase = true)
-                ) {
-                    "Synapse is not started"
-                } else {
-                    "Failed to dismiss pending device: $msg"
-                }
+                val errMsg = mapExceptionToUserMessage(e, "Failed to dismiss pending device")
+                commitState(resource = AsyncResource.Error(errMsg, e))
             }
         }
     }
@@ -388,28 +379,19 @@ class DeviceViewModel(
                 apiClient.dismissPendingFolder(folderId, deviceId, label, time)
                 updateDeviceStates()
             } catch (e: Exception) {
-                val msg = e.message ?: ""
-                _error.value = if (
-                    msg.contains("connect", ignoreCase = true) ||
-                    msg.contains("127.0.0.1") ||
-                    msg.contains("refused", ignoreCase = true) ||
-                    msg.contains("cert", ignoreCase = true) ||
-                    msg.contains("trust", ignoreCase = true)
-                ) {
-                    "Synapse is not started"
-                } else {
-                    "Failed to dismiss pending folder: $msg"
-                }
+                val errMsg = mapExceptionToUserMessage(e, "Failed to dismiss pending folder")
+                commitState(resource = AsyncResource.Error(errMsg, e))
             }
         }
     }
 
     fun deleteDevice(deviceId: String) {
+        val normalizedId = deviceId.normalizeDeviceId()
+        putOperation(DeviceOperation.Deleting(normalizedId))
+        commitState()
+
         viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
             try {
-                val normalizedId = deviceId.normalizeDeviceId()
                 val currentConfig = apiClient.systemConfig()
                 val updatedDevices = currentConfig.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId }
                 val updatedFolders = currentConfig.folders.map { folder ->
@@ -420,31 +402,12 @@ class DeviceViewModel(
                     folders = updatedFolders
                 )
                 apiClient.updateSystemConfig(updatedConfig)
+                removeOperation(normalizedId)
                 updateDeviceStates()
             } catch (e: Exception) {
-                _error.value = when (e) {
-                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
-                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
-                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
-                    is SyncthingApiException -> "API Error: ${e.message}"
-                    else -> {
-                        val msg = e.message ?: ""
-                        if (
-                            msg.contains("connect", ignoreCase = true) ||
-                            msg.contains("127.0.0.1") ||
-                            msg.contains("refused", ignoreCase = true) ||
-                            msg.contains("cert", ignoreCase = true) ||
-                            msg.contains("trust", ignoreCase = true)
-                        ) {
-                            "Synapse is not started"
-                        } else {
-                            msg.ifEmpty { "Failed to delete device" }
-                        }
-                    }
-                }
-            } finally {
-                _isLoading.value = false
+                removeOperation(normalizedId)
+                val errMsg = mapExceptionToUserMessage(e, "Failed to delete device")
+                commitState(resource = AsyncResource.Error(errMsg, e))
             }
         }
     }

@@ -30,6 +30,7 @@ import com.arcadelabs.synapse.core.designsystem.SynapseDialogShape
 import com.arcadelabs.synapse.features.status.ui.StatusViewModel
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
+import com.arcadelabs.synapse.core.domain.state.AsyncResource
 
 private fun generateRandomFolderId(): String {
     val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -45,9 +46,10 @@ fun DesktopFoldersScreen(
     openFolder: ((String) -> Unit)? = null,
     viewModel: FolderViewModel = koinViewModel()
 ) {
-    val folders by viewModel.foldersState.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val error by viewModel.error.collectAsState()
+    val state by viewModel.state.collectAsState()
+    val folders = state.folders
+    val isLoading = state.isLoading
+    val error = state.error
 
     Scaffold(
         floatingActionButton = {
@@ -78,31 +80,47 @@ fun DesktopFoldersScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            when {
-                isLoading && folders.isEmpty() -> {
+            when (val res = state.resource) {
+                is AsyncResource.Loading -> {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
-                error != null && folders.isEmpty() -> {
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = error ?: "An error occurred",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(onClick = { viewModel.loadFolders() }) {
-                            Text("Retry")
+                is AsyncResource.Error -> {
+                    if (folders.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = res.message.ifEmpty { error ?: "An error occurred" },
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = { viewModel.loadFolders() }) {
+                                Text("Retry")
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 80.dp, top = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(folders) { folder ->
+                                DesktopFolderCard(
+                                    folder = folder,
+                                    onOpenClick = { onEditFolderClick(folder) },
+                                    onDeleteFolder = { viewModel.deleteFolder(it) }
+                                )
+                            }
                         }
                     }
                 }
-                folders.isEmpty() -> {
+                is AsyncResource.Empty -> {
                     Text(
                         text = "No folders shared. Tap + to add one.",
                         style = MaterialTheme.typography.bodyMedium,
@@ -110,10 +128,10 @@ fun DesktopFoldersScreen(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
-                else -> {
+                is AsyncResource.Success, is AsyncResource.Idle -> {
                     LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 80.dp, top = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
                         items(folders) { folder ->

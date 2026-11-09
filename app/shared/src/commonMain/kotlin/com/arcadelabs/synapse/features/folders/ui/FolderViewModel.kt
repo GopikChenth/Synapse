@@ -10,22 +10,132 @@ import com.arcadelabs.synapse.core.domain.models.FolderVersioning
 import com.arcadelabs.synapse.core.domain.models.PendingDevice
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import com.arcadelabs.synapse.core.domain.models.DeviceConnection
+import com.arcadelabs.synapse.core.domain.state.AsyncResource
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class FolderViewModel(
     private val apiClient: SyncthingApiClient
 ) : ViewModel() {
 
+    // ── Explicit State Machine (Primary Source of Truth) ─────────────────────
+    private val _state = MutableStateFlow(FolderCollectionState(resource = AsyncResource.Loading))
+    val state: StateFlow<FolderCollectionState> = _state.asStateFlow()
+
+    // ── Backwards-Compatible Derived State Flows ─────────────────────────────
     private val _foldersState = MutableStateFlow<List<Folder>>(emptyList())
     val foldersState: StateFlow<List<Folder>> = _foldersState
 
     private val _devicesState = MutableStateFlow<List<Device>>(emptyList())
     val devicesState: StateFlow<List<Device>> = _devicesState
 
+    private val _pendingDevices = MutableStateFlow<Map<String, PendingDevice>>(emptyMap())
+    val pendingDevices: StateFlow<Map<String, PendingDevice>> = _pendingDevices
+
+    private val _isLoading = MutableStateFlow(true)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error
+
     private var cachedMyId: String = ""
     private var cachedConnections: Map<String, DeviceConnection> = emptyMap()
+
+    // Track active operations explicitly in a thread-safe map
+    private val activeOperationsMap = mutableMapOf<String, FolderOperation>()
+
+    private fun getActiveOperations(): Map<String, FolderOperation> = synchronized(activeOperationsMap) {
+        activeOperationsMap.toMap()
+    }
+
+    private fun putOperation(op: FolderOperation) = synchronized(activeOperationsMap) {
+        activeOperationsMap[op.folderId] = op
+    }
+
+    private fun removeOperation(folderId: String) = synchronized(activeOperationsMap) {
+        activeOperationsMap.remove(folderId)
+    }
+
+    private fun commitState(
+        resource: AsyncResource<List<Folder>> = _state.value.resource,
+        devices: List<Device> = _state.value.devices,
+        pending: Map<String, PendingDevice> = _state.value.pendingDevices
+    ) {
+        val ops = getActiveOperations()
+        val newState = FolderCollectionState(
+            resource = resource,
+            devices = devices,
+            pendingDevices = pending,
+            activeOperations = ops
+        )
+        _state.value = newState
+        _foldersState.value = newState.folders
+        _devicesState.value = newState.devices
+        _pendingDevices.value = newState.pendingDevices
+        _isLoading.value = newState.isLoading
+        _error.value = newState.error
+    }
+
+    init {
+        loadFolders()
+        startPolling()
+    }
+
+    private fun startPolling() {
+        viewModelScope.launch {
+            while (isActive) {
+                try {
+                    val config = apiClient.systemConfig()
+                    val currentOps = getActiveOperations()
+
+                    // Filter out folders pending deletion so polls can't resurrect them
+                    val deletedIds = currentOps.values.filterIsInstance<FolderOperation.Deleting>().map { it.folderId }.toSet()
+                    val filtered = config.folders.filter { it.id !in deletedIds }
+
+                    // Merge in any pending creations not yet confirmed by server
+                    val pendingCreations = currentOps.values.filterIsInstance<FolderOperation.Creating>().map { it.folder }
+                    val serverIds = filtered.map { it.id }.toSet()
+                    val unconfirmedCreations = pendingCreations.filter { it.id !in serverIds }
+
+                    // Protect in-flight pause/resume from being overwritten by stale poll data
+                    val pauseChanges = currentOps.values.filterIsInstance<FolderOperation.Pausing>().associate { it.folderId to it.targetPaused }
+                    val merged = (filtered + unconfirmedCreations).map { folder ->
+                        val pendingPaused = pauseChanges[folder.id]
+                        if (pendingPaused != null) folder.copy(paused = pendingPaused) else folder
+                    }
+
+                    fetchMyIdAndConnections()
+                    val remoteDevices = filterRemotePairedDevices(config.devices)
+                    val pendingDevs = try { apiClient.getPendingDevices() } catch (_: Exception) { emptyMap() }
+
+                    val res = if (merged.isEmpty()) AsyncResource.Empty("No folders shared") else AsyncResource.Success(merged)
+                    commitState(resource = res, devices = remoteDevices, pending = pendingDevs)
+                } catch (_: Exception) {}
+                delay(3000)
+            }
+        }
+    }
+
+    fun loadFolders() {
+        viewModelScope.launch {
+            val previousData = _state.value.folders
+            commitState(resource = if (previousData.isEmpty()) AsyncResource.Loading else AsyncResource.Success(previousData, isRefreshing = true))
+            try {
+                val config = apiClient.systemConfig()
+                fetchMyIdAndConnections()
+                val remoteDevices = filterRemotePairedDevices(config.devices)
+                val pendingDevs = try { apiClient.getPendingDevices() } catch (_: Exception) { emptyMap() }
+
+                val res = if (config.folders.isEmpty()) AsyncResource.Empty("No folders shared") else AsyncResource.Success(config.folders)
+                commitState(resource = res, devices = remoteDevices, pending = pendingDevs)
+            } catch (e: Exception) {
+                val errMsg = mapExceptionToUserMessage(e, "Failed to load configuration")
+                commitState(resource = AsyncResource.Error(errMsg, e))
+            }
+        }
+    }
 
     private suspend fun fetchMyIdAndConnections() {
         try {
@@ -40,112 +150,36 @@ class FolderViewModel(
         } catch (_: Exception) {}
     }
 
-    private fun updateDevicesState(devices: List<Device>) {
-        val remotePairedDevices = devices.filter { device ->
+    private fun filterRemotePairedDevices(devices: List<Device>): List<Device> {
+        return devices.filter { device ->
             val devId = device.deviceID.normalizeDeviceId()
             val isSelf = devId == cachedMyId.normalizeDeviceId()
             val conn = cachedConnections[device.deviceID]
             val isPaired = conn != null && (conn.connected || conn.clientVersion.isNotEmpty() || conn.inBytesTotal > 0 || conn.outBytesTotal > 0)
             !isSelf && isPaired
         }
-        _devicesState.value = remotePairedDevices
     }
 
-    private val _pendingDevices = MutableStateFlow<Map<String, PendingDevice>>(emptyMap())
-    val pendingDevices: StateFlow<Map<String, PendingDevice>> = _pendingDevices
-
-    private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading
-
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error
-
-    // Folder IDs being deleted — excluded from poll results until server confirms removal
-    private val pendingDeletions = mutableSetOf<String>()
-    // Folders being added — kept in state even if a poll runs before server confirms
-    private val pendingCreations = mutableListOf<Folder>()
-    // Folder IDs with in-flight pause/resume — prevents polling from overwriting the optimistic UI update
-    private val pendingPauseChanges = mutableMapOf<String, Boolean>()
-
-    private fun getPendingDeletionsSet(): Set<String> = synchronized(pendingDeletions) { pendingDeletions.toSet() }
-    private fun getPendingCreationsList(): List<Folder> = synchronized(pendingCreations) { pendingCreations.toList() }
-    private fun getPendingPauseChangesMap(): Map<String, Boolean> = synchronized(pendingPauseChanges) { pendingPauseChanges.toMap() }
-
-    init {
-        loadFolders()
-        startPolling()
-    }
-
-    private fun startPolling() {
-        viewModelScope.launch {
-            while (isActive) {
-                try {
-                    val config = apiClient.systemConfig()
-                    val currentDeletions = getPendingDeletionsSet()
-                    val currentCreations = getPendingCreationsList()
-                    val currentPauseChanges = getPendingPauseChangesMap()
-
-                    // Filter out folders pending deletion so polls can't resurrect them
-                    val filtered = config.folders.filter { it.id !in currentDeletions }
-                    // Merge in any pending creations not yet confirmed by server
-                    val serverIds = filtered.map { it.id }.toSet()
-                    val unconfirmedCreations = currentCreations.filter { it.id !in serverIds }
-                    // Protect in-flight pause/resume from being overwritten by stale poll data
-                    val merged = (filtered + unconfirmedCreations).map { folder ->
-                        val pendingPaused = currentPauseChanges[folder.id]
-                        if (pendingPaused != null) folder.copy(paused = pendingPaused) else folder
-                    }
-                    _foldersState.value = merged
-                    fetchMyIdAndConnections()
-                    updateDevicesState(config.devices)
-                    try {
-                        _pendingDevices.value = apiClient.getPendingDevices()
-                    } catch (_: Exception) {}
-                    _error.value = null
-                } catch (_: Exception) {}
-                delay(3000)
-            }
-        }
-    }
-
-    fun loadFolders() {
-        viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
-            try {
-                val config = apiClient.systemConfig()
-                _foldersState.value = config.folders
-                fetchMyIdAndConnections()
-                updateDevicesState(config.devices)
-                try {
-                    _pendingDevices.value = apiClient.getPendingDevices()
-                } catch (_: Exception) {
-                    _pendingDevices.value = emptyMap()
+    private fun mapExceptionToUserMessage(e: Exception, defaultMsg: String): String {
+        return when (e) {
+            is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
+            is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+            is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
+            is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
+            is SyncthingApiException -> "API Error: ${e.message}"
+            else -> {
+                val msg = e.message ?: ""
+                if (
+                    msg.contains("connect", ignoreCase = true) ||
+                    msg.contains("127.0.0.1") ||
+                    msg.contains("refused", ignoreCase = true) ||
+                    msg.contains("cert", ignoreCase = true) ||
+                    msg.contains("trust", ignoreCase = true)
+                ) {
+                    "Synapse is not started"
+                } else {
+                    msg.ifEmpty { defaultMsg }
                 }
-            } catch (e: Exception) {
-                _error.value = when (e) {
-                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
-                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
-                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
-                    is SyncthingApiException -> "API Error: ${e.message}"
-                    else -> {
-                        val msg = e.message ?: ""
-                        if (
-                            msg.contains("connect", ignoreCase = true) ||
-                            msg.contains("127.0.0.1") ||
-                            msg.contains("refused", ignoreCase = true) ||
-                            msg.contains("cert", ignoreCase = true) ||
-                            msg.contains("trust", ignoreCase = true)
-                        ) {
-                            "Synapse is not started"
-                        } else {
-                            msg.ifEmpty { "Failed to load configuration" }
-                        }
-                    }
-                }
-            } finally {
-                _isLoading.value = false
             }
         }
     }
@@ -172,114 +206,93 @@ class FolderViewModel(
             versioning = FolderVersioning(type = versioningType)
         )
 
-        // Track creation so polling can't lose it before server confirms
-        synchronized(pendingCreations) { pendingCreations.add(newFolder) }
-        // Optimistic update — show immediately in UI
-        val snapshot = _foldersState.value
-        _foldersState.value = snapshot + newFolder
+        putOperation(FolderOperation.Creating(newFolder))
+        val snapshot = _state.value.folders
+        val optimisticList = snapshot + newFolder
+        commitState(resource = AsyncResource.Success(optimisticList, isRefreshing = true))
 
         viewModelScope.launch {
-            _error.value = null
             try {
                 val currentConfig = apiClient.systemConfig()
                 val updatedConfig = currentConfig.copy(folders = currentConfig.folders + newFolder)
                 apiClient.updateSystemConfig(updatedConfig)
 
-                // Confirm from server
                 val confirmed = apiClient.systemConfig()
-                synchronized(pendingCreations) { pendingCreations.removeAll { it.id == newFolder.id } }
-                _foldersState.value = confirmed.folders.filter { it.id !in getPendingDeletionsSet() }
+                removeOperation(newFolder.id)
                 fetchMyIdAndConnections()
-                updateDevicesState(confirmed.devices)
+                val remoteDevices = filterRemotePairedDevices(confirmed.devices)
 
+                commitState(
+                    resource = AsyncResource.Success(confirmed.folders),
+                    devices = remoteDevices
+                )
                 onSuccess()
             } catch (e: Exception) {
-                // Rollback on failure
-                synchronized(pendingCreations) { pendingCreations.removeAll { it.id == newFolder.id } }
+                removeOperation(newFolder.id)
+                val errMsg = mapExceptionToUserMessage(e, "Failed to create folder")
+                commitState(resource = AsyncResource.Error(errMsg, e))
+                // Restore snapshot if error
                 _foldersState.value = snapshot
-                _error.value = when (e) {
-                    is ApiKeyNotConfiguredException  -> "Syncthing API key is missing or not configured."
-                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-                    is SyncthingNotFoundException    -> "Endpoint not found. Check the base URL."
-                    is SyncthingTimeoutException     -> "Connection timed out. Is Syncthing running?"
-                    is SyncthingApiException         -> "API Error: ${e.message}"
-                    else -> {
-                        val msg = e.message ?: ""
-                        if (msg.contains("connect", ignoreCase = true) ||
-                            msg.contains("127.0.0.1") ||
-                            msg.contains("refused", ignoreCase = true)
-                        ) "Synapse is not started"
-                        else msg.ifEmpty { "Failed to create folder" }
-                    }
-                }
-            } finally {
-                _isLoading.value = false
             }
         }
     }
-
 
     fun deleteFolder(folderId: String) {
-        // Track the deletion so polling can't resurrect it
-        synchronized(pendingDeletions) { pendingDeletions.add(folderId) }
-        // Optimistic update — remove immediately from UI
-        val snapshot = _foldersState.value
-        _foldersState.value = snapshot.filter { it.id != folderId }
+        putOperation(FolderOperation.Deleting(folderId))
+        val snapshot = _state.value.folders
+        val optimisticList = snapshot.filter { it.id != folderId }
+        commitState(resource = if (optimisticList.isEmpty()) AsyncResource.Empty("No folders shared") else AsyncResource.Success(optimisticList, isRefreshing = true))
 
         viewModelScope.launch {
             try {
-                // Use Syncthing's targeted DELETE endpoint — no full config replace, no restart
                 apiClient.deleteFolder(folderId)
-                // Confirm from server
                 val confirmed = apiClient.systemConfig()
-                _foldersState.value = confirmed.folders.filter { it.id !in getPendingDeletionsSet() }
+                removeOperation(folderId)
                 fetchMyIdAndConnections()
-                updateDevicesState(confirmed.devices)
+                val remoteDevices = filterRemotePairedDevices(confirmed.devices)
+
+                val res = if (confirmed.folders.isEmpty()) AsyncResource.Empty("No folders shared") else AsyncResource.Success(confirmed.folders)
+                commitState(resource = res, devices = remoteDevices)
             } catch (e: Exception) {
-                // Rollback on failure
+                removeOperation(folderId)
+                val errMsg = e.message ?: "Failed to delete folder"
+                commitState(resource = AsyncResource.Error(errMsg, e))
                 _foldersState.value = snapshot
-                _error.value = e.message ?: "Failed to delete folder"
-            } finally {
-                synchronized(pendingDeletions) { pendingDeletions.remove(folderId) }
             }
         }
     }
+
     fun pauseFolder(folderId: String, paused: Boolean) {
-        // Optimistic update
-        _foldersState.value = _foldersState.value.map {
-            if (it.id == folderId) it.copy(paused = paused) else it
-        }
-        // Block polling from overwriting the optimistic state before server confirms
-        synchronized(pendingPauseChanges) { pendingPauseChanges[folderId] = paused }
+        putOperation(FolderOperation.Pausing(folderId, paused))
+        val snapshot = _state.value.folders
+        val optimisticList = snapshot.map { if (it.id == folderId) it.copy(paused = paused) else it }
+        commitState(resource = AsyncResource.Success(optimisticList, isRefreshing = true))
+
         viewModelScope.launch {
             try {
-                // PATCH /rest/config/folders/{id} is the ONLY correct way to pause/resume a folder.
-                // /rest/system/pause and /rest/system/resume are device-only — Syncthing silently ignores folder param.
                 apiClient.setFolderPaused(folderId, paused)
-                _error.value = null
+                removeOperation(folderId)
+                commitState(resource = AsyncResource.Success(optimisticList))
             } catch (e: Exception) {
-                // Rollback on failure
-                _foldersState.value = _foldersState.value.map {
-                    if (it.id == folderId) it.copy(paused = !paused) else it
-                }
-                _error.value = e.message ?: "Failed to update folder"
-            } finally {
-                // Release the poll guard so server state is reflected again
-                synchronized(pendingPauseChanges) { pendingPauseChanges.remove(folderId) }
+                removeOperation(folderId)
+                val errMsg = e.message ?: "Failed to update folder"
+                commitState(resource = AsyncResource.Error(errMsg, e))
+                _foldersState.value = snapshot
             }
         }
     }
 
     fun rescanFolder(folderId: String) {
-        println("[FolderViewModel] Triggering rescan for folder: $folderId")
+        putOperation(FolderOperation.Rescanning(folderId))
+        commitState()
         viewModelScope.launch {
             try {
-                val response = apiClient.scan(folderId)
-                println("[FolderViewModel] Rescan succeeded with status: ${response.status}")
-                _error.value = null
+                apiClient.scan(folderId)
+                removeOperation(folderId)
+                commitState()
             } catch (e: Exception) {
-                println("[FolderViewModel] Rescan failed with exception: ${e.message}")
-                _error.value = e.message ?: "Rescan failed"
+                removeOperation(folderId)
+                commitState(resource = AsyncResource.Error(e.message ?: "Rescan failed", e))
             }
         }
     }
@@ -314,11 +327,11 @@ class FolderViewModel(
             )
         )
 
-        val snapshot = _foldersState.value
-        _foldersState.value = snapshot.map { if (it.id == id) updatedFolder else it }
+        val snapshot = _state.value.folders
+        val optimisticList = snapshot.map { if (it.id == id) updatedFolder else it }
+        commitState(resource = AsyncResource.Success(optimisticList, isRefreshing = true))
 
         viewModelScope.launch {
-            _error.value = null
             try {
                 val currentConfig = apiClient.systemConfig()
                 val updatedFolders = currentConfig.folders.map {
@@ -327,16 +340,15 @@ class FolderViewModel(
                 val updatedConfig = currentConfig.copy(folders = updatedFolders)
                 apiClient.updateSystemConfig(updatedConfig)
 
-                // Confirm from server
                 val confirmed = apiClient.systemConfig()
-                _foldersState.value = confirmed.folders.filter { it.id !in pendingDeletions }
                 fetchMyIdAndConnections()
-                updateDevicesState(confirmed.devices)
+                val remoteDevices = filterRemotePairedDevices(confirmed.devices)
 
+                commitState(resource = AsyncResource.Success(confirmed.folders), devices = remoteDevices)
                 onSuccess()
             } catch (e: Exception) {
+                commitState(resource = AsyncResource.Error(e.message ?: "Failed to update folder", e))
                 _foldersState.value = snapshot
-                _error.value = e.message ?: "Failed to update folder"
             }
         }
     }
@@ -346,11 +358,10 @@ class FolderViewModel(
             try {
                 apiClient.dismissPendingDevice(deviceId)
                 try {
-                    _pendingDevices.value = apiClient.getPendingDevices()
+                    val pendingDevs = apiClient.getPendingDevices()
+                    commitState(pending = pendingDevs)
                 } catch (_: Exception) {}
-            } catch (e: Exception) {
-                // Ignore or handle
-            }
+            } catch (_: Exception) {}
         }
     }
 }

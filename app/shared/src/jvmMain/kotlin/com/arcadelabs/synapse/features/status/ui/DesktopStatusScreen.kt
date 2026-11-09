@@ -132,7 +132,18 @@ fun DesktopStatusScreen(
 
         // Running state text
         val isRunning = uiState.isRunning
-        val statusText = if (isRunning) "Syncthing is running." else "Syncthing is not running."
+        val statusText = when (val es = uiState.engineState) {
+            is com.arcadelabs.synapse.core.domain.state.EngineConnectionState.Connected ->
+                "${es.engine.displayName} is running."
+            is com.arcadelabs.synapse.core.domain.state.EngineConnectionState.Reconnecting ->
+                "Reconnecting to daemon (attempt ${es.consecutiveFailures}/${es.threshold})..."
+            is com.arcadelabs.synapse.core.domain.state.EngineConnectionState.Connecting ->
+                "Connecting to daemon..."
+            is com.arcadelabs.synapse.core.domain.state.EngineConnectionState.Failed ->
+                "Daemon connection failed: ${es.message}"
+            is com.arcadelabs.synapse.core.domain.state.EngineConnectionState.Disconnected ->
+                if (isRunning) "Daemon is running." else "Synapse daemon is not running."
+        }
         val statusColor = if (isRunning) com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected else com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Disconnected
 
         Text(

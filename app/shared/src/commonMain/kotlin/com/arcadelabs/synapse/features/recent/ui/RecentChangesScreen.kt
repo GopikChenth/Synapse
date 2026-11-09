@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.arcadelabs.synapse.core.domain.state.AsyncResource
 import org.koin.compose.viewmodel.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -24,9 +25,10 @@ fun RecentChangesScreen(
     onCloseClick: () -> Unit,
     viewModel: RecentChangesViewModel = koinViewModel()
 ) {
-    val changes by viewModel.changes.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val error by viewModel.error.collectAsState()
+    val state by viewModel.state.collectAsState()
+    val changes = state.changes
+    val isLoading = state.isLoading
+    val error = state.error
 
     LaunchedEffect(Unit) {
         viewModel.loadRecentChanges()
@@ -61,31 +63,42 @@ fun RecentChangesScreen(
                 .padding(paddingValues)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            when {
-                isLoading && changes.isEmpty() -> {
+            when (val res = state.resource) {
+                is AsyncResource.Loading -> {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
-                error != null && changes.isEmpty() -> {
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = error ?: "An error occurred",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(onClick = { viewModel.loadRecentChanges() }) {
-                            Text("Retry")
+                is AsyncResource.Error -> {
+                    if (changes.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = res.message.ifEmpty { error ?: "An error occurred" },
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(onClick = { viewModel.loadRecentChanges() }) {
+                                Text("Retry")
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            contentPadding = PaddingValues(vertical = 8.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(changes) { change ->
+                                RecentChangeItemCard(change = change)
+                            }
                         }
                     }
                 }
-                changes.isEmpty() -> {
+                is AsyncResource.Empty -> {
                     Column(
                         modifier = Modifier
                             .align(Alignment.Center)
@@ -106,13 +119,35 @@ fun RecentChangesScreen(
                         )
                     }
                 }
-                else -> {
-                    LazyColumn(
-                        contentPadding = PaddingValues(vertical = 8.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(changes) { change ->
-                            RecentChangeItemCard(change = change)
+                is AsyncResource.Success, is AsyncResource.Idle -> {
+                    if (changes.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "No recent changes detected.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Recent synchronization activities will appear here once files are updated.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            contentPadding = PaddingValues(vertical = 8.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(changes) { change ->
+                                RecentChangeItemCard(change = change)
+                            }
                         }
                     }
                 }

@@ -14,6 +14,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class SettingsUiState(
+    val loadState: FormLoadState = FormLoadState.Loading,
+    val saveState: FormSaveState = FormSaveState.Idle,
+
     val isLoading: Boolean = true,
     val error: String? = null,
 
@@ -74,7 +77,16 @@ class SettingsViewModel(
 
     fun loadSettings() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null, saveSuccess = false, saveError = null) }
+            _uiState.update {
+                it.copy(
+                    loadState = FormLoadState.Loading,
+                    isLoading = true,
+                    error = null,
+                    saveState = FormSaveState.Idle,
+                    saveSuccess = false,
+                    saveError = null
+                )
+            }
             try {
                 val options = apiClient.getConfigOptions()
                 val gui = apiClient.getConfigGui()
@@ -87,6 +99,7 @@ class SettingsViewModel(
 
                 _uiState.update {
                     it.copy(
+                        loadState = FormLoadState.Ready,
                         isLoading = false,
                         error = null,
                         deviceName = localDevice?.name ?: "",
@@ -124,7 +137,13 @@ class SettingsViewModel(
                     msg.contains("refused", ignoreCase = true) ||
                     msg.contains("127.0.0.1")
                 ) "Daemon is not running" else msg
-                _uiState.update { it.copy(isLoading = false, error = userMsg) }
+                _uiState.update {
+                    it.copy(
+                        loadState = FormLoadState.Error(userMsg),
+                        isLoading = false,
+                        error = userMsg
+                    )
+                }
             }
         }
     }
@@ -166,11 +185,11 @@ class SettingsViewModel(
     fun updateGuiUser(value: String) = _uiState.update { it.copy(guiUser = value) }
     fun updateGuiUseTLS(value: Boolean) = _uiState.update { it.copy(guiUseTLS = value) }
 
-    fun clearSaveStatus() = _uiState.update { it.copy(saveSuccess = false, saveError = null) }
+    fun clearSaveStatus() = _uiState.update { it.copy(saveState = FormSaveState.Idle, saveSuccess = false, saveError = null) }
 
     fun saveSettings() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isSaving = true, saveSuccess = false, saveError = null) }
+            _uiState.update { it.copy(saveState = FormSaveState.Saving, isSaving = true, saveSuccess = false, saveError = null) }
             try {
                 val state = _uiState.value
                 val baseOptions = state.originalOptions ?: ConfigOptions()
@@ -183,7 +202,14 @@ class SettingsViewModel(
                 val maxRecv = state.maxRecvKbps.toIntOrNull()
 
                 if (maxSend == null || maxSend < 0 || maxRecv == null || maxRecv < 0) {
-                    _uiState.update { it.copy(isSaving = false, saveError = "Rate limits must be valid non-negative integers (0 for unlimited)") }
+                    val valError = "Rate limits must be valid non-negative integers (0 for unlimited)"
+                    _uiState.update {
+                        it.copy(
+                            saveState = FormSaveState.Error(valError),
+                            isSaving = false,
+                            saveError = valError
+                        )
+                    }
                     return@launch
                 }
 
@@ -223,6 +249,7 @@ class SettingsViewModel(
 
                 _uiState.update {
                     it.copy(
+                        saveState = FormSaveState.Success,
                         isSaving = false,
                         saveSuccess = true,
                         originalOptions = updatedOptions,
@@ -237,7 +264,13 @@ class SettingsViewModel(
                     msg.contains("refused", ignoreCase = true) ||
                     msg.contains("127.0.0.1")
                 ) "Daemon is not running" else msg
-                _uiState.update { it.copy(isSaving = false, saveError = userMsg) }
+                _uiState.update {
+                    it.copy(
+                        saveState = FormSaveState.Error(userMsg),
+                        isSaving = false,
+                        saveError = userMsg
+                    )
+                }
             }
         }
     }

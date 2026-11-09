@@ -5,9 +5,11 @@ import androidx.lifecycle.viewModelScope
 import com.arcadelabs.synapse.core.domain.models.Event
 import com.arcadelabs.synapse.core.domain.models.ItemFinishedEventData
 import com.arcadelabs.synapse.core.domain.models.toItemFinishedData
+import com.arcadelabs.synapse.core.domain.state.AsyncResource
 import com.arcadelabs.synapse.core.network.SyncthingApiClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
@@ -24,6 +26,12 @@ data class RecentChangeUiModel(
 class RecentChangesViewModel(
     private val apiClient: SyncthingApiClient
 ) : ViewModel() {
+
+    // ── Explicit State Machine (Primary Source of Truth) ─────────────────────
+    private val _state = MutableStateFlow(RecentChangesState())
+    val state: StateFlow<RecentChangesState> = _state.asStateFlow()
+
+    // ── Backwards-Compatible Derived State Flows ─────────────────────────────
     private val _changes = MutableStateFlow<List<RecentChangeUiModel>>(emptyList())
     val changes: StateFlow<List<RecentChangeUiModel>> = _changes
 
@@ -35,10 +43,18 @@ class RecentChangesViewModel(
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    private fun commitState(resource: AsyncResource<List<RecentChangeUiModel>>) {
+        val newState = RecentChangesState(resource = resource)
+        _state.value = newState
+        _changes.value = newState.changes
+        _isLoading.value = newState.isLoading
+        _error.value = newState.error
+    }
+
     fun loadRecentChanges() {
         viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
+            val previousData = _state.value.changes
+            commitState(if (previousData.isEmpty()) AsyncResource.Loading else AsyncResource.Success(previousData, isRefreshing = true))
             try {
                 // Fetch events from the last 1000 events
                 val events = apiClient.getEvents(since = 0, limit = 1000)
@@ -62,11 +78,10 @@ class RecentChangesViewModel(
                     .reversed()
                     .take(20)
                 
-                _changes.value = mapped
+                val res = if (mapped.isEmpty()) AsyncResource.Empty("No recent changes recorded") else AsyncResource.Success(mapped)
+                commitState(res)
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load recent changes"
-            } finally {
-                _isLoading.value = false
+                commitState(AsyncResource.Error(e.message ?: "Failed to load recent changes", e))
             }
         }
     }

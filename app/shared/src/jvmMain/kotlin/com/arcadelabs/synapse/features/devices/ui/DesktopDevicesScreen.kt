@@ -22,6 +22,7 @@ import com.arcadelabs.synapse.core.designsystem.SynapseStatusColors
 import com.arcadelabs.synapse.core.designsystem.SynapseDialogShape
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
+import com.arcadelabs.synapse.core.domain.state.AsyncResource
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.style.TextOverflow
 
@@ -31,11 +32,12 @@ fun DesktopDevicesScreen(
     onEditDeviceClick: (DeviceUiModel) -> Unit = {},
     viewModel: DeviceViewModel = koinViewModel()
 ) {
-    val devices by viewModel.devices.collectAsState()
-    val folders by viewModel.folders.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val error by viewModel.error.collectAsState()
-    val myId by viewModel.myId.collectAsState()
+    val state by viewModel.state.collectAsState()
+    val devices = state.devices
+    val folders = state.folders
+    val isLoading = state.isLoading
+    val error = state.error
+    val myId = state.myId
 
     var deviceToDelete by remember { mutableStateOf<DeviceUiModel?>(null) }
 
@@ -75,31 +77,46 @@ fun DesktopDevicesScreen(
                 .padding(paddingValues)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            when {
-                isLoading && filteredDevices.isEmpty() -> {
+            when (val res = state.resource) {
+                is AsyncResource.Loading -> {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
-                error != null && filteredDevices.isEmpty() -> {
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = error ?: "An error occurred",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(onClick = { viewModel.loadInitial() }) {
-                            Text("Retry")
+                is AsyncResource.Error -> {
+                    if (filteredDevices.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = res.message.ifEmpty { error ?: "An error occurred" },
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(onClick = { viewModel.loadInitial() }) {
+                                Text("Retry")
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            contentPadding = PaddingValues(vertical = 8.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(filteredDevices) { device ->
+                                DesktopDeviceItemCard(
+                                    device = device,
+                                    onOpenClick = { onEditDeviceClick(device) },
+                                    onDeleteClick = { deviceToDelete = device }
+                                )
+                            }
                         }
                     }
                 }
-                filteredDevices.isEmpty() -> {
+                is AsyncResource.Empty -> {
                     Text(
                         text = "No devices connected",
                         style = MaterialTheme.typography.bodyMedium,
@@ -107,17 +124,26 @@ fun DesktopDevicesScreen(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
-                else -> {
-                    LazyColumn(
-                        contentPadding = PaddingValues(vertical = 8.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(filteredDevices) { device ->
-                            DesktopDeviceItemCard(
-                                device = device,
-                                onOpenClick = { onEditDeviceClick(device) },
-                                onDeleteClick = { deviceToDelete = device }
-                            )
+                is AsyncResource.Success, is AsyncResource.Idle -> {
+                    if (filteredDevices.isEmpty()) {
+                        Text(
+                            text = "No devices connected",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    } else {
+                        LazyColumn(
+                            contentPadding = PaddingValues(vertical = 8.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(filteredDevices) { device ->
+                                DesktopDeviceItemCard(
+                                    device = device,
+                                    onOpenClick = { onEditDeviceClick(device) },
+                                    onDeleteClick = { deviceToDelete = device }
+                                )
+                            }
                         }
                     }
                 }
