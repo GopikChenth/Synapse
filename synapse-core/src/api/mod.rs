@@ -179,8 +179,8 @@ impl ApiServer {
             .route("/api/v1/devices/:id/resume", post(resume_device))
 
             // Mutual Pairing Handshake
-            .route("/api/v1/cluster/pending/devices", get(list_pending_devices))
-            .route("/rest/cluster/pending/devices", get(list_pending_devices))
+            .route("/api/v1/cluster/pending/devices", get(list_pending_devices).delete(delete_pending_device_query))
+            .route("/rest/cluster/pending/devices", get(list_pending_devices).delete(delete_pending_device_query))
             .route("/api/v1/cluster/pending/devices/:id/accept", post(accept_pending_device))
             .route("/rest/cluster/pending/devices/:id/accept", post(accept_pending_device))
             .route("/api/v1/cluster/pending/devices/:id/reject", post(reject_pending_device))
@@ -640,6 +640,20 @@ async fn reject_pending_device(
     match state.sync_engine.storage().reject_pending_device(&id) {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn delete_pending_device_query(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if let Some(device_id) = params.get("device") {
+        match state.sync_engine.storage().reject_pending_device(device_id) {
+            Ok(_) => StatusCode::OK.into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    } else {
+        StatusCode::BAD_REQUEST.into_response()
     }
 }
 

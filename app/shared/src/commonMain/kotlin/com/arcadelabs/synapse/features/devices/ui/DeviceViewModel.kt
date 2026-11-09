@@ -276,6 +276,14 @@ class DeviceViewModel(
                 )
                 
                 apiClient.updateSystemConfig(updatedConfig)
+                try {
+                    apiClient.dismissPendingDevice(id)
+                    apiClient.dismissPendingDevice(normalizedId)
+                } catch (_: Exception) {}
+                val currentPending = _pendingDevices.value
+                _pendingDevices.value = currentPending.filterKeys { 
+                    it.normalizeDeviceId() != normalizedId && it.lowercase() != id.lowercase() 
+                }
                 removeOperation(normalizedId)
                 try {
                     updateDeviceStates()
@@ -348,6 +356,14 @@ class DeviceViewModel(
                 )
                 
                 apiClient.updateSystemConfig(updatedConfig)
+                try {
+                    apiClient.dismissPendingDevice(id)
+                    apiClient.dismissPendingDevice(normalizedId)
+                } catch (_: Exception) {}
+                val currentPending = _pendingDevices.value
+                _pendingDevices.value = currentPending.filterKeys { 
+                    it.normalizeDeviceId() != normalizedId && it.lowercase() != id.lowercase() 
+                }
                 removeOperation(normalizedId)
                 try {
                     updateDeviceStates()
@@ -362,9 +378,17 @@ class DeviceViewModel(
     }
 
     fun dismissPendingDevice(deviceId: String) {
+        val norm = deviceId.normalizeDeviceId()
+        val currentPending = _pendingDevices.value
+        _pendingDevices.value = currentPending.filterKeys { 
+            it.normalizeDeviceId() != norm && it.lowercase() != deviceId.lowercase() 
+        }
         viewModelScope.launch {
             try {
                 apiClient.dismissPendingDevice(deviceId)
+                try {
+                    apiClient.dismissPendingDevice(norm)
+                } catch (_: Exception) {}
                 updateDeviceStates()
             } catch (e: Exception) {
                 val errMsg = mapExceptionToUserMessage(e, "Failed to dismiss pending device")

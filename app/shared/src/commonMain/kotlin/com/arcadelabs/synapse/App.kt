@@ -819,6 +819,7 @@ fun App(
                                     prefilledDeviceId = pendingId
                                     prefilledDeviceName = pendingDevice.name
                                     isAddDeviceDialogOpen = true
+                                    deviceViewModel.dismissPendingDevice(pendingId)
                                 }
                             ) {
                                 Text("Add Device")

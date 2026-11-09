@@ -561,6 +561,10 @@ impl StorageEngine {
             ],
         )?;
         let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![device.device_id.trim()]);
+        let variants = crate::p2p::identity::get_device_id_variants(&device.device_id);
+        for v in variants {
+            let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
+        }
         Ok(())
     }
 
@@ -592,40 +596,42 @@ impl StorageEngine {
     }
 
     pub fn get_device(&self, device_id: &str) -> SqlResult<Option<DeviceRecord>> {
-        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
-            .unwrap_or_else(|_| device_id.trim().to_string());
+        let variants = crate::p2p::identity::get_device_id_variants(device_id);
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at
-             FROM devices WHERE LOWER(device_id) = LOWER(?1) OR LOWER(device_id) = LOWER(?2)",
-        )?;
-        let mut rows = stmt.query_map(params![device_id.trim(), norm_id], |row| {
-            let addrs_raw: String = row.get(2)?;
-            let addresses: Vec<String> = serde_json::from_str(&addrs_raw).unwrap_or_default();
-            Ok(DeviceRecord {
-                device_id: row.get(0)?,
-                name: row.get(1)?,
-                addresses,
-                is_paused: row.get::<_, i64>(3)? != 0,
-                is_trusted: row.get::<_, i64>(4)? != 0,
-                introducer: row.get::<_, i64>(5)? != 0,
-                cert_name: row.get(6)?,
-                created_at: row.get(7)?,
-            })
-        })?;
+        for v in &variants {
+            let mut stmt = conn.prepare(
+                "SELECT device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at
+                 FROM devices WHERE LOWER(device_id) = LOWER(?1)",
+            )?;
+            let mut rows = stmt.query_map(params![v], |row| {
+                let addrs_raw: String = row.get(2)?;
+                let addresses: Vec<String> = serde_json::from_str(&addrs_raw).unwrap_or_default();
+                Ok(DeviceRecord {
+                    device_id: row.get(0)?,
+                    name: row.get(1)?,
+                    addresses,
+                    is_paused: row.get::<_, i64>(3)? != 0,
+                    is_trusted: row.get::<_, i64>(4)? != 0,
+                    introducer: row.get::<_, i64>(5)? != 0,
+                    cert_name: row.get(6)?,
+                    created_at: row.get(7)?,
+                })
+            })?;
 
-        match rows.next() {
-            Some(res) => Ok(Some(res?)),
-            None => Ok(None),
+            if let Some(res) = rows.next() {
+                return Ok(Some(res?));
+            }
         }
+        Ok(None)
     }
 
     pub fn remove_device(&self, device_id: &str) -> SqlResult<()> {
-        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
-            .unwrap_or_else(|_| device_id.trim().to_string());
+        let variants = crate::p2p::identity::get_device_id_variants(device_id);
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM devices WHERE LOWER(device_id) = LOWER(?1) OR LOWER(device_id) = LOWER(?2)", params![device_id.trim(), norm_id])?;
-        conn.execute("DELETE FROM folder_devices WHERE LOWER(device_id) = LOWER(?1) OR LOWER(device_id) = LOWER(?2)", params![device_id.trim(), norm_id])?;
+        for v in variants {
+            let _ = conn.execute("DELETE FROM devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
+            let _ = conn.execute("DELETE FROM folder_devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
+        }
         Ok(())
     }
 
@@ -882,8 +888,15 @@ impl StorageEngine {
         let mut to_purge = Vec::new();
         for item in rows {
             let record = item?;
-            let mut check_stmt = conn.prepare("SELECT 1 FROM devices WHERE LOWER(device_id) = LOWER(?1)")?;
-            let already_paired = check_stmt.exists(params![record.device_id])?;
+            let variants = crate::p2p::identity::get_device_id_variants(&record.device_id);
+            let mut already_paired = false;
+            for v in variants {
+                let mut check_stmt = conn.prepare("SELECT 1 FROM devices WHERE LOWER(device_id) = LOWER(?1)")?;
+                if check_stmt.exists(params![v])? {
+                    already_paired = true;
+                    break;
+                }
+            }
             if already_paired {
                 to_purge.push(record.device_id);
             } else {
@@ -891,42 +904,59 @@ impl StorageEngine {
             }
         }
         for purged_id in to_purge {
-            let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![purged_id]);
+            let variants = crate::p2p::identity::get_device_id_variants(&purged_id);
+            for v in variants {
+                let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
+            }
         }
         Ok(list)
     }
 
     pub fn accept_pending_device(&self, device_id: &str) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT device_id, name, address, received_at FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)",
-        )?;
-        let pending = stmt.query_row(params![device_id.trim()], |row| {
-            Ok(PendingDeviceRecord {
-                device_id: row.get(0)?,
-                name: row.get(1)?,
-                address: row.get(2)?,
-                received_at: row.get(3)?,
-            })
-        })?;
+        let variants = crate::p2p::identity::get_device_id_variants(device_id);
+        let mut pending = None;
+        for v in &variants {
+            let mut stmt = conn.prepare(
+                "SELECT device_id, name, address, received_at FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)",
+            )?;
+            if let Ok(rec) = stmt.query_row(params![v], |row| {
+                Ok(PendingDeviceRecord {
+                    device_id: row.get(0)?,
+                    name: row.get(1)?,
+                    address: row.get(2)?,
+                    received_at: row.get(3)?,
+                })
+            }) {
+                pending = Some(rec);
+                break;
+            }
+        }
 
-        let addrs = vec![pending.address];
-        let addrs_json = serde_json::to_string(&addrs).unwrap_or_else(|_| "[]".to_string());
+        if let Some(p) = pending {
+            let addrs = vec![p.address];
+            let addrs_json = serde_json::to_string(&addrs).unwrap_or_else(|_| "[]".to_string());
 
-        conn.execute(
-            "INSERT INTO devices (device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at)
-             VALUES (?1, ?2, ?3, 0, 1, 0, NULL, ?4)
-             ON CONFLICT(device_id) DO UPDATE SET name = excluded.name",
-            params![pending.device_id, pending.name, addrs_json, pending.received_at],
-        )?;
+            conn.execute(
+                "INSERT INTO devices (device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at)
+                 VALUES (?1, ?2, ?3, 0, 1, 0, NULL, ?4)
+                 ON CONFLICT(device_id) DO UPDATE SET name = excluded.name",
+                params![p.device_id, p.name, addrs_json, p.received_at],
+            )?;
+        }
 
-        conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![device_id.trim()])?;
+        for v in variants {
+            let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
+        }
         Ok(())
     }
 
     pub fn reject_pending_device(&self, device_id: &str) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![device_id.trim()])?;
+        let variants = crate::p2p::identity::get_device_id_variants(device_id);
+        for v in variants {
+            let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
+        }
         Ok(())
     }
 
