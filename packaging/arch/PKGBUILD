@@ -1,6 +1,6 @@
 # Maintainer: ArcadeLabs <contact@arcadelabs.com>
 pkgname=synapse
-pkgver=1.0.0
+pkgver=1.0.6
 pkgrel=1
 pkgdesc="Continuous Peer-to-Peer File Synchronization Client"
 arch=('x86_64' 'aarch64')

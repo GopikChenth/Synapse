@@ -33,5 +33,7 @@ reference_syncthing_fork
 synapse-core/target/
 *.pkg.tar.zst
 *.apk
+packaging/**/pkg/
+packaging/**/src/
 
 

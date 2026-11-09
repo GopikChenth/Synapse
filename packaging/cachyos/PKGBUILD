@@ -1,6 +1,6 @@
 # Maintainer: ArcadeLabs <contact@arcadelabs.com>
 pkgname=synapse-cachyos
-pkgver=1.0.5
+pkgver=1.0.6
 pkgrel=1
 pkgdesc="Continuous Peer-to-Peer File Synchronization Client (CachyOS x86-64 Microarchitecture Optimized)"
 arch=('x86_64' 'x86_64_v3' 'x86_64_v4')
