@@ -172,6 +172,7 @@ fun App(
     var prefilledFolderId by remember { mutableStateOf("") }
     var prefilledFolderLabel by remember { mutableStateOf("") }
     var prefilledFolderSharedDevices by remember { mutableStateOf<List<String>>(emptyList()) }
+    var isQuarantineDialogOpen by remember { mutableStateOf(false) }
 
     // Synchronize UI flags into modalState
     LaunchedEffect(
@@ -536,7 +537,8 @@ fun App(
                                     coroutineScope.launch {
                                         pagerState.animateScrollToPage(Screen.DEVICES.ordinal)
                                     }
-                                }
+                                },
+                                onOpenQuarantineClick = { isQuarantineDialogOpen = true }
                             )
                             Screen.FOLDERS -> FoldersScreen(
                                 onAddFolderClick = { isCreateFolderDialogOpen = true },
@@ -813,16 +815,26 @@ fun App(
                             }
                         },
                         confirmButton = {
-                            Button(
-                                shape = SynapsePillShape,
-                                onClick = {
-                                    prefilledDeviceId = pendingId
-                                    prefilledDeviceName = pendingDevice.name
-                                    isAddDeviceDialogOpen = true
-                                    deviceViewModel.dismissPendingDevice(pendingId)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    shape = SynapsePillShape,
+                                    onClick = {
+                                        deviceViewModel.acceptPendingDeviceDirect(pendingId)
+                                    }
+                                ) {
+                                    Text("Quick Accept & Pair")
                                 }
-                            ) {
-                                Text("Add Device")
+                                OutlinedButton(
+                                    shape = SynapsePillShape,
+                                    onClick = {
+                                        prefilledDeviceId = pendingId
+                                        prefilledDeviceName = pendingDevice.name
+                                        isAddDeviceDialogOpen = true
+                                        deviceViewModel.dismissPendingDevice(pendingId)
+                                    }
+                                ) {
+                                    Text("Configure & Add")
+                                }
                             }
                         },
                         dismissButton = {
@@ -860,16 +872,26 @@ fun App(
                             }
                         },
                         confirmButton = {
-                            Button(
-                                shape = SynapsePillShape,
-                                onClick = {
-                                    prefilledFolderId = folderId
-                                    prefilledFolderLabel = folderDetails.label
-                                    prefilledFolderSharedDevices = listOf(offeringDeviceId)
-                                    isCreateFolderDialogOpen = true
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    shape = SynapsePillShape,
+                                    onClick = {
+                                        deviceViewModel.acceptPendingFolderDirect(folderId)
+                                    }
+                                ) {
+                                    Text("Quick Accept")
                                 }
-                            ) {
-                                Text("Add Folder")
+                                OutlinedButton(
+                                    shape = SynapsePillShape,
+                                    onClick = {
+                                        prefilledFolderId = folderId
+                                        prefilledFolderLabel = folderDetails.label
+                                        prefilledFolderSharedDevices = listOf(offeringDeviceId)
+                                        isCreateFolderDialogOpen = true
+                                    }
+                                ) {
+                                    Text("Configure & Add")
+                                }
                             }
                         },
                         dismissButton = {
@@ -887,6 +909,12 @@ fun App(
                                 Text("Dismiss", color = MaterialTheme.colorScheme.error)
                             }
                         }
+                    )
+                }
+
+                if (isQuarantineDialogOpen) {
+                    com.arcadelabs.synapse.features.quarantine.QuarantineDialog(
+                        onDismissRequest = { isQuarantineDialogOpen = false }
                     )
                 }
 

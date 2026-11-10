@@ -55,6 +55,14 @@ impl FolderRecord {
             marker_name: default_marker_name(),
         }
     }
+
+    pub fn parsed_sync_mode(&self) -> crate::state::SyncMode {
+        self.sync_mode.parse().unwrap_or_default()
+    }
+
+    pub fn parsed_conflict_policy(&self) -> crate::state::ConflictPolicy {
+        self.conflict_policy.parse().unwrap_or_default()
+    }
 }
 
 /// Device record in cluster pairing database.
@@ -213,6 +221,12 @@ pub struct QuarantineConflict {
     pub detected_at: i64,
 }
 
+impl QuarantineConflict {
+    pub fn parsed_status(&self) -> crate::state::ConflictStatus {
+        self.status.parse().unwrap_or_default()
+    }
+}
+
 /// Central database and block storage manager.
 #[derive(Clone)]
 pub struct StorageEngine {
@@ -346,7 +360,7 @@ impl StorageEngine {
 
             -- Cluster & Paired Devices
             CREATE TABLE IF NOT EXISTS devices (
-                device_id TEXT PRIMARY KEY COLLATE NOCASE,
+                device_id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 addresses TEXT NOT NULL DEFAULT 'dynamic',
                 is_paused INTEGER NOT NULL DEFAULT 0,
@@ -358,7 +372,7 @@ impl StorageEngine {
 
             -- Pending incoming device pairings
             CREATE TABLE IF NOT EXISTS pending_devices (
-                device_id TEXT PRIMARY KEY COLLATE NOCASE,
+                device_id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 address TEXT NOT NULL,
                 received_at INTEGER NOT NULL
@@ -367,7 +381,7 @@ impl StorageEngine {
             -- Folder Sharing Matrix (Which folders are shared with which devices)
             CREATE TABLE IF NOT EXISTS folder_devices (
                 folder_id TEXT NOT NULL,
-                device_id TEXT NOT NULL COLLATE NOCASE,
+                device_id TEXT NOT NULL,
                 PRIMARY KEY (folder_id, device_id),
                 FOREIGN KEY (folder_id) REFERENCES folders(folder_id) ON DELETE CASCADE
             );
@@ -375,7 +389,7 @@ impl StorageEngine {
             -- Pending incoming folder invitations
             CREATE TABLE IF NOT EXISTS pending_folders (
                 folder_id TEXT NOT NULL,
-                device_id TEXT NOT NULL COLLATE NOCASE,
+                device_id TEXT NOT NULL,
                 folder_label TEXT NOT NULL,
                 offered_at INTEGER NOT NULL,
                 PRIMARY KEY (folder_id, device_id)
@@ -550,7 +564,7 @@ impl StorageEngine {
                 introducer = excluded.introducer,
                 cert_name = excluded.cert_name",
             params![
-                device.device_id.trim(),
+                device.device_id,
                 device.name,
                 addrs_json,
                 if device.is_paused { 1 } else { 0 },
@@ -560,11 +574,6 @@ impl StorageEngine {
                 device.created_at,
             ],
         )?;
-        let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![device.device_id.trim()]);
-        let variants = crate::p2p::identity::get_device_id_variants(&device.device_id);
-        for v in variants {
-            let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
-        }
         Ok(())
     }
 
@@ -596,62 +605,52 @@ impl StorageEngine {
     }
 
     pub fn get_device(&self, device_id: &str) -> SqlResult<Option<DeviceRecord>> {
-        let variants = crate::p2p::identity::get_device_id_variants(device_id);
         let conn = self.conn.lock().unwrap();
-        for v in &variants {
-            let mut stmt = conn.prepare(
-                "SELECT device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at
-                 FROM devices WHERE LOWER(device_id) = LOWER(?1)",
-            )?;
-            let mut rows = stmt.query_map(params![v], |row| {
-                let addrs_raw: String = row.get(2)?;
-                let addresses: Vec<String> = serde_json::from_str(&addrs_raw).unwrap_or_default();
-                Ok(DeviceRecord {
-                    device_id: row.get(0)?,
-                    name: row.get(1)?,
-                    addresses,
-                    is_paused: row.get::<_, i64>(3)? != 0,
-                    is_trusted: row.get::<_, i64>(4)? != 0,
-                    introducer: row.get::<_, i64>(5)? != 0,
-                    cert_name: row.get(6)?,
-                    created_at: row.get(7)?,
-                })
-            })?;
+        let mut stmt = conn.prepare(
+            "SELECT device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at
+             FROM devices WHERE device_id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![device_id], |row| {
+            let addrs_raw: String = row.get(2)?;
+            let addresses: Vec<String> = serde_json::from_str(&addrs_raw).unwrap_or_default();
+            Ok(DeviceRecord {
+                device_id: row.get(0)?,
+                name: row.get(1)?,
+                addresses,
+                is_paused: row.get::<_, i64>(3)? != 0,
+                is_trusted: row.get::<_, i64>(4)? != 0,
+                introducer: row.get::<_, i64>(5)? != 0,
+                cert_name: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
 
-            if let Some(res) = rows.next() {
-                return Ok(Some(res?));
-            }
+        match rows.next() {
+            Some(res) => Ok(Some(res?)),
+            None => Ok(None),
         }
-        Ok(None)
     }
 
     pub fn remove_device(&self, device_id: &str) -> SqlResult<()> {
-        let variants = crate::p2p::identity::get_device_id_variants(device_id);
         let conn = self.conn.lock().unwrap();
-        for v in variants {
-            let _ = conn.execute("DELETE FROM devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
-            let _ = conn.execute("DELETE FROM folder_devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
-        }
+        conn.execute("DELETE FROM devices WHERE device_id = ?1", params![device_id])?;
+        conn.execute("DELETE FROM folder_devices WHERE device_id = ?1", params![device_id])?;
         Ok(())
     }
 
     pub fn set_device_paused(&self, device_id: &str, paused: bool) -> SqlResult<()> {
-        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
-            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE devices SET is_paused = ?1 WHERE LOWER(device_id) = LOWER(?2) OR LOWER(device_id) = LOWER(?3)",
-            params![if paused { 1 } else { 0 }, device_id.trim(), norm_id],
+            "UPDATE devices SET is_paused = ?1 WHERE device_id = ?2",
+            params![if paused { 1 } else { 0 }, device_id],
         )?;
         Ok(())
     }
 
     pub fn is_device_introducer(&self, device_id: &str) -> SqlResult<bool> {
-        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
-            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT introducer FROM devices WHERE LOWER(device_id) = LOWER(?1) OR LOWER(device_id) = LOWER(?2)")?;
-        let mut rows = stmt.query_map(params![device_id.trim(), norm_id], |row| row.get::<_, i64>(0))?;
+        let mut stmt = conn.prepare("SELECT introducer FROM devices WHERE device_id = ?1")?;
+        let mut rows = stmt.query_map(params![device_id], |row| row.get::<_, i64>(0))?;
         if let Some(r) = rows.next() {
             Ok(r? != 0)
         } else {
@@ -660,22 +659,18 @@ impl StorageEngine {
     }
 
     pub fn set_device_introducer(&self, device_id: &str, introducer: bool) -> SqlResult<()> {
-        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
-            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE devices SET introducer = ?1 WHERE LOWER(device_id) = LOWER(?2) OR LOWER(device_id) = LOWER(?3)",
-            params![if introducer { 1 } else { 0 }, device_id.trim(), norm_id],
+            "UPDATE devices SET introducer = ?1 WHERE device_id = ?2",
+            params![if introducer { 1 } else { 0 }, device_id],
         )?;
         Ok(())
     }
 
     pub fn is_device_trusted(&self, device_id: &str) -> SqlResult<bool> {
-        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
-            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT is_trusted FROM devices WHERE LOWER(device_id) = LOWER(?1) OR LOWER(device_id) = LOWER(?2)")?;
-        let mut rows = stmt.query_map(params![device_id.trim(), norm_id], |row| row.get::<_, i64>(0))?;
+        let mut stmt = conn.prepare("SELECT is_trusted FROM devices WHERE device_id = ?1")?;
+        let mut rows = stmt.query_map(params![device_id], |row| row.get::<_, i64>(0))?;
         if let Some(r) = rows.next() {
             Ok(r? != 0)
         } else {
@@ -684,12 +679,10 @@ impl StorageEngine {
     }
 
     pub fn set_device_trusted(&self, device_id: &str, is_trusted: bool) -> SqlResult<()> {
-        let norm_id = crate::p2p::identity::normalize_device_id(device_id)
-            .unwrap_or_else(|_| device_id.trim().to_string());
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE devices SET is_trusted = ?1 WHERE LOWER(device_id) = LOWER(?2) OR LOWER(device_id) = LOWER(?3)",
-            params![if is_trusted { 1 } else { 0 }, device_id.trim(), norm_id],
+            "UPDATE devices SET is_trusted = ?1 WHERE device_id = ?2",
+            params![if is_trusted { 1 } else { 0 }, device_id],
         )?;
         Ok(())
     }
@@ -853,10 +846,6 @@ impl StorageEngine {
     // =========================================================================
 
     pub fn add_pending_device(&self, rec: &PendingDeviceRecord) -> SqlResult<()> {
-        // Do not add to pending if already a configured device
-        if let Ok(Some(_)) = self.get_device(&rec.device_id) {
-            return Ok(());
-        }
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO pending_devices (device_id, name, address, received_at)
@@ -865,7 +854,7 @@ impl StorageEngine {
                 name = excluded.name,
                 address = excluded.address,
                 received_at = excluded.received_at",
-            params![rec.device_id.trim(), rec.name, rec.address, rec.received_at],
+            params![rec.device_id, rec.name, rec.address, rec.received_at],
         )?;
         Ok(())
     }
@@ -885,78 +874,63 @@ impl StorageEngine {
         })?;
 
         let mut list = Vec::new();
-        let mut to_purge = Vec::new();
         for item in rows {
-            let record = item?;
-            let variants = crate::p2p::identity::get_device_id_variants(&record.device_id);
-            let mut already_paired = false;
-            for v in variants {
-                let mut check_stmt = conn.prepare("SELECT 1 FROM devices WHERE LOWER(device_id) = LOWER(?1)")?;
-                if check_stmt.exists(params![v])? {
-                    already_paired = true;
-                    break;
-                }
-            }
-            if already_paired {
-                to_purge.push(record.device_id);
-            } else {
-                list.push(record);
-            }
-        }
-        for purged_id in to_purge {
-            let variants = crate::p2p::identity::get_device_id_variants(&purged_id);
-            for v in variants {
-                let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
-            }
+            list.push(item?);
         }
         Ok(list)
     }
 
+    pub fn get_pending_device(&self, device_id: &str) -> SqlResult<Option<PendingDeviceRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT device_id, name, address, received_at FROM pending_devices WHERE device_id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![device_id], |row| {
+            Ok(PendingDeviceRecord {
+                device_id: row.get(0)?,
+                name: row.get(1)?,
+                address: row.get(2)?,
+                received_at: row.get(3)?,
+            })
+        })?;
+
+        match rows.next() {
+            Some(res) => Ok(Some(res?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn accept_pending_device(&self, device_id: &str) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
-        let variants = crate::p2p::identity::get_device_id_variants(device_id);
-        let mut pending = None;
-        for v in &variants {
-            let mut stmt = conn.prepare(
-                "SELECT device_id, name, address, received_at FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)",
-            )?;
-            if let Ok(rec) = stmt.query_row(params![v], |row| {
-                Ok(PendingDeviceRecord {
-                    device_id: row.get(0)?,
-                    name: row.get(1)?,
-                    address: row.get(2)?,
-                    received_at: row.get(3)?,
-                })
-            }) {
-                pending = Some(rec);
-                break;
-            }
-        }
+        let mut stmt = conn.prepare(
+            "SELECT device_id, name, address, received_at FROM pending_devices WHERE device_id = ?1",
+        )?;
+        let pending = stmt.query_row(params![device_id], |row| {
+            Ok(PendingDeviceRecord {
+                device_id: row.get(0)?,
+                name: row.get(1)?,
+                address: row.get(2)?,
+                received_at: row.get(3)?,
+            })
+        })?;
 
-        if let Some(p) = pending {
-            let addrs = vec![p.address];
-            let addrs_json = serde_json::to_string(&addrs).unwrap_or_else(|_| "[]".to_string());
+        let addrs = vec![pending.address];
+        let addrs_json = serde_json::to_string(&addrs).unwrap_or_else(|_| "[]".to_string());
 
-            conn.execute(
-                "INSERT INTO devices (device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at)
-                 VALUES (?1, ?2, ?3, 0, 1, 0, NULL, ?4)
-                 ON CONFLICT(device_id) DO UPDATE SET name = excluded.name",
-                params![p.device_id, p.name, addrs_json, p.received_at],
-            )?;
-        }
+        conn.execute(
+            "INSERT INTO devices (device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at)
+             VALUES (?1, ?2, ?3, 0, 1, 0, NULL, ?4)
+             ON CONFLICT(device_id) DO UPDATE SET name = excluded.name",
+            params![pending.device_id, pending.name, addrs_json, pending.received_at],
+        )?;
 
-        for v in variants {
-            let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
-        }
+        conn.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
         Ok(())
     }
 
     pub fn reject_pending_device(&self, device_id: &str) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
-        let variants = crate::p2p::identity::get_device_id_variants(device_id);
-        for v in variants {
-            let _ = conn.execute("DELETE FROM pending_devices WHERE LOWER(device_id) = LOWER(?1)", params![v]);
-        }
+        conn.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
         Ok(())
     }
 
@@ -1502,6 +1476,24 @@ impl StorageEngine {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE quarantine_conflicts SET status = 'RESOLVED' WHERE conflict_id = ?1",
+            params![conflict_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn ignore_conflict(&self, conflict_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE quarantine_conflicts SET status = 'IGNORED' WHERE conflict_id = ?1",
+            params![conflict_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn reopen_conflict(&self, conflict_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE quarantine_conflicts SET status = 'PENDING' WHERE conflict_id = ?1",
             params![conflict_id],
         )?;
         Ok(())

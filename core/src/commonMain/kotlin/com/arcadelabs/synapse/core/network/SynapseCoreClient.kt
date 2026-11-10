@@ -45,6 +45,8 @@ interface SynapseCoreClient {
     suspend fun getConflicts(): List<CoreQuarantineConflict>
     suspend fun getConflictDiff(conflictId: String): CoreDiffResponse
     suspend fun resolveConflict(conflictId: String, request: CoreResolveRequest): Boolean
+    suspend fun ignoreConflict(conflictId: String): Boolean
+    suspend fun reopenConflict(conflictId: String): Boolean
 }
 
 class SynapseCoreClientImpl(
@@ -232,6 +234,20 @@ class SynapseCoreClientImpl(
             contentType(ContentType.Application.Json)
             tokenProvider()?.let { header("Authorization", "Bearer $it") }
             setBody(request)
+        }
+        return resp.status.isSuccess()
+    }
+
+    override suspend fun ignoreConflict(conflictId: String): Boolean {
+        val resp = httpClient.post("${baseUrl()}/api/v1/conflicts/$conflictId/ignore") {
+            tokenProvider()?.let { header("Authorization", "Bearer $it") }
+        }
+        return resp.status.isSuccess()
+    }
+
+    override suspend fun reopenConflict(conflictId: String): Boolean {
+        val resp = httpClient.post("${baseUrl()}/api/v1/conflicts/$conflictId/reopen") {
+            tokenProvider()?.let { header("Authorization", "Bearer $it") }
         }
         return resp.status.isSuccess()
     }

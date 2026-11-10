@@ -140,6 +140,11 @@ interface SyncthingApiClient {
     suspend fun dismissPendingDevice(deviceId: String): HttpResponse
 
     /**
+     * Directly accepts a pending device pairing request into the cluster.
+     */
+    suspend fun acceptPendingDevice(deviceId: String): Boolean
+
+    /**
      * Retrieves the map of pending folder shares offered by remote devices.
      */
     suspend fun getPendingFolders(): Map<String, PendingFolderOffer>
@@ -153,6 +158,36 @@ interface SyncthingApiClient {
         label: String = "",
         time: String = ""
     ): HttpResponse
+
+    /**
+     * Directly accepts a pending folder share request into the cluster.
+     */
+    suspend fun acceptPendingFolder(folderId: String, localPath: String? = null): Boolean
+
+    /**
+     * Retrieves the list of files in virtual quarantine / conflict state.
+     */
+    suspend fun getConflicts(): List<CoreQuarantineConflict>
+
+    /**
+     * Computes or fetches the 3-way diff for a quarantined conflict.
+     */
+    suspend fun getConflictDiff(conflictId: String): CoreDiffResponse
+
+    /**
+     * Resolves a quarantined conflict with the chosen action policy.
+     */
+    suspend fun resolveConflict(conflictId: String, request: CoreResolveRequest): Boolean
+
+    /**
+     * Ignores a quarantined conflict.
+     */
+    suspend fun ignoreConflict(conflictId: String): Boolean
+
+    /**
+     * Reopens an ignored conflict back to pending.
+     */
+    suspend fun reopenConflict(conflictId: String): Boolean
 
     /**
      * Retrieves the Syncthing daemon options configuration.
@@ -772,6 +807,68 @@ internal class SyncthingApiClientImpl(
         }
 
         return deleteResponse
+    }
+
+    override suspend fun acceptPendingDevice(deviceId: String): Boolean {
+        if (checkIsSynapseCore()) {
+            return try {
+                val resp = client.post("$baseUrl/api/v1/cluster/pending/devices/$deviceId/accept")
+                resp.status.isSuccess()
+            } catch (_: Exception) {
+                false
+            }
+        }
+        return false
+    }
+
+    override suspend fun acceptPendingFolder(folderId: String, localPath: String?): Boolean {
+        if (checkIsSynapseCore()) {
+            return try {
+                val resp = client.post("$baseUrl/api/v1/cluster/pending/folders/$folderId/accept") {
+                    if (localPath != null) {
+                        contentType(io.ktor.http.ContentType.Application.Json)
+                        setBody(mapOf("local_path" to localPath))
+                    }
+                }
+                resp.status.isSuccess()
+            } catch (_: Exception) {
+                false
+            }
+        }
+        return false
+    }
+
+    override suspend fun getConflicts(): List<CoreQuarantineConflict> {
+        if (checkIsSynapseCore()) {
+            return try {
+                client.get("$baseUrl/api/v1/conflicts").body()
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+        return emptyList()
+    }
+
+    override suspend fun getConflictDiff(conflictId: String): CoreDiffResponse {
+        return client.get("$baseUrl/api/v1/conflicts/$conflictId/diff").body()
+    }
+
+    override suspend fun resolveConflict(conflictId: String, request: CoreResolveRequest): Boolean {
+        val resp = client.post("$baseUrl/api/v1/conflicts/$conflictId/resolve") {
+            contentType(io.ktor.http.ContentType.Application.Json)
+            setBody(request)
+        }
+        return resp.status.isSuccess()
+    }
+
+    override suspend fun ignoreConflict(conflictId: String): Boolean {
+        val resp = client.post("$baseUrl/api/v1/conflicts/$conflictId/ignore")
+        return resp.status.isSuccess()
+    }
+
+    override suspend fun reopenConflict(conflictId: String): Boolean {
+        val resp = client.post("$baseUrl/api/v1/conflicts/$conflictId/reopen")
+        return resp.status.isSuccess()
     }
 
     override suspend fun getPendingFolders(): Map<String, PendingFolderOffer> {

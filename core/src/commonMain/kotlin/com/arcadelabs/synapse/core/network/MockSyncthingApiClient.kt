@@ -295,4 +295,70 @@ class MockSyncthingApiClient(
             )
         )
     }
+
+    override suspend fun acceptPendingDevice(deviceId: String): Boolean {
+        pendingDevicesMap.remove(deviceId)
+        return true
+    }
+
+    override suspend fun acceptPendingFolder(folderId: String, localPath: String?): Boolean {
+        pendingFoldersMap.remove(folderId)
+        return true
+    }
+
+    override suspend fun getConflicts(): List<CoreQuarantineConflict> {
+        return listOf(
+            CoreQuarantineConflict(
+                conflictId = "mock-conflict-1",
+                folderId = "default",
+                relativePath = "notes/todo.md",
+                baseRevision = "rev-base-101",
+                localRevision = "rev-local-102",
+                remoteRevision = "rev-remote-103",
+                stagedPayloadPath = "/tmp/quarantine/mock-conflict-1",
+                status = "PENDING",
+                detectedAt = 1700000000000L,
+                availableActions = listOf("inspect_diff", "resolve_local", "resolve_remote", "resolve_custom", "ignore"),
+                isTerminal = false,
+                stateDescription = "Awaiting user resolution: file held in virtual quarantine"
+            )
+        )
+    }
+
+    override suspend fun getConflictDiff(conflictId: String): CoreDiffResponse {
+        return CoreDiffResponse(
+            conflictId = conflictId,
+            folderId = "default",
+            relativePath = "notes/todo.md",
+            base = "- [ ] Clean room\n- [ ] Buy groceries\n",
+            local = "- [x] Clean room (done)\n- [ ] Buy groceries\n",
+            remote = "- [ ] Clean room\n- [x] Buy groceries (done)\n- [ ] Call doctor\n",
+            hunks = listOf(
+                CoreDiffHunk(
+                    hunkType = CoreHunkType.LOCAL_CHANGE,
+                    baseLines = listOf("- [ ] Clean room"),
+                    localLines = listOf("- [x] Clean room (done)"),
+                    remoteLines = emptyList()
+                ),
+                CoreDiffHunk(
+                    hunkType = CoreHunkType.REMOTE_CHANGE,
+                    baseLines = listOf("- [ ] Buy groceries"),
+                    localLines = emptyList(),
+                    remoteLines = listOf("- [x] Buy groceries (done)", "- [ ] Call doctor")
+                )
+            )
+        )
+    }
+
+    override suspend fun resolveConflict(conflictId: String, request: CoreResolveRequest): Boolean {
+        return true
+    }
+
+    override suspend fun ignoreConflict(conflictId: String): Boolean {
+        return true
+    }
+
+    override suspend fun reopenConflict(conflictId: String): Boolean {
+        return true
+    }
 }

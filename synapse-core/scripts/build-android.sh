@@ -62,18 +62,8 @@ for i in "${!ABIS[@]}"; do
     SRC_BIN="${ROOT_DIR}/target/${TARGET}/release/synapse-core"
     DEST_SO="${DEST_DIR}/libsynapse.so"
 
-    if [ -n "${ANDROID_NDK_HOME:-}" ] && [ -f "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" ]; then
-        "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" "${SRC_BIN}" 2>/dev/null || true
-    fi
-
     cp "${SRC_BIN}" "${DEST_SO}"
     chmod +x "${DEST_SO}"
-
-    # Also mirror to project root bin/android
-    BIN_MIRROR="${ROOT_DIR}/../bin/android/${ABI}"
-    mkdir -p "${BIN_MIRROR}"
-    cp "${SRC_BIN}" "${BIN_MIRROR}/libsynapse.so"
-    chmod +x "${BIN_MIRROR}/libsynapse.so"
 
     echo "    Output: ${DEST_SO} ($(wc -c < "${DEST_SO}") bytes)"
 done

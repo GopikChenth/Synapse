@@ -2,6 +2,7 @@ package com.arcadelabs.synapse.di
 
 import com.arcadelabs.synapse.features.folders.ui.FolderViewModel
 import com.arcadelabs.synapse.features.devices.ui.DeviceViewModel
+import com.arcadelabs.synapse.features.quarantine.QuarantineViewModel
 import com.arcadelabs.synapse.features.status.ui.StatusViewModel
 import com.arcadelabs.synapse.features.recent.ui.RecentChangesViewModel
 import com.arcadelabs.synapse.features.settings.ui.SettingsViewModel
@@ -14,5 +15,6 @@ val appDiModule = module {
     viewModelOf(::StatusViewModel)
     viewModelOf(::RecentChangesViewModel)
     viewModelOf(::SettingsViewModel)
+    viewModelOf(::QuarantineViewModel)
 }
 

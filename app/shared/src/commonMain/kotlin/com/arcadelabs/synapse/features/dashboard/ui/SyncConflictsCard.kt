@@ -3,6 +3,7 @@ package com.arcadelabs.synapse.features.dashboard.ui
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -15,7 +16,8 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun SyncConflictsCard(
     conflictCount: Long,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
 ) {
     var targetConflicts by remember { mutableStateOf(0f) }
     LaunchedEffect(conflictCount) {
@@ -28,7 +30,7 @@ fun SyncConflictsCard(
     )
 
     Card(
-        modifier = modifier,
+        modifier = if (onClick != null) modifier.clickable { onClick() } else modifier,
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer

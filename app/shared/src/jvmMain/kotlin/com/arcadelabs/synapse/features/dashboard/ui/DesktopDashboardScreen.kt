@@ -59,6 +59,7 @@ fun DesktopDashboardScreen(
     onEditFolderClick: (com.arcadelabs.synapse.core.domain.models.Folder) -> Unit,
     openFolder: ((String) -> Unit)? = null,
     apiClient: SyncthingApiClient,
+    onOpenQuarantineClick: () -> Unit = {},
     folderViewModel: FolderViewModel = koinViewModel(),
     deviceViewModel: DeviceViewModel = koinViewModel(),
     statusViewModel: StatusViewModel = koinViewModel()
@@ -169,7 +170,8 @@ fun DesktopDashboardScreen(
                                     copiedIdFeedback = id
                                 } catch (_: Exception) {}
                             },
-                            apiClient = apiClient
+                            apiClient = apiClient,
+                            onOpenQuarantineClick = onOpenQuarantineClick
                         )
 
                         RemoteDevicesSection(
@@ -219,7 +221,8 @@ fun DesktopDashboardScreen(
                                 copiedIdFeedback = id
                             } catch (_: Exception) {}
                         },
-                        apiClient = apiClient
+                        apiClient = apiClient,
+                        onOpenQuarantineClick = onOpenQuarantineClick
                     )
 
                     RemoteDevicesSection(
@@ -858,7 +861,8 @@ fun ThisDeviceSection(
     devices: List<DeviceUiModel>,
     copiedIdFeedback: String?,
     onCopyClick: (String) -> Unit,
-    apiClient: SyncthingApiClient
+    apiClient: SyncthingApiClient,
+    onOpenQuarantineClick: () -> Unit = {}
 ) {
     // Find local device in devices list to resolve its name
     val myId = statusState.myId
@@ -975,6 +979,48 @@ fun ThisDeviceSection(
                 modifier = Modifier.padding(bottom = 12.dp)
             )
 
+            if (syncConflictsCount > 0) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                        .clickable { onOpenQuarantineClick() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "$syncConflictsCount conflicts in Virtual Quarantine",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                        Text(
+                            text = "Review & Resolve →",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+
             // Side-by-Side Speed Graphs
             Row(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -1027,7 +1073,16 @@ fun ThisDeviceSection(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        ThisDeviceStatRow("Sync Conflicts", if (animatedConflicts.toInt() > 0) "${animatedConflicts.toInt()}" else "0")
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpenQuarantineClick() }
+                        ) {
+                            ThisDeviceStatRow(
+                                "Sync Conflicts",
+                                if (animatedConflicts.toInt() > 0) "${animatedConflicts.toInt()} (Review)" else "0"
+                            )
+                        }
                         ThisDeviceStatRow("Uptime", formatUptime(animatedUptime.toLong()))
                         
                         // Identification row with copy

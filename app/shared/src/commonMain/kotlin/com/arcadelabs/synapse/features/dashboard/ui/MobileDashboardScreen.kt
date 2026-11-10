@@ -37,6 +37,7 @@ fun MobileDashboardScreen(
     onSettingsClick: () -> Unit,
     onNavigateToFolders: () -> Unit,
     onNavigateToDevices: () -> Unit,
+    onOpenQuarantineClick: () -> Unit = {},
     folderViewModel: FolderViewModel = koinViewModel(),
     deviceViewModel: DeviceViewModel = koinViewModel(),
     statusViewModel: StatusViewModel = koinViewModel(),
@@ -197,7 +198,8 @@ fun MobileDashboardScreen(
                     
                     SyncConflictsCard(
                         conflictCount = syncConflictsCount,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        onClick = onOpenQuarantineClick
                     )
                 }
             }

@@ -377,6 +377,26 @@ class DeviceViewModel(
         }
     }
 
+    fun acceptPendingDeviceDirect(deviceId: String) {
+        val norm = deviceId.normalizeDeviceId()
+        val currentPending = _pendingDevices.value
+        _pendingDevices.value = currentPending.filterKeys { 
+            it.normalizeDeviceId() != norm && it.lowercase() != deviceId.lowercase() 
+        }
+        viewModelScope.launch {
+            try {
+                apiClient.acceptPendingDevice(deviceId)
+                try {
+                    apiClient.acceptPendingDevice(norm)
+                } catch (_: Exception) {}
+                updateDeviceStates()
+            } catch (e: Exception) {
+                val errMsg = mapExceptionToUserMessage(e, "Failed to accept pending device")
+                commitState(resource = AsyncResource.Error(errMsg, e))
+            }
+        }
+    }
+
     fun dismissPendingDevice(deviceId: String) {
         val norm = deviceId.normalizeDeviceId()
         val currentPending = _pendingDevices.value
@@ -392,6 +412,20 @@ class DeviceViewModel(
                 updateDeviceStates()
             } catch (e: Exception) {
                 val errMsg = mapExceptionToUserMessage(e, "Failed to dismiss pending device")
+                commitState(resource = AsyncResource.Error(errMsg, e))
+            }
+        }
+    }
+
+    fun acceptPendingFolderDirect(folderId: String, localPath: String? = null) {
+        val currentPending = _pendingFolders.value
+        _pendingFolders.value = currentPending.filterKeys { it != folderId }
+        viewModelScope.launch {
+            try {
+                apiClient.acceptPendingFolder(folderId, localPath)
+                updateDeviceStates()
+            } catch (e: Exception) {
+                val errMsg = mapExceptionToUserMessage(e, "Failed to accept pending folder")
                 commitState(resource = AsyncResource.Error(errMsg, e))
             }
         }

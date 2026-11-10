@@ -100,7 +100,10 @@ data class CoreQuarantineConflict(
     @SerialName("remote_revision") val remoteRevision: String,
     @SerialName("staged_payload_path") val stagedPayloadPath: String,
     @SerialName("status") val status: String = "PENDING",
-    @SerialName("detected_at") val detectedAt: Long
+    @SerialName("detected_at") val detectedAt: Long,
+    @SerialName("available_actions") val availableActions: List<String> = emptyList(),
+    @SerialName("is_terminal") val isTerminal: Boolean = false,
+    @SerialName("state_description") val stateDescription: String = ""
 )
 
 @Serializable
