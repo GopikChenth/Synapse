@@ -32,6 +32,8 @@ pub struct FolderRecord {
     pub versioning_keep_days: i64,
     #[serde(default = "default_marker_name")]
     pub marker_name: String, // .synapse-folder
+    #[serde(default)]
+    pub versioning_command: Option<String>,
 }
 
 fn default_policy() -> String { "THREE_WAY_AUTO".to_string() }
@@ -53,6 +55,7 @@ impl FolderRecord {
             versioning_type: default_versioning_type(),
             versioning_keep_days: default_versioning_keep_days(),
             marker_name: default_marker_name(),
+            versioning_command: None,
         }
     }
 
@@ -177,7 +180,7 @@ pub struct PeerConnectionMetrics {
     pub client_type: String,
 }
 
-/// File metadata index record.
+/// File metadata index record with POSIX mode, ownership, and attributes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileRecord {
     pub folder_id: String,
@@ -186,6 +189,12 @@ pub struct FileRecord {
     pub mtime_nanos: i64,
     pub current_revision: String,
     pub is_deleted: bool,
+    #[serde(default = "default_file_permissions")]
+    pub permissions: u32,
+}
+
+pub fn default_file_permissions() -> u32 {
+    0o644
 }
 
 /// Revision record representing a node in the Merkle Revision DAG.
@@ -304,10 +313,11 @@ impl StorageEngine {
                 pull_order TEXT NOT NULL DEFAULT 'Alphabetical',
                 versioning_type TEXT NOT NULL DEFAULT 'None',
                 versioning_keep_days INTEGER NOT NULL DEFAULT 30,
-                marker_name TEXT NOT NULL DEFAULT '.synapse-folder'
+                marker_name TEXT NOT NULL DEFAULT '.synapse-folder',
+                versioning_command TEXT
             );
 
-            -- File metadata state
+            -- File metadata state with POSIX mode (0755/0644)
             CREATE TABLE IF NOT EXISTS files (
                 folder_id TEXT NOT NULL,
                 relative_path TEXT NOT NULL,
@@ -315,6 +325,7 @@ impl StorageEngine {
                 mtime_nanos INTEGER NOT NULL,
                 current_revision TEXT NOT NULL,
                 is_deleted INTEGER NOT NULL DEFAULT 0,
+                permissions INTEGER NOT NULL DEFAULT 420,
                 PRIMARY KEY (folder_id, relative_path),
                 FOREIGN KEY (folder_id) REFERENCES folders(folder_id) ON DELETE CASCADE
             );
@@ -428,6 +439,8 @@ impl StorageEngine {
         let _ = conn.execute("ALTER TABLE folders ADD COLUMN versioning_type TEXT NOT NULL DEFAULT 'None'", []);
         let _ = conn.execute("ALTER TABLE folders ADD COLUMN versioning_keep_days INTEGER NOT NULL DEFAULT 30", []);
         let _ = conn.execute("ALTER TABLE folders ADD COLUMN marker_name TEXT NOT NULL DEFAULT '.synapse-folder'", []);
+        let _ = conn.execute("ALTER TABLE folders ADD COLUMN versioning_command TEXT", []);
+        let _ = conn.execute("ALTER TABLE files ADD COLUMN permissions INTEGER NOT NULL DEFAULT 420", []);
 
         Ok(())
     }
@@ -449,8 +462,8 @@ impl StorageEngine {
         conn.execute(
             "INSERT INTO folders (
                 folder_id, local_path, conflict_policy, is_paused,
-                sync_mode, pull_order, versioning_type, versioning_keep_days, marker_name
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                sync_mode, pull_order, versioning_type, versioning_keep_days, marker_name, versioning_command
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(folder_id) DO UPDATE SET
                 local_path = excluded.local_path,
                 conflict_policy = excluded.conflict_policy,
@@ -459,7 +472,8 @@ impl StorageEngine {
                 pull_order = excluded.pull_order,
                 versioning_type = excluded.versioning_type,
                 versioning_keep_days = excluded.versioning_keep_days,
-                marker_name = excluded.marker_name",
+                marker_name = excluded.marker_name,
+                versioning_command = excluded.versioning_command",
             params![
                 folder.folder_id,
                 folder.local_path,
@@ -470,6 +484,7 @@ impl StorageEngine {
                 folder.versioning_type,
                 folder.versioning_keep_days,
                 folder.marker_name,
+                folder.versioning_command,
             ],
         )?;
         Ok(())
@@ -479,7 +494,7 @@ impl StorageEngine {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT folder_id, local_path, conflict_policy, is_paused,
-                    sync_mode, pull_order, versioning_type, versioning_keep_days, marker_name
+                    sync_mode, pull_order, versioning_type, versioning_keep_days, marker_name, versioning_command
              FROM folders",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -493,6 +508,7 @@ impl StorageEngine {
                 versioning_type: row.get(6).unwrap_or_else(|_| default_versioning_type()),
                 versioning_keep_days: row.get(7).unwrap_or_else(|_| default_versioning_keep_days()),
                 marker_name: row.get(8).unwrap_or_else(|_| default_marker_name()),
+                versioning_command: row.get(9).ok(),
             })
         })?;
 
@@ -507,7 +523,7 @@ impl StorageEngine {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT folder_id, local_path, conflict_policy, is_paused,
-                    sync_mode, pull_order, versioning_type, versioning_keep_days, marker_name
+                    sync_mode, pull_order, versioning_type, versioning_keep_days, marker_name, versioning_command
              FROM folders WHERE folder_id = ?1",
         )?;
         let mut rows = stmt.query_map(params![folder_id], |row| {
@@ -521,6 +537,7 @@ impl StorageEngine {
                 versioning_type: row.get(6).unwrap_or_else(|_| default_versioning_type()),
                 versioning_keep_days: row.get(7).unwrap_or_else(|_| default_versioning_keep_days()),
                 marker_name: row.get(8).unwrap_or_else(|_| default_marker_name()),
+                versioning_command: row.get(9).ok(),
             })
         })?;
 
@@ -1131,13 +1148,14 @@ impl StorageEngine {
     pub fn upsert_file(&self, file: &FileRecord) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO files (folder_id, relative_path, size, mtime_nanos, current_revision, is_deleted)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO files (folder_id, relative_path, size, mtime_nanos, current_revision, is_deleted, permissions)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(folder_id, relative_path) DO UPDATE SET
                 size = excluded.size,
                 mtime_nanos = excluded.mtime_nanos,
                 current_revision = excluded.current_revision,
-                is_deleted = excluded.is_deleted",
+                is_deleted = excluded.is_deleted,
+                permissions = excluded.permissions",
             params![
                 file.folder_id,
                 file.relative_path,
@@ -1145,6 +1163,7 @@ impl StorageEngine {
                 file.mtime_nanos,
                 file.current_revision,
                 if file.is_deleted { 1 } else { 0 },
+                file.permissions as i64,
             ],
         )?;
         Ok(())
@@ -1153,7 +1172,7 @@ impl StorageEngine {
     pub fn get_file(&self, folder_id: &str, relative_path: &str) -> SqlResult<Option<FileRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT folder_id, relative_path, size, mtime_nanos, current_revision, is_deleted
+            "SELECT folder_id, relative_path, size, mtime_nanos, current_revision, is_deleted, permissions
              FROM files WHERE folder_id = ?1 AND relative_path = ?2",
         )?;
         let mut rows = stmt.query_map(params![folder_id, relative_path], |row| {
@@ -1164,6 +1183,7 @@ impl StorageEngine {
                 mtime_nanos: row.get(3)?,
                 current_revision: row.get(4)?,
                 is_deleted: row.get::<_, i64>(5)? != 0,
+                permissions: row.get::<_, i64>(6).map(|p| p as u32).unwrap_or(0o644),
             })
         })?;
 
@@ -1176,7 +1196,7 @@ impl StorageEngine {
     pub fn list_files_in_folder(&self, folder_id: &str) -> SqlResult<Vec<FileRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT folder_id, relative_path, size, mtime_nanos, current_revision, is_deleted
+            "SELECT folder_id, relative_path, size, mtime_nanos, current_revision, is_deleted, permissions
              FROM files WHERE folder_id = ?1 AND is_deleted = 0",
         )?;
         let rows = stmt.query_map(params![folder_id], |row| {
@@ -1187,6 +1207,7 @@ impl StorageEngine {
                 mtime_nanos: row.get(3)?,
                 current_revision: row.get(4)?,
                 is_deleted: row.get::<_, i64>(5)? != 0,
+                permissions: row.get::<_, i64>(6).map(|p| p as u32).unwrap_or(0o644),
             })
         })?;
 
@@ -1942,6 +1963,61 @@ mod tests {
         engine.reject_pending_folder("folder_finance", "REMOTE-DEV-02").unwrap();
         assert!(engine.get_folder("folder_finance").unwrap().is_none());
         assert_eq!(engine.list_pending_folders().unwrap().len(), 0);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_file_permissions_and_versioning_command_storage() {
+        let temp_dir = std::env::temp_dir().join(format!("synapse_perms_{}", uuid::Uuid::new_v4()));
+        let engine = StorageEngine::new(&temp_dir).unwrap();
+
+        // Register folder with external versioning command
+        let mut folder = FolderRecord::new("test_vault", "/tmp/test_vault");
+        folder.versioning_type = "External".into();
+        folder.versioning_command = Some("/usr/local/bin/backup.sh %FOLDER_PATH% %FILE_PATH%".into());
+        engine.add_folder(&folder).unwrap();
+
+        let loaded_folder = engine.get_folder("test_vault").unwrap().expect("Folder exists");
+        assert_eq!(loaded_folder.versioning_type, "External");
+        assert_eq!(
+            loaded_folder.versioning_command,
+            Some("/usr/local/bin/backup.sh %FOLDER_PATH% %FILE_PATH%".into())
+        );
+
+        // Upsert file with executable 0755 permissions
+        let file_exec = FileRecord {
+            folder_id: "test_vault".into(),
+            relative_path: "bin/deploy.sh".into(),
+            size: 2048,
+            mtime_nanos: 1700000000000,
+            current_revision: "rev_exec_01".into(),
+            is_deleted: false,
+            permissions: 0o755,
+        };
+        engine.upsert_file(&file_exec).unwrap();
+
+        // Upsert file with read-only 0644 permissions
+        let file_doc = FileRecord {
+            folder_id: "test_vault".into(),
+            relative_path: "docs/readme.md".into(),
+            size: 1024,
+            mtime_nanos: 1700000000000,
+            current_revision: "rev_doc_01".into(),
+            is_deleted: false,
+            permissions: 0o644,
+        };
+        engine.upsert_file(&file_doc).unwrap();
+
+        // Verify retrieval preserved Unix permissions
+        let loaded_exec = engine.get_file("test_vault", "bin/deploy.sh").unwrap().unwrap();
+        assert_eq!(loaded_exec.permissions, 0o755);
+
+        let loaded_doc = engine.get_file("test_vault", "docs/readme.md").unwrap().unwrap();
+        assert_eq!(loaded_doc.permissions, 0o644);
+
+        let all_files = engine.list_files_in_folder("test_vault").unwrap();
+        assert_eq!(all_files.len(), 2);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

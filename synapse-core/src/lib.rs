@@ -36,6 +36,7 @@ pub struct SynapseConfig {
     pub home_dir: PathBuf,
     pub api_addr: SocketAddr,
     pub p2p_port: u16,
+    pub bep_port: u16,
     pub discovery_port: u16,
     pub auth_token: Option<String>,
     pub device_name: String,
@@ -53,6 +54,7 @@ impl Default for SynapseConfig {
             home_dir: home,
             api_addr: SocketAddr::from(([127, 0, 0, 1], 9090)),
             p2p_port: 9190,
+            bep_port: 22000,
             discovery_port: 21027,
             auth_token: None,
             device_name: get_default_device_name(),
@@ -135,6 +137,7 @@ impl SynapseCore {
             identity,
             config.device_name.clone(),
             config.p2p_port,
+            config.bep_port,
             sync_engine.clone(),
             peer_count.clone(),
             event_sender.clone(),
@@ -190,6 +193,7 @@ impl SynapseCore {
             self.config.api_addr,
             self.config.auth_token.clone(),
             self.peer_count.clone(),
+            self.p2p_manager.clone(),
         );
 
         api_server.run().await?;

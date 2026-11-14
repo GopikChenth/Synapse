@@ -21,7 +21,6 @@ val coreDiModule = module {
         onClose { it?.close() }
     }
     single<PreferencesHelper> { PreferencesHelperImpl() }
-    single<SyncthingApiClient> { SyncthingApiClientImpl(get(), get(), get()) }
     single<SynapseCoreClient> {
         SynapseCoreClientImpl(
             httpClient = get(),
@@ -29,4 +28,5 @@ val coreDiModule = module {
             tokenProvider = { get<PreferencesHelper>().apiKey }
         )
     }
+    single<SyncthingApiClient> { SyncthingApiClientImpl(get(), get(), get(), get()) }
 }

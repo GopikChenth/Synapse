@@ -86,15 +86,13 @@ class DesktopDaemonManager {
         val homeDir = File(synapseDir, "syncthing-home")
         homeDir.mkdirs()
 
-        // ── Step 1: Check if Syncthing is ALREADY running on 8384 ──────────────
         val existingResult = tryConnectToRunning(localAppData, synapseDir)
         if (existingResult != null) {
-            println("[Synapse] Connected to existing Syncthing instance at ${existingResult.second}")
+            println("[Synapse] Connected to existing daemon at ${existingResult.second}")
             _state.value = DaemonState.Ready(existingResult.first, existingResult.second)
             return
         }
 
-        // ── Step 2: Resolve daemon binary (System PATH -> Local bin -> Download) ──
         var binFile = resolveExecutableFile(binDir)
 
         if (!binFile.exists() || binFile.isDirectory) {
@@ -113,13 +111,13 @@ class DesktopDaemonManager {
                 binFile = targetFile
             } catch (e: Exception) {
                 tempArchive.delete()
-                _state.value = DaemonState.Error("Failed to download Syncthing: ${e.message}")
+                _state.value = DaemonState.Error("Failed to download daemon: ${e.message}")
                 return
             }
         }
 
         if (!binFile.exists() || binFile.isDirectory) {
-            _state.value = DaemonState.Error("Invalid Syncthing executable path: ${binFile.absolutePath}")
+            _state.value = DaemonState.Error("Invalid daemon executable path: ${binFile.absolutePath}")
             return
         }
 
@@ -127,7 +125,6 @@ class DesktopDaemonManager {
             binFile.setExecutable(true, false)
         }
 
-        // ── Step 3: Start our own managed daemon ───────────────────────────────
         try {
             val isSynapseCore = binFile.name.contains("synapse-core", ignoreCase = true)
             val logTag = if (isSynapseCore) "[SynapseCore]" else "[Syncthing]"
@@ -177,7 +174,6 @@ class DesktopDaemonManager {
 
                 Runtime.getRuntime().addShutdownHook(Thread { proc.destroy() })
 
-                // ── Step 4: Ping until the REST API is up (optimized backoff) ───
                 var ready = false
                 var attempts = 0
                 while (attempts < 60 && !ready && !isStopped) {
@@ -204,7 +200,6 @@ class DesktopDaemonManager {
                     break
                 }
 
-                // Sleep briefly before restarting
                 Thread.sleep(1000)
             }
 
@@ -217,22 +212,17 @@ class DesktopDaemonManager {
         val userHome = System.getProperty("user.home") ?: "."
         val userDir = File(System.getProperty("user.dir") ?: ".")
 
-        // Priority 1: Check Synapse Core binary (in managed bin, project dirs, or system)
         val synapseCandidates = listOf(
-            File(binDir, synapseExeName),
-            File("bin", synapseExeName),
-            File(userDir, "bin/$synapseExeName"),
-            File("app/desktopApp/bin", synapseExeName),
             File(userDir, "app/desktopApp/bin/$synapseExeName"),
-            File("synapse-core/bin", synapseExeName),
-            File(userDir, "synapse-core/bin/$synapseExeName"),
-            File("synapse-core/target/release", synapseExeName),
+            File(userDir, "bin/$synapseExeName"),
+            File(binDir, synapseExeName),
             File(userDir, "synapse-core/target/release/$synapseExeName"),
+            File(userHome, "Projects/Synapse Core/bin/$synapseExeName"),
+            File(userHome, "Projects/Synapse Core/target/release/$synapseExeName"),
             File(userHome, ".local/bin/$synapseExeName"),
             File("/usr/local/bin/$synapseExeName"),
             File("/usr/bin/$synapseExeName"),
-            File("/opt/homebrew/bin/$synapseExeName"),
-            File(userHome, "Projects/Synapse Core/bin/$synapseExeName")
+            File("/opt/homebrew/bin/$synapseExeName")
         )
         for (f in synapseCandidates) {
             if (f.exists() && f.isFile && (isWindows || f.canExecute())) {
@@ -241,14 +231,12 @@ class DesktopDaemonManager {
             }
         }
 
-        // Priority 2: Check Syncthing legacy binary
         val localExe = File(binDir, exeName)
         if (localExe.exists() && localExe.isFile) return localExe
 
         val localAltExe = File(binDir, if (isWindows) "syncthing" else "syncthing.exe")
         if (localAltExe.exists() && localAltExe.isFile) return localAltExe
 
-        // Check system installation paths on Linux/macOS
         val systemCandidates = listOf(
             "/usr/bin/syncthing",
             "/usr/local/bin/syncthing",
@@ -259,7 +247,6 @@ class DesktopDaemonManager {
             if (f.exists() && f.isFile && f.canExecute()) return f
         }
 
-        // Check PATH environment
         val pathEnv = System.getenv("PATH") ?: ""
         for (dir in pathEnv.split(File.pathSeparator)) {
             if (dir.isBlank()) continue

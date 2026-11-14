@@ -25,7 +25,7 @@ use axum::{
     },
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 use futures::StreamExt;
@@ -48,6 +48,7 @@ pub struct AppState {
     pub sync_engine: SyncEngine,
     pub auth_token: Option<String>,
     pub peer_count: Arc<std::sync::atomic::AtomicUsize>,
+    pub p2p_manager: Arc<crate::p2p::P2PManager>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,6 +61,106 @@ pub struct SystemStatusResponse {
     pub monitored_folders_count: usize,
     pub pending_conflicts_count: usize,
     pub memory_footprint_bytes: usize,
+    #[serde(rename = "myID", default)]
+    pub my_id: String,
+    #[serde(default)]
+    pub uptime: u64,
+    #[serde(default)]
+    pub alloc: usize,
+    #[serde(default)]
+    pub sys: usize,
+    #[serde(rename = "guiAddressUsed", default)]
+    pub gui_address_used: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncthingFolderDeviceRef {
+    #[serde(rename = "deviceID")]
+    pub device_id: String,
+    #[serde(rename = "encryptionPassword", default)]
+    pub encryption_password: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct SyncthingFolderVersioning {
+    #[serde(rename = "type", default = "default_versioning_type")]
+    pub versioning_type: String,
+    #[serde(default)]
+    pub params: HashMap<String, String>,
+}
+
+fn default_versioning_type() -> String {
+    "none".to_string()
+}
+
+fn default_folder_type() -> String {
+    "sendreceive".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncthingFolderDto {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(rename = "type", default = "default_folder_type")]
+    pub folder_type: String,
+    #[serde(default)]
+    pub paused: bool,
+    #[serde(rename = "rescanIntervalS", default = "default_rescan_interval")]
+    pub rescan_interval_s: i32,
+    #[serde(rename = "fsWatcherEnabled", default = "default_true")]
+    pub fs_watcher_enabled: bool,
+    #[serde(default)]
+    pub devices: Vec<SyncthingFolderDeviceRef>,
+    #[serde(default)]
+    pub versioning: SyncthingFolderVersioning,
+}
+
+fn default_rescan_interval() -> i32 {
+    60
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncthingDeviceDto {
+    #[serde(rename = "deviceID")]
+    pub device_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub addresses: Vec<String>,
+    #[serde(default)]
+    pub paused: bool,
+    #[serde(default)]
+    pub introducer: bool,
+    #[serde(rename = "autoAcceptFolders", default)]
+    pub auto_accept_folders: bool,
+    #[serde(default)]
+    pub untrusted: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncthingConfigDto {
+    #[serde(default = "default_config_version")]
+    pub version: i32,
+    #[serde(default)]
+    pub folders: Vec<SyncthingFolderDto>,
+    #[serde(default)]
+    pub devices: Vec<SyncthingDeviceDto>,
+}
+
+fn default_config_version() -> i32 {
+    1
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchFolderRequest {
+    pub paused: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,6 +174,7 @@ pub struct FolderDto {
     pub versioning_type: String,
     pub versioning_keep_days: i64,
     pub marker_name: String,
+    pub versioning_command: Option<String>,
     pub files_count: usize,
 }
 
@@ -87,6 +189,7 @@ pub struct RegisterFolderRequest {
     pub versioning_type: Option<String>,
     pub versioning_keep_days: Option<i64>,
     pub marker_name: Option<String>,
+    pub versioning_command: Option<String>,
 }
 
 fn default_policy() -> String {
@@ -136,6 +239,7 @@ impl ApiServer {
         bind_addr: SocketAddr,
         auth_token: Option<String>,
         peer_count: Arc<std::sync::atomic::AtomicUsize>,
+        p2p_manager: Arc<crate::p2p::P2PManager>,
     ) -> Self {
         Self {
             state: AppState {
@@ -143,6 +247,7 @@ impl ApiServer {
                 sync_engine,
                 auth_token,
                 peer_count,
+                p2p_manager,
             },
             bind_addr,
         }
@@ -156,7 +261,6 @@ impl ApiServer {
             .allow_headers(Any);
 
         Router::new()
-            // System
             .route("/api/v1/system/status", get(get_system_status))
             .route("/rest/system/status", get(get_system_status))
             .route("/api/v1/system/version", get(get_system_version))
@@ -171,11 +275,14 @@ impl ApiServer {
             .route("/rest/system/statemachines", get(get_system_statemachines))
             .route("/api/v1/connections", get(get_connections))
             .route("/rest/system/connections", get(get_connections))
+            .route("/rest/system/config", get(get_syncthing_config).post(set_syncthing_config))
+            .route("/rest/system/pause", post(pause_device_query))
+            .route("/rest/system/resume", post(resume_device_query))
 
-            // Folders
             .route("/api/v1/folders", get(list_folders).post(register_folder))
             .route("/rest/system/folders", get(list_folders).post(register_folder))
             .route("/api/v1/folders/:id", delete(delete_folder))
+            .route("/rest/config/folders/:id", patch(patch_folder_config).delete(delete_folder))
             .route("/api/v1/folders/:id/pause", post(pause_folder))
             .route("/api/v1/folders/:id/resume", post(resume_folder))
             .route("/api/v1/folders/:id/rescan", post(rescan_folder))
@@ -189,30 +296,27 @@ impl ApiServer {
             .route("/api/v1/folders/:id/ignores", get(get_folder_ignores).post(set_folder_ignores))
             .route("/rest/db/ignores", get(get_folder_ignores_query).post(set_folder_ignores_query))
 
-            // Devices & Clustering
             .route("/api/v1/devices", get(list_devices).post(add_device))
             .route("/rest/system/devices", get(list_devices).post(add_device))
             .route("/api/v1/devices/:id", get(get_device).delete(remove_device))
+            .route("/rest/config/devices/:id", delete(remove_device))
             .route("/api/v1/devices/:id/pause", post(pause_device))
             .route("/api/v1/devices/:id/resume", post(resume_device))
 
-            // Mutual Pairing Handshake
             .route("/api/v1/cluster/pending/devices", get(list_pending_devices))
-            .route("/rest/cluster/pending/devices", get(list_pending_devices))
+            .route("/rest/cluster/pending/devices", get(list_pending_devices).delete(reject_pending_device_query))
             .route("/api/v1/cluster/pending/devices/:id/accept", post(accept_pending_device))
             .route("/rest/cluster/pending/devices/:id/accept", post(accept_pending_device))
             .route("/api/v1/cluster/pending/devices/:id/reject", post(reject_pending_device))
             .route("/rest/cluster/pending/devices/:id/reject", post(reject_pending_device))
 
-            // Pending Folders
             .route("/api/v1/cluster/pending/folders", get(list_pending_folders))
-            .route("/rest/cluster/pending/folders", get(list_pending_folders))
+            .route("/rest/cluster/pending/folders", get(list_pending_folders).delete(reject_pending_folder_query))
             .route("/api/v1/cluster/pending/folders/:id/accept", post(accept_pending_folder))
             .route("/rest/cluster/pending/folders/:id/accept", post(accept_pending_folder))
             .route("/api/v1/cluster/pending/folders/:id/reject", post(reject_pending_folder))
             .route("/rest/cluster/pending/folders/:id/reject", post(reject_pending_folder))
 
-            // Conflicts
             .route("/api/v1/conflicts", get(list_conflicts))
             .route("/api/v1/conflicts/:id", get(get_conflict_details))
             .route("/api/v1/conflicts/:id/base", get(get_conflict_base))
@@ -225,7 +329,6 @@ impl ApiServer {
             .route("/api/v1/conflicts/:id/reopen", post(reopen_conflict))
             .route("/rest/conflicts/:id/reopen", post(reopen_conflict))
 
-            // WebSocket Events
             .route("/api/v1/events", get(websocket_events_handler))
             .route("/rest/events", get(websocket_events_handler))
             .layer(cors)
@@ -278,8 +381,9 @@ async fn get_system_status(State(state): State<AppState>) -> impl IntoResponse {
         "IDLE".to_string()
     };
 
+    let dev_id = state.sync_engine.device_id().to_string();
     Json(SystemStatusResponse {
-        device_id: state.sync_engine.device_id().to_string(),
+        device_id: dev_id.clone(),
         uptime_seconds: uptime,
         peer_count: peers,
         sync_state,
@@ -287,12 +391,19 @@ async fn get_system_status(State(state): State<AppState>) -> impl IntoResponse {
         monitored_folders_count: folders.len(),
         pending_conflicts_count: conflicts.len(),
         memory_footprint_bytes: mem,
+        my_id: dev_id,
+        uptime,
+        alloc: mem,
+        sys: mem,
+        gui_address_used: "http://127.0.0.1:8384".into(),
     })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SystemVersionResponse {
     pub version: String,
+    #[serde(rename = "longVersion", default)]
+    pub long_version: String,
     pub codename: String,
     pub os: String,
     pub arch: String,
@@ -301,6 +412,7 @@ pub struct SystemVersionResponse {
 async fn get_system_version() -> impl IntoResponse {
     Json(SystemVersionResponse {
         version: "v1.0.0".into(),
+        long_version: "Synapse Core v1.0.0 (Native Rust Engine)".into(),
         codename: "Synapse-SynapticCore".into(),
         os: std::env::consts::OS.into(),
         arch: std::env::consts::ARCH.into(),
@@ -323,23 +435,50 @@ async fn system_restart() -> impl IntoResponse {
 
 async fn get_connections(State(state): State<AppState>) -> impl IntoResponse {
     let devices = state.sync_engine.storage().list_devices().unwrap_or_default();
+    let peers = state.p2p_manager.list_connected_peers().await;
     let mut map = HashMap::new();
 
     for dev in devices {
+        let (is_conn, addr_str, client_type) = if let Some(peer) = peers.get(&dev.device_id) {
+            (true, peer.addr.to_string(), peer.client_type.clone())
+        } else {
+            (!dev.is_paused, dev.addresses.first().cloned().unwrap_or_else(|| "dynamic".into()), "synapse-quic (FastCDC)".into())
+        };
+
         map.insert(
             dev.device_id.clone(),
             PeerConnectionMetrics {
                 device_id: dev.device_id,
-                address: dev.addresses.first().cloned().unwrap_or_else(|| "dynamic".into()),
-                is_connected: !dev.is_paused,
+                address: addr_str,
+                is_connected: is_conn,
                 in_bps: 0,
                 out_bps: 0,
                 total_in_bytes: 0,
                 total_out_bytes: 0,
                 latency_ms: 5,
-                client_type: "synapse-core".into(),
+                client_type,
             },
         );
+    }
+
+    // Include any active connected BEP or QUIC peers that aren't yet in configured devices
+    for (peer_id, peer) in peers {
+        if !map.contains_key(&peer_id) {
+            map.insert(
+                peer_id.clone(),
+                PeerConnectionMetrics {
+                    device_id: peer_id,
+                    address: peer.addr.to_string(),
+                    is_connected: true,
+                    in_bps: 0,
+                    out_bps: 0,
+                    total_in_bytes: 0,
+                    total_out_bytes: 0,
+                    latency_ms: 5,
+                    client_type: peer.client_type,
+                },
+            );
+        }
     }
 
     Json(map)
@@ -347,6 +486,112 @@ async fn get_connections(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn get_system_statemachines() -> impl IntoResponse {
     Json(crate::state::get_all_state_machines())
+}
+
+async fn get_syncthing_config(State(state): State<AppState>) -> impl IntoResponse {
+    let folders = state.sync_engine.storage().list_folders().unwrap_or_default();
+    let devices = state.sync_engine.storage().list_devices().unwrap_or_default();
+
+    let mapped_folders: Vec<SyncthingFolderDto> = folders
+        .into_iter()
+        .map(|f| {
+            let devs = state
+                .sync_engine
+                .storage()
+                .list_folder_devices(&f.folder_id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|device_id| SyncthingFolderDeviceRef {
+                    device_id,
+                    encryption_password: String::new(),
+                })
+                .collect();
+
+            let mut params = HashMap::new();
+            if let Some(cmd) = &f.versioning_command {
+                params.insert("command".to_string(), cmd.clone());
+            }
+            params.insert("cleanoutDays".to_string(), f.versioning_keep_days.to_string());
+
+            SyncthingFolderDto {
+                id: f.folder_id.clone(),
+                label: f.folder_id.clone(),
+                path: f.local_path,
+                folder_type: f.sync_mode,
+                paused: f.is_paused,
+                rescan_interval_s: 60,
+                fs_watcher_enabled: true,
+                devices: devs,
+                versioning: SyncthingFolderVersioning {
+                    versioning_type: f.versioning_type.to_lowercase(),
+                    params,
+                },
+            }
+        })
+        .collect();
+
+    let mapped_devices: Vec<SyncthingDeviceDto> = devices
+        .into_iter()
+        .map(|d| SyncthingDeviceDto {
+            device_id: d.device_id,
+            name: d.name,
+            addresses: d.addresses,
+            paused: d.is_paused,
+            introducer: d.introducer,
+            auto_accept_folders: false,
+            untrusted: !d.is_trusted,
+        })
+        .collect();
+
+    Json(SyncthingConfigDto {
+        version: 1,
+        folders: mapped_folders,
+        devices: mapped_devices,
+    })
+}
+
+async fn set_syncthing_config(
+    State(state): State<AppState>,
+    Json(config): Json<SyncthingConfigDto>,
+) -> impl IntoResponse {
+    let storage = state.sync_engine.storage();
+    for f in config.folders {
+        let v_cmd = f.versioning.params.get("command").cloned();
+        let v_days = f
+            .versioning
+            .params
+            .get("cleanoutDays")
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(30);
+
+        let mut rec = FolderRecord::new(f.id.clone(), f.path.clone());
+        rec.is_paused = f.paused;
+        rec.sync_mode = f.folder_type;
+        rec.versioning_type = f.versioning.versioning_type;
+        rec.versioning_keep_days = v_days;
+        rec.versioning_command = v_cmd;
+        let _ = storage.add_folder(&rec);
+
+        for d in f.devices {
+            let _ = storage.share_folder_with_device(&f.id, &d.device_id);
+        }
+    }
+
+    for d in config.devices {
+        let rec = DeviceRecord {
+            device_id: d.device_id,
+            name: d.name,
+            addresses: d.addresses,
+            is_paused: d.paused,
+            is_trusted: !d.untrusted,
+            introducer: d.introducer,
+            cert_name: None,
+            created_at: chrono::Utc::now().timestamp(),
+        };
+        let _ = storage.add_device(&rec);
+    }
+
+    StatusCode::OK.into_response()
 }
 
 // =============================================================================
@@ -372,6 +617,7 @@ async fn list_folders(State(state): State<AppState>) -> impl IntoResponse {
             versioning_type: f.versioning_type,
             versioning_keep_days: f.versioning_keep_days,
             marker_name: f.marker_name,
+            versioning_command: f.versioning_command,
             files_count: files.len(),
         });
     }
@@ -390,6 +636,7 @@ async fn register_folder(
     if let Some(vt) = payload.versioning_type { folder.versioning_type = vt; }
     if let Some(kd) = payload.versioning_keep_days { folder.versioning_keep_days = kd; }
     if let Some(mn) = payload.marker_name { folder.marker_name = mn; }
+    if let Some(vc) = payload.versioning_command { folder.versioning_command = Some(vc); }
 
     if let Err(e) = state.sync_engine.storage().add_folder(&folder) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
@@ -412,6 +659,21 @@ async fn delete_folder(
     match state.sync_engine.storage().delete_folder(&id) {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn patch_folder_config(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<AppState>,
+    Json(payload): Json<PatchFolderRequest>,
+) -> impl IntoResponse {
+    if let Some(paused) = payload.paused {
+        match state.sync_engine.storage().set_folder_paused(&id, paused) {
+            Ok(_) => StatusCode::OK.into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    } else {
+        StatusCode::OK.into_response()
     }
 }
 
@@ -667,9 +929,33 @@ async fn resume_device(
     }
 }
 
-// =============================================================================
-// ROUTE HANDLERS: PAIRING HANDSHAKE & INVITATIONS
-// =============================================================================
+async fn pause_device_query(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if let Some(device_id) = params.get("device") {
+        match state.sync_engine.storage().set_device_paused(device_id, true) {
+            Ok(_) => StatusCode::OK.into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    } else {
+        (StatusCode::BAD_REQUEST, "Missing device query parameter").into_response()
+    }
+}
+
+async fn resume_device_query(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if let Some(device_id) = params.get("device") {
+        match state.sync_engine.storage().set_device_paused(device_id, false) {
+            Ok(_) => StatusCode::OK.into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    } else {
+        (StatusCode::BAD_REQUEST, "Missing device query parameter").into_response()
+    }
+}
 
 async fn list_pending_devices(State(state): State<AppState>) -> impl IntoResponse {
     match state.sync_engine.storage().list_pending_devices() {
@@ -704,6 +990,20 @@ async fn reject_pending_device(
     match state.sync_engine.storage().reject_pending_device(&id) {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn reject_pending_device_query(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if let Some(device_id) = params.get("device") {
+        match state.sync_engine.storage().reject_pending_device(device_id) {
+            Ok(_) => StatusCode::OK.into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    } else {
+        (StatusCode::BAD_REQUEST, "Missing device query parameter").into_response()
     }
 }
 
@@ -744,6 +1044,21 @@ async fn reject_pending_folder(
     match state.sync_engine.storage().reject_pending_folder(&id, &payload.device_id) {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn reject_pending_folder_query(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if let Some(folder_id) = params.get("folder") {
+        let dev_id = params.get("device").cloned().unwrap_or_default();
+        match state.sync_engine.storage().reject_pending_folder(folder_id, &dev_id) {
+            Ok(_) => StatusCode::OK.into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    } else {
+        (StatusCode::BAD_REQUEST, "Missing folder query parameter").into_response()
     }
 }
 

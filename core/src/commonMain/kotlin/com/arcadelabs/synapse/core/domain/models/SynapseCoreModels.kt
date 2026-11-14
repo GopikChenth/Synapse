@@ -26,6 +26,7 @@ data class CoreFolder(
     @SerialName("versioning_type") val versioningType: String = "None",
     @SerialName("versioning_keep_days") val versioningKeepDays: Long = 30,
     @SerialName("marker_name") val markerName: String = ".synapse-folder",
+    @SerialName("versioning_command") val versioningCommand: String? = null,
     @SerialName("files_count") val filesCount: Int = 0
 )
 
@@ -38,7 +39,8 @@ data class CoreRegisterFolderRequest(
     @SerialName("pull_order") val pullOrder: String? = null,
     @SerialName("versioning_type") val versioningType: String? = null,
     @SerialName("versioning_keep_days") val versioningKeepDays: Long? = null,
-    @SerialName("marker_name") val markerName: String? = null
+    @SerialName("marker_name") val markerName: String? = null,
+    @SerialName("versioning_command") val versioningCommand: String? = null
 )
 
 @Serializable

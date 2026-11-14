@@ -22,7 +22,7 @@ use std::sync::RwLock;
 
 use crate::dag::{LcaResult, MerkleDag, RevisionNode};
 use crate::engine::fs_utils::{
-    archive_file_version, atomic_write_file, ensure_folder_marker, sanitize_relative_path,
+    atomic_write_file, ensure_folder_marker, sanitize_relative_path,
     verify_folder_marker,
 };
 use crate::engine::ignore::IgnoreEngine;
@@ -226,10 +226,22 @@ impl SyncEngine {
             .map(|d| d.as_nanos() as i64)
             .unwrap_or(0);
 
-        // Check if file is already up to date in database
+        #[cfg(unix)]
+        let file_permissions = {
+            use std::os::unix::fs::PermissionsExt;
+            meta.permissions().mode() & 0o7777
+        };
+        #[cfg(not(unix))]
+        let file_permissions = if meta.permissions().readonly() { 0o444 } else { 0o644 };
+
+        // Check if file is already up to date in database (including permissions/executable bit)
         let existing = self.storage.get_file(folder_id, &rel_clean)?;
         if let Some(record) = &existing {
-            if record.size == file_size && record.mtime_nanos == mtime_nanos && !record.is_deleted {
+            if record.size == file_size
+                && record.mtime_nanos == mtime_nanos
+                && record.permissions == file_permissions
+                && !record.is_deleted
+            {
                 return Ok(false); // No changes detected
             }
         }
@@ -277,6 +289,7 @@ impl SyncEngine {
             mtime_nanos,
             current_revision: rev_node.revision_hash.clone(),
             is_deleted: false,
+            permissions: file_permissions,
         })?;
 
         let _ = self.event_sender.send(CoreEvent::FileChanged {
@@ -339,7 +352,7 @@ impl SyncEngine {
         match local_file {
             None => {
                 // Completely new file remotely: fast-forward accept remote with atomic write
-                atomic_write_file(&local_path, remote_payload, Some(remote_rev.mtime_nanos), None)?;
+                atomic_write_file(&local_path, remote_payload, Some(remote_rev.mtime_nanos), Some(0o644))?;
 
                 // Save chunks in CAS
                 let (chunks, _) = self.chunker.chunk_slice(remote_payload);
@@ -354,6 +367,7 @@ impl SyncEngine {
                     mtime_nanos: remote_rev.mtime_nanos,
                     current_revision: remote_rev.revision_hash.clone(),
                     is_deleted: false,
+                    permissions: 0o644,
                 })?;
 
                 let _ = self.event_sender.send(CoreEvent::ItemFinished {
@@ -385,13 +399,19 @@ impl SyncEngine {
                             remote_rev.revision_hash, existing.current_revision
                         );
 
-                        // File versioning archive if configured
-                        if local_path.exists() && folder.versioning_type != "None" {
-                            let _ = archive_file_version(&base_path, &rel_clean);
+                        // File versioning archive if configured (supports TrashCan, Simple, Staggered, and External)
+                        let policy = versioning::VersioningPolicy::from_folder_config_with_command(
+                            &folder.versioning_type,
+                            folder.versioning_keep_days,
+                            folder.versioning_command.as_deref(),
+                        );
+                        if local_path.exists() && policy != versioning::VersioningPolicy::None {
+                            let _ = versioning::archive_file(&base_path, &rel_clean, &policy);
                         }
 
-                        // Atomic staging write with timestamp preservation
-                        atomic_write_file(&local_path, remote_payload, Some(remote_rev.mtime_nanos), None)?;
+                        // Atomic staging write with timestamp & permission preservation
+                        let target_perms = existing.permissions;
+                        atomic_write_file(&local_path, remote_payload, Some(remote_rev.mtime_nanos), Some(target_perms))?;
 
                         let (chunks, _) = self.chunker.chunk_slice(remote_payload);
                         for (info, data) in &chunks {
@@ -405,6 +425,7 @@ impl SyncEngine {
                             mtime_nanos: remote_rev.mtime_nanos,
                             current_revision: remote_rev.revision_hash.clone(),
                             is_deleted: false,
+                            permissions: target_perms,
                         })?;
 
                         let _ = self.event_sender.send(CoreEvent::ItemFinished {

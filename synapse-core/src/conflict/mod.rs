@@ -296,6 +296,7 @@ impl ConflictEngine {
                         mtime_nanos: merge_rev.mtime_nanos,
                         current_revision: merge_rev.revision_hash.clone(),
                         is_deleted: false,
+                        permissions: 0o644,
                     })?;
 
                     let _ = self.event_sender.send(CoreEvent::FileChanged {
@@ -430,6 +431,7 @@ impl ConflictEngine {
                         mtime_nanos: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
                         current_revision: conflict.remote_revision.clone(),
                         is_deleted: false,
+                        permissions: 0o644,
                     })?;
                 }
                 self.storage.resolve_conflict(conflict_id)?;
@@ -479,6 +481,7 @@ impl ConflictEngine {
                     mtime_nanos: merge_rev.mtime_nanos,
                     current_revision: merge_rev.revision_hash,
                     is_deleted: false,
+                    permissions: 0o644,
                 })?;
 
                 self.storage.resolve_conflict(conflict_id)?;

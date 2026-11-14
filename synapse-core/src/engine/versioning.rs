@@ -39,6 +39,9 @@ pub enum VersioningPolicy {
     ///
     /// Tuple fields: `(clean_interval_secs, max_age_secs)`.
     Staggered(u64, u64),
+    /// External script versioning: executes custom command template upon file modification or deletion.
+    /// Supports `%FOLDER_PATH%`, `%FILE_PATH%`, and `%FULL_PATH%` variables.
+    External(String),
 }
 
 impl Default for VersioningPolicy {
@@ -76,6 +79,15 @@ impl VersioningPolicy {
 
     /// Converts database folder config strings and keep days into a `VersioningPolicy`.
     pub fn from_folder_config(versioning_type: &str, keep_days: i64) -> Self {
+        Self::from_folder_config_with_command(versioning_type, keep_days, None)
+    }
+
+    /// Converts database folder config strings, keep days, and optional external command into a `VersioningPolicy`.
+    pub fn from_folder_config_with_command(
+        versioning_type: &str,
+        keep_days: i64,
+        versioning_command: Option<&str>,
+    ) -> Self {
         match versioning_type.to_lowercase().as_str() {
             "trashcan" | "trash_can" | "trash" => Self::TrashCan,
             "simple" => {
@@ -89,6 +101,9 @@ impl VersioningPolicy {
                     365 * ONE_DAY_SECS // default 365 days
                 };
                 Self::Staggered(ONE_HOUR_SECS, max_age_secs)
+            }
+            "external" => {
+                Self::External(versioning_command.unwrap_or_default().to_string())
             }
             _ => Self::None,
         }
@@ -106,6 +121,10 @@ impl VersioningPolicy {
             Self::Staggered(_clean_interval, max_age) => {
                 apply_staggered_retention(versions, now, *max_age)
             }
+            Self::External(_) => RetentionPlan {
+                keep: versions.to_vec(),
+                remove: Vec::new(),
+            },
         }
     }
 
@@ -529,16 +548,68 @@ pub fn cleanup_expired_versions_at(
     Ok(report)
 }
 
-/// Archives a file into `.synapse/versions/` respecting the folder's `VersioningPolicy`.
+/// Executes an external custom versioning script when a file is modified or deleted.
+/// Substitutes `%FOLDER_PATH%`, `%FILE_PATH%`, and `%FULL_PATH%` placeholders.
+pub fn execute_external_versioning(
+    folder_root: &Path,
+    relative_path: &str,
+    command_template: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if command_template.trim().is_empty() {
+        return Ok(());
+    }
+
+    let folder_str = folder_root.to_string_lossy().to_string();
+    let file_str = relative_path.to_string();
+    let full_path = folder_root.join(relative_path).to_string_lossy().to_string();
+
+    let cmd = command_template
+        .replace("%FOLDER_PATH%", &folder_str)
+        .replace("%FILE_PATH%", &file_str)
+        .replace("%FULL_PATH%", &full_path);
+
+    tracing::info!("Executing external file versioning script: {}", cmd);
+
+    #[cfg(unix)]
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .env("STFOLDERPATH", &folder_str)
+        .env("STFILEPATH", &file_str)
+        .spawn()?;
+
+    #[cfg(windows)]
+    let mut child = std::process::Command::new("cmd")
+        .args(["/C", &cmd])
+        .env("STFOLDERPATH", &folder_str)
+        .env("STFILEPATH", &file_str)
+        .spawn()?;
+
+    let status = child.wait()?;
+    if !status.success() {
+        tracing::warn!("External versioning script exited with non-zero status: {:?}", status.code());
+    }
+
+    Ok(())
+}
+
+/// Archives a file respecting the folder's `VersioningPolicy`.
+/// Supports `None`, `TrashCan`, `Simple`, `Staggered`, and `External`.
 pub fn archive_file(
     folder_root: &Path,
     relative_path: &str,
     policy: &VersioningPolicy,
 ) -> Result<Option<PathBuf>, Box<dyn std::error::Error + Send + Sync>> {
-    if *policy == VersioningPolicy::None {
-        return Ok(None);
+    match policy {
+        VersioningPolicy::None => Ok(None),
+        VersioningPolicy::External(cmd) => {
+            if let Err(e) = execute_external_versioning(folder_root, relative_path, cmd) {
+                tracing::warn!("External versioning execution error for {}: {}", relative_path, e);
+            }
+            Ok(None)
+        }
+        _ => crate::engine::fs_utils::archive_file_version(folder_root, relative_path),
     }
-    crate::engine::fs_utils::archive_file_version(folder_root, relative_path)
 }
 
 #[cfg(test)]
@@ -810,6 +881,31 @@ mod tests {
         assert_eq!(report_none.deleted_files_count, 2);
         assert!(!v1_path.exists());
         assert!(!v4_path.exists());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_external_script_versioning_execution() {
+        let temp_dir = std::env::temp_dir().join(format!("synapse_ext_vers_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let source_file = temp_dir.join("sample.txt");
+        fs::write(&source_file, b"content to archive").unwrap();
+
+        let out_backup = temp_dir.join("backup.txt");
+        // Simple command copying %FULL_PATH% to backup.txt
+        let cmd = format!("cp %FULL_PATH% {}", out_backup.display());
+
+        let policy = VersioningPolicy::from_folder_config_with_command("external", 0, Some(&cmd));
+        assert!(matches!(policy, VersioningPolicy::External(_)));
+
+        let res = archive_file(&temp_dir, "sample.txt", &policy);
+        assert!(res.is_ok());
+
+        // Verify script created the backup file
+        assert!(out_backup.exists());
+        assert_eq!(fs::read(&out_backup).unwrap(), b"content to archive");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

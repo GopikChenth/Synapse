@@ -40,6 +40,10 @@ struct Cli {
     #[arg(long, default_value_t = 9190)]
     p2p_port: u16,
 
+    /// BEP v1 (Syncthing wire protocol) TCP listening port
+    #[arg(long, default_value_t = 22000)]
+    bep_port: u16,
+
     /// Local UDP discovery broadcast port
     #[arg(long, default_value_t = 21027)]
     discovery_port: u16,
@@ -163,6 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ip = cli.addr.parse().unwrap_or([127, 0, 0, 1].into());
     config.api_addr = SocketAddr::new(ip, cli.port);
     config.p2p_port = cli.p2p_port;
+    config.bep_port = cli.bep_port;
     config.discovery_port = cli.discovery_port;
     if let Some(tok) = cli.token {
         config.auth_token = Some(tok);
@@ -313,7 +318,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             info!("Synapse Core v1.0.0 starting...");
             info!("Home Directory: {}", config.home_dir.display());
             info!("API Address:    http://{}", config.api_addr);
-            info!("P2P Port:       {}", config.p2p_port);
+            info!("P2P Port (QUIC):{}", config.p2p_port);
+            info!("BEP Port (TLS): {}", config.bep_port);
             info!("Discovery Port: {}", config.discovery_port);
 
             let core = SynapseCore::init(config)?;

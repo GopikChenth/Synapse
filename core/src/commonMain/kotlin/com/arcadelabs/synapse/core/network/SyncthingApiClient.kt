@@ -213,7 +213,12 @@ interface SyncthingApiClient {
 internal class SyncthingApiClientImpl(
     private val client: HttpClient,
     private val apiKeyProvider: ApiKeyProvider,
-    private val preferencesHelper: PreferencesHelper
+    private val preferencesHelper: PreferencesHelper,
+    private val coreClient: SynapseCoreClient = SynapseCoreClientImpl(
+        httpClient = client,
+        baseUrlProvider = { preferencesHelper.apiBaseUrl },
+        tokenProvider = { preferencesHelper.apiKey }
+    )
 ) : SyncthingApiClient {
     private val baseUrl: String
         get() {
@@ -228,327 +233,103 @@ internal class SyncthingApiClientImpl(
     
     private val apiKeyMutex = kotlinx.coroutines.sync.Mutex()
     private var cachedApiKey: String? = null
-    @Volatile
-    private var isSynapseCoreEngine: Boolean? = null
-
-    private suspend fun checkIsSynapseCore(): Boolean {
-        val cached = isSynapseCoreEngine
-        if (cached != null) return cached
-        val isCore = try {
-            val resp = client.get("$baseUrl/api/v1/system/status")
-            resp.status.value in 200..299
-        } catch (_: Exception) {
-            false
-        }
-        if (isCore) {
-            isSynapseCoreEngine = true
-            return true
-        }
-        return false
-    }
 
     private suspend fun getOrResolveApiKey(): String {
         val prefKey = preferencesHelper.apiKey.trim()
         if (prefKey.isNotEmpty()) {
             return prefKey
         }
-        if (checkIsSynapseCore()) {
-            val defaultKey = "synapse-managed-api-key-2025"
-            preferencesHelper.apiKey = defaultKey
-            cachedApiKey = defaultKey
-            return defaultKey
-        }
         var key = cachedApiKey
-        if (key == null) {
-            apiKeyMutex.withLock {
-                key = cachedApiKey
-                if (key == null) {
-                    val resolved = apiKeyProvider.getApiKey()
-                    if (resolved.isNullOrEmpty()) {
-                        if (checkIsSynapseCore()) {
-                            val defaultKey = "synapse-managed-api-key-2025"
-                            preferencesHelper.apiKey = defaultKey
-                            cachedApiKey = defaultKey
-                            return defaultKey
-                        }
-                        throw ApiKeyNotConfiguredException("Syncthing API key could not be resolved from configuration")
-                    }
-                    cachedApiKey = resolved
-                    preferencesHelper.apiKey = resolved
-                    key = resolved
-                }
-            }
+        if (key != null) return key
+        return apiKeyMutex.withLock {
+            cachedApiKey?.let { return@withLock it }
+            val resolved = apiKeyProvider.getApiKey()?.trim().orEmpty()
+            val effectiveKey = resolved.ifEmpty { "synapse-managed-api-key-2025" }
+            cachedApiKey = effectiveKey
+            preferencesHelper.apiKey = effectiveKey
+            effectiveKey
         }
-        return key!!
+    }
+
+    private fun io.ktor.client.request.HttpRequestBuilder.authHeaders(key: String) {
+        header("X-API-Key", key)
+        header("Authorization", "Bearer $key")
     }
 
     override suspend fun systemStatus(): SystemStatus {
-        if (checkIsSynapseCore()) {
-            return try {
-                val core = client.get("$baseUrl/api/v1/system/status").body<CoreSystemStatus>()
-                SystemStatus(
-                    myID = core.deviceId,
-                    uptime = core.uptimeSeconds,
-                    alloc = core.memoryFootprintBytes,
-                    sys = core.memoryFootprintBytes,
-                    guiAddressUsed = baseUrl
-                )
-            } catch (_: Exception) {
-                val key = getOrResolveApiKey()
-                client.get("$baseUrl/rest/system/status") {
-                    header("X-API-Key", key)
-                }.body()
-            }
-        }
         val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/system/status") {
-            header("X-API-Key", key)
+            authHeaders(key)
         }.body()
     }
 
     override suspend fun systemVersion(): SystemVersion {
-        if (checkIsSynapseCore()) {
-            return try {
-                val core = client.get("$baseUrl/api/v1/system/status").body<CoreSystemStatus>()
-                SystemVersion(
-                    currentVersion = core.version,
-                    longVersion = "Synapse Core v${core.version} (Native Rust Engine)"
-                )
-            } catch (_: Exception) {
-                val key = getOrResolveApiKey()
-                client.get("$baseUrl/rest/system/version") {
-                    header("X-API-Key", key)
-                }.body()
-            }
-        }
         val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/system/version") {
-            header("X-API-Key", key)
+            authHeaders(key)
         }.body()
     }
 
     override suspend fun systemConfig(): SyncthingConfig {
-        if (checkIsSynapseCore()) {
-            return try {
-                val coreFolders = client.get("$baseUrl/api/v1/folders").body<List<CoreFolder>>()
-                val mappedFolders = coreFolders.map { f ->
-                    val folderDevices = try {
-                        val devs = client.get("$baseUrl/api/v1/folders/${f.folderId}/devices").body<List<CoreDevice>>()
-                        devs.map { FolderDeviceReference(deviceID = it.deviceId) }
-                    } catch (_: Exception) {
-                        emptyList()
-                    }
-                    Folder(
-                        id = f.folderId,
-                        label = f.folderId,
-                        path = f.localPath,
-                        paused = f.isPaused,
-                        type = f.syncMode,
-                        devices = folderDevices
-                    )
-                }
-                val coreDevices = try {
-                    client.get("$baseUrl/api/v1/devices").body<List<CoreDevice>>()
-                } catch (_: Exception) {
-                    emptyList()
-                }
-                val mappedDevices = coreDevices.map { d ->
-                    Device(
-                        deviceID = d.deviceId,
-                        name = d.name,
-                        addresses = d.addresses,
-                        paused = d.isPaused,
-                        introducer = d.introducer
-                    )
-                }
-                SyncthingConfig(
-                    version = 1,
-                    folders = mappedFolders,
-                    devices = mappedDevices
-                )
-            } catch (_: Exception) {
-                val key = getOrResolveApiKey()
-                client.get("$baseUrl/rest/system/config") {
-                    header("X-API-Key", key)
-                }.body()
-            }
-        }
         val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/system/config") {
-            header("X-API-Key", key)
+            authHeaders(key)
         }.body()
     }
 
     override suspend fun rawSystemConfig(): String {
-        if (checkIsSynapseCore()) {
-            val cfg = systemConfig()
-            return json.encodeToString(SyncthingConfig.serializer(), cfg)
-        }
         val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/system/config") {
-            header("X-API-Key", key)
+            authHeaders(key)
         }.bodyAsText()
     }
 
     override suspend fun updateRawSystemConfig(configJson: String) {
-        if (checkIsSynapseCore()) {
-            try {
-                val parsed = json.decodeFromString(SyncthingConfig.serializer(), configJson)
-                parsed.folders.forEach { f ->
-                    client.post("$baseUrl/api/v1/folders") {
-                        contentType(ContentType.Application.Json)
-                        setBody(CoreRegisterFolderRequest(
-                            folderId = f.id,
-                            localPath = f.path,
-                            conflictPolicy = "THREE_WAY_AUTO",
-                            syncMode = f.type,
-                            markerName = ".synapse-folder"
-                        ))
-                    }
-                    f.devices.forEach { d ->
-                        try {
-                            client.post("$baseUrl/api/v1/folders/${f.id}/devices/${d.deviceID}")
-                        } catch (_: Exception) {}
-                    }
-                }
-                parsed.devices.forEach { d ->
-                    client.post("$baseUrl/api/v1/devices") {
-                        contentType(ContentType.Application.Json)
-                        setBody(CoreDevice(deviceId = d.deviceID, name = d.name, addresses = d.addresses))
-                    }
-                }
-                return
-            } catch (_: Exception) {}
-        }
         val key = getOrResolveApiKey()
         val response = client.post("$baseUrl/rest/system/config") {
-            header("X-API-Key", key)
+            authHeaders(key)
             contentType(ContentType.Application.Json)
             setBody(configJson)
         }
-        if (response.status.value !in 200..299) {
-            throw Exception("Failed to update configuration: HTTP ${response.status.value}")
+        if (!response.status.isSuccess()) {
+            throw SyncthingApiException("Failed to update configuration: HTTP ${response.status.value}")
         }
     }
 
     override suspend fun updateSystemConfig(config: SyncthingConfig) {
-        val rawConfigString = rawSystemConfig()
-        val rawConfigJson = json.parseToJsonElement(rawConfigString).jsonObject
-
-        val folderKnownKeys = setOf(
-            "id", "label", "path", "type", "paused",
-            "rescanIntervalS", "fsWatcherEnabled", "devices", "versioning"
-        )
-        val deviceKnownKeys = setOf(
-            "deviceID", "name", "addresses", "paused",
-            "introducer", "autoAcceptFolders", "untrusted"
-        )
-
-        val existingFoldersMap = rawConfigJson["folders"]?.jsonArray?.associateBy {
-            it.jsonObject["id"]?.jsonPrimitive?.content ?: ""
-        } ?: emptyMap()
-
-        val existingDevicesMap = rawConfigJson["devices"]?.jsonArray?.associateBy {
-            it.jsonObject["deviceID"]?.jsonPrimitive?.content ?: ""
-        } ?: emptyMap()
-
-        val patchedFolders = config.folders.map { folder ->
-            val existing = existingFoldersMap[folder.id]
-            if (existing != null) {
-                val updatedFolderJson = json.encodeToJsonElement(Folder.serializer(), folder).jsonObject
-                val newMap = existing.jsonObject.toMutableMap()
-                for (key in folderKnownKeys) {
-                    val newVal = updatedFolderJson[key]
-                    if (newVal != null) {
-                        newMap[key] = newVal
-                    }
-                }
-                JsonObject(newMap)
-            } else {
-                json.encodeToJsonElement(Folder.serializer(), folder).jsonObject
-            }
-        }
-
-        val patchedDevices = config.devices.map { device ->
-            val existing = existingDevicesMap[device.deviceID]
-            if (existing != null) {
-                val updatedDeviceJson = json.encodeToJsonElement(Device.serializer(), device).jsonObject
-                val newMap = existing.jsonObject.toMutableMap()
-                for (key in deviceKnownKeys) {
-                    val newVal = updatedDeviceJson[key]
-                    if (newVal != null) {
-                        newMap[key] = newVal
-                    }
-                }
-                JsonObject(newMap)
-            } else {
-                json.encodeToJsonElement(Device.serializer(), device).jsonObject
-            }
-        }
-
-        val newRootMap = rawConfigJson.toMutableMap()
-        newRootMap["version"] = JsonPrimitive(config.version)
-        newRootMap["folders"] = JsonArray(patchedFolders)
-        newRootMap["devices"] = JsonArray(patchedDevices)
-
-        val patchedConfigJson = JsonObject(newRootMap)
-        updateRawSystemConfig(patchedConfigJson.toString())
-        // No restart needed — Syncthing v1.12+ applies config changes hot via the REST API.
+        val jsonText = json.encodeToString(SyncthingConfig.serializer(), config)
+        updateRawSystemConfig(jsonText)
     }
     
     override suspend fun dbStatus(folderId: String): FolderDbStatus {
-        if (checkIsSynapseCore()) {
-            return try {
-                client.get("$baseUrl/rest/db/status") {
-                    parameter("folder", folderId)
-                }.body<FolderDbStatus>()
-            } catch (_: Exception) {
-                try {
-                    val coreFolders = client.get("$baseUrl/api/v1/folders").body<List<CoreFolder>>()
-                    val target = coreFolders.firstOrNull { it.folderId == folderId }
-                    val pullErrorsCount = try {
-                        val conflicts = client.get("$baseUrl/api/v1/conflicts").body<List<CoreQuarantineConflict>>()
-                        conflicts.count { it.folderId == folderId }.toLong()
-                    } catch (_: Exception) {
-                        0L
-                    }
-                    FolderDbStatus(
-                        localFiles = target?.filesCount?.toLong() ?: 0L,
-                        localDirectories = 0L,
-                        localBytes = 0L,
-                        globalFiles = target?.filesCount?.toLong() ?: 0L,
-                        globalBytes = 0L,
-                        inSyncBytes = 0L,
-                        state = if (target?.isPaused == true) "paused" else "idle",
-                        pullErrors = pullErrorsCount
-                    )
-                } catch (_: Exception) {
-                    FolderDbStatus()
-                }
-            }
-        }
         val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/db/status") {
-            header("X-API-Key", key)
+            authHeaders(key)
             parameter("folder", folderId)
         }.body()
     }
 
     override suspend fun systemConnections(): ConnectionsResponse {
-        if (checkIsSynapseCore()) {
-            return try {
-                val metricsMap = client.get("$baseUrl/api/v1/connections").body<Map<String, CorePeerConnectionMetrics>>()
+        val key = getOrResolveApiKey()
+        return try {
+            val metricsMap = coreClient.getConnections()
+            if (metricsMap.isNotEmpty()) {
                 var totalIn = 0L
                 var totalOut = 0L
                 val mapped = mutableMapOf<String, DeviceConnection>()
                 for ((k, m) in metricsMap) {
                     totalIn += m.totalInBytes
                     totalOut += m.totalOutBytes
+                    val connType = if (m.clientType.contains("bep", ignoreCase = true) || m.clientType.contains("syncthing", ignoreCase = true)) {
+                        "BEP v1 (Syncthing TLS)"
+                    } else {
+                        "Synapse QUIC (FastCDC)"
+                    }
                     mapped[k] = DeviceConnection(
                         address = m.address,
                         clientVersion = m.clientType,
                         connected = m.isConnected,
-                        type = "QUIC",
+                        type = connType,
                         inBytesTotal = m.totalInBytes,
                         outBytesTotal = m.totalOutBytes
                     )
@@ -560,48 +341,47 @@ internal class SyncthingApiClientImpl(
                         outBytesTotal = totalOut
                     )
                 )
+            } else {
+                client.get("$baseUrl/rest/system/connections") {
+                    authHeaders(key)
+                }.body()
+            }
+        } catch (_: Exception) {
+            try {
+                client.get("$baseUrl/rest/system/connections") {
+                    authHeaders(key)
+                }.body()
             } catch (_: Exception) {
-                ConnectionsResponse(
-                    connections = emptyMap(),
-                    total = TotalConnection(inBytesTotal = 0L, outBytesTotal = 0L)
-                )
+                ConnectionsResponse()
             }
         }
-        val key = getOrResolveApiKey()
-        return client.get("$baseUrl/rest/system/connections") {
-            header("X-API-Key", key)
-        }.body()
     }
 
     override suspend fun dbCompletion(deviceId: String, folderId: String): DeviceCompletion {
-        if (checkIsSynapseCore()) {
-            return try {
-                client.get("$baseUrl/rest/db/completion") {
-                    parameter("device", deviceId)
-                    parameter("folder", folderId)
-                }.body<DeviceCompletion>()
-            } catch (_: Exception) {
-                DeviceCompletion(
-                    completion = 100.0,
-                    globalBytes = 0L,
-                    needBytes = 0L,
-                    device = deviceId,
-                    folder = folderId,
-                    remoteState = ""
-                )
-            }
-        }
         val key = getOrResolveApiKey()
-        return client.get("$baseUrl/rest/db/completion") {
-            header("X-API-Key", key)
-            parameter("device", deviceId)
-            parameter("folder", folderId)
-        }.body()
+        return try {
+            client.get("$baseUrl/rest/db/completion") {
+                authHeaders(key)
+                parameter("device", deviceId)
+                parameter("folder", folderId)
+            }.body()
+        } catch (_: Exception) {
+            DeviceCompletion(
+                completion = 100.0,
+                device = deviceId,
+                folder = folderId
+            )
+        }
     }
 
     override suspend fun systemLog(): SystemLog {
-        if (checkIsSynapseCore()) {
-            return SystemLog(
+        val key = getOrResolveApiKey()
+        return try {
+            client.get("$baseUrl/rest/system/log") {
+                authHeaders(key)
+            }.body()
+        } catch (_: Exception) {
+            SystemLog(
                 messages = listOf(
                     LogEntry(
                         timestamp = "Active",
@@ -610,272 +390,142 @@ internal class SyncthingApiClientImpl(
                 )
             )
         }
-        val key = getOrResolveApiKey()
-        return client.get("$baseUrl/rest/system/log") {
-            header("X-API-Key", key)
-        }.body()
     }
 
     override suspend fun pauseDevice(deviceId: String): HttpResponse {
-        if (checkIsSynapseCore()) {
-            return try {
-                client.post("$baseUrl/api/v1/devices/$deviceId/pause")
-            } catch (_: Exception) {
-                client.get("$baseUrl/api/v1/system/status")
-            }
-        }
         val key = getOrResolveApiKey()
         return client.post("$baseUrl/rest/system/pause") {
-            header("X-API-Key", key)
+            authHeaders(key)
             parameter("device", deviceId)
         }
     }
 
     override suspend fun resumeDevice(deviceId: String): HttpResponse {
-        if (checkIsSynapseCore()) {
-            return try {
-                client.post("$baseUrl/api/v1/devices/$deviceId/resume")
-            } catch (_: Exception) {
-                client.get("$baseUrl/api/v1/system/status")
-            }
-        }
         val key = getOrResolveApiKey()
         return client.post("$baseUrl/rest/system/resume") {
-            header("X-API-Key", key)
+            authHeaders(key)
             parameter("device", deviceId)
         }
     }
 
     override suspend fun setFolderPaused(folderId: String, paused: Boolean): HttpResponse {
-        if (checkIsSynapseCore()) {
-            val endpoint = if (paused) "$baseUrl/api/v1/folders/$folderId/pause" else "$baseUrl/api/v1/folders/$folderId/resume"
-            return try {
-                client.post(endpoint)
-            } catch (_: Exception) {
-                client.get("$baseUrl/api/v1/system/status")
-            }
-        }
         val key = getOrResolveApiKey()
-        // PATCH /rest/config/folders/{id} is the correct endpoint for toggling folder pause.
-        // /rest/system/pause and /rest/system/resume are DEVICE-ONLY — Syncthing silently ignores the folder param.
         val body = buildJsonObject { put("paused", paused) }.toString()
         return client.patch("$baseUrl/rest/config/folders/$folderId") {
-            header("X-API-Key", key)
+            authHeaders(key)
             contentType(ContentType.Application.Json)
             setBody(body)
         }
     }
     
     override suspend fun restart(): HttpResponse {
-        if (checkIsSynapseCore()) {
-            return try {
-                client.post("$baseUrl/rest/system/restart")
-            } catch (_: Exception) {
-                client.get("$baseUrl/api/v1/system/status")
-            }
-        }
         val key = getOrResolveApiKey()
         return client.post("$baseUrl/rest/system/restart") {
-            header("X-API-Key", key)
+            authHeaders(key)
         }
     }
 
     override suspend fun shutdown(): HttpResponse {
-        if (checkIsSynapseCore()) {
-            return try {
-                client.post("$baseUrl/rest/system/shutdown")
-            } catch (_: Exception) {
-                client.get("$baseUrl/api/v1/system/status")
-            }
-        }
         val key = getOrResolveApiKey()
         return client.post("$baseUrl/rest/system/shutdown") {
-            header("X-API-Key", key)
+            authHeaders(key)
         }
     }
 
     override suspend fun scan(folderId: String?): HttpResponse {
-        if (checkIsSynapseCore()) {
-            return try {
-                if (folderId != null) {
-                    client.post("$baseUrl/api/v1/folders/$folderId/rescan")
-                } else {
-                    client.post("$baseUrl/rest/db/scan")
-                }
-            } catch (_: Exception) {
-                client.get("$baseUrl/api/v1/system/status")
-            }
-        }
         val key = getOrResolveApiKey()
         val response = client.post("$baseUrl/rest/db/scan") {
-            header("X-API-Key", key)
+            authHeaders(key)
             if (folderId != null) {
                 parameter("folder", folderId)
             }
         }
-        if (response.status.value !in 200..299) {
-            val errorText = try { response.bodyAsText() } catch (_: Exception) { "" }
-            throw SyncthingApiException("Failed to scan folder: HTTP ${response.status.value} - ${errorText.trim()}")
+        if (!response.status.isSuccess()) {
+            throw SyncthingApiException("Failed to scan: HTTP ${response.status.value}")
         }
         return response
     }
 
     override suspend fun deleteFolder(folderId: String) {
-        if (checkIsSynapseCore()) {
-            try {
-                client.delete("$baseUrl/api/v1/folders/$folderId")
-            } catch (_: Exception) {}
-            return
-        }
         val key = getOrResolveApiKey()
         val response = client.delete("$baseUrl/rest/config/folders/$folderId") {
-            header("X-API-Key", key)
+            authHeaders(key)
         }
-        if (response.status.value !in 200..299) {
+        if (!response.status.isSuccess()) {
             throw SyncthingApiException("Failed to delete folder: HTTP ${response.status.value}")
         }
     }
 
     override suspend fun deleteDevice(deviceId: String) {
-        if (checkIsSynapseCore()) {
-            try {
-                client.delete("$baseUrl/api/v1/devices/$deviceId")
-            } catch (_: Exception) {}
-            return
-        }
         val key = getOrResolveApiKey()
         val response = client.delete("$baseUrl/rest/config/devices/$deviceId") {
-            header("X-API-Key", key)
+            authHeaders(key)
         }
-        if (response.status.value !in 200..299) {
+        if (!response.status.isSuccess()) {
             throw SyncthingApiException("Failed to delete device: HTTP ${response.status.value}")
         }
     }
 
     override suspend fun getPendingDevices(): Map<String, PendingDevice> {
-        if (checkIsSynapseCore()) {
-            return try {
-                val list = client.get("$baseUrl/api/v1/cluster/pending/devices").body<List<CorePendingDevice>>()
-                list.associate { d ->
+        val key = getOrResolveApiKey()
+        return try {
+            val corePending = coreClient.getPendingDevices()
+            if (corePending.isNotEmpty()) {
+                corePending.associate { d ->
                     d.deviceId to PendingDevice(
                         name = d.name,
                         address = d.address,
                         time = d.receivedAt.toString()
                     )
                 }
+            } else {
+                client.get("$baseUrl/rest/cluster/pending/devices") {
+                    authHeaders(key)
+                }.body()
+            }
+        } catch (_: Exception) {
+            try {
+                client.get("$baseUrl/rest/cluster/pending/devices") {
+                    authHeaders(key)
+                }.body()
             } catch (_: Exception) {
                 emptyMap()
             }
         }
-        val key = getOrResolveApiKey()
-        return client.get("$baseUrl/rest/cluster/pending/devices") {
-            header("X-API-Key", key)
-        }.body()
     }
 
     override suspend fun dismissPendingDevice(deviceId: String): HttpResponse {
-        if (checkIsSynapseCore()) {
-            return try {
-                client.post("$baseUrl/api/v1/cluster/pending/devices/$deviceId/reject")
-            } catch (_: Exception) {
-                client.get("$baseUrl/api/v1/system/status")
-            }
-        }
         val key = getOrResolveApiKey()
-        val deleteResponse = client.delete("$baseUrl/rest/cluster/pending/devices") {
-            header("X-API-Key", key)
+        return client.delete("$baseUrl/rest/cluster/pending/devices") {
+            authHeaders(key)
             parameter("device", deviceId)
         }
-
-        try {
-            val rawConfigString = rawSystemConfig()
-            val rawConfigJson = json.parseToJsonElement(rawConfigString).jsonObject
-            val newRootMap = rawConfigJson.toMutableMap()
-
-            val existingIgnored = (rawConfigJson["ignoredDevices"] as? JsonArray)?.toMutableList() ?: mutableListOf()
-            val isAlreadyIgnored = existingIgnored.any {
-                it is JsonPrimitive && it.content == deviceId
-            }
-            if (!isAlreadyIgnored) {
-                existingIgnored.add(JsonPrimitive(deviceId))
-                newRootMap["ignoredDevices"] = JsonArray(existingIgnored)
-                val patchedConfigJson = JsonObject(newRootMap)
-                updateRawSystemConfig(patchedConfigJson.toString())
-            }
-        } catch (e: Exception) {
-            // Ignore/Log error
-        }
-
-        return deleteResponse
     }
 
     override suspend fun acceptPendingDevice(deviceId: String): Boolean {
-        if (checkIsSynapseCore()) {
-            return try {
-                val resp = client.post("$baseUrl/api/v1/cluster/pending/devices/$deviceId/accept")
-                resp.status.isSuccess()
-            } catch (_: Exception) {
-                false
-            }
-        }
-        return false
+        return coreClient.acceptPendingDevice(deviceId)
     }
 
     override suspend fun acceptPendingFolder(folderId: String, localPath: String?): Boolean {
-        if (checkIsSynapseCore()) {
-            return try {
-                val resp = client.post("$baseUrl/api/v1/cluster/pending/folders/$folderId/accept") {
-                    if (localPath != null) {
-                        contentType(io.ktor.http.ContentType.Application.Json)
-                        setBody(mapOf("local_path" to localPath))
-                    }
-                }
-                resp.status.isSuccess()
-            } catch (_: Exception) {
-                false
-            }
-        }
-        return false
+        return coreClient.acceptPendingFolder(folderId)
     }
 
-    override suspend fun getConflicts(): List<CoreQuarantineConflict> {
-        if (checkIsSynapseCore()) {
-            return try {
-                client.get("$baseUrl/api/v1/conflicts").body()
-            } catch (_: Exception) {
-                emptyList()
-            }
-        }
-        return emptyList()
-    }
+    override suspend fun getConflicts(): List<CoreQuarantineConflict> = coreClient.getConflicts()
 
-    override suspend fun getConflictDiff(conflictId: String): CoreDiffResponse {
-        return client.get("$baseUrl/api/v1/conflicts/$conflictId/diff").body()
-    }
+    override suspend fun getConflictDiff(conflictId: String): CoreDiffResponse = coreClient.getConflictDiff(conflictId)
 
-    override suspend fun resolveConflict(conflictId: String, request: CoreResolveRequest): Boolean {
-        val resp = client.post("$baseUrl/api/v1/conflicts/$conflictId/resolve") {
-            contentType(io.ktor.http.ContentType.Application.Json)
-            setBody(request)
-        }
-        return resp.status.isSuccess()
-    }
+    override suspend fun resolveConflict(conflictId: String, request: CoreResolveRequest): Boolean = coreClient.resolveConflict(conflictId, request)
 
-    override suspend fun ignoreConflict(conflictId: String): Boolean {
-        val resp = client.post("$baseUrl/api/v1/conflicts/$conflictId/ignore")
-        return resp.status.isSuccess()
-    }
+    override suspend fun ignoreConflict(conflictId: String): Boolean = coreClient.ignoreConflict(conflictId)
 
-    override suspend fun reopenConflict(conflictId: String): Boolean {
-        val resp = client.post("$baseUrl/api/v1/conflicts/$conflictId/reopen")
-        return resp.status.isSuccess()
-    }
+    override suspend fun reopenConflict(conflictId: String): Boolean = coreClient.reopenConflict(conflictId)
 
     override suspend fun getPendingFolders(): Map<String, PendingFolderOffer> {
-        if (checkIsSynapseCore()) {
-            return try {
-                val list = client.get("$baseUrl/api/v1/cluster/pending/folders").body<List<CorePendingFolder>>()
-                list.associate { f ->
+        val key = getOrResolveApiKey()
+        return try {
+            val corePending = coreClient.getPendingFolders()
+            if (corePending.isNotEmpty()) {
+                corePending.associate { f ->
                     f.folderId to PendingFolderOffer(
                         offeredBy = mapOf(
                             f.deviceId to PendingFolder(
@@ -885,14 +535,20 @@ internal class SyncthingApiClientImpl(
                         )
                     )
                 }
+            } else {
+                client.get("$baseUrl/rest/cluster/pending/folders") {
+                    authHeaders(key)
+                }.body()
+            }
+        } catch (_: Exception) {
+            try {
+                client.get("$baseUrl/rest/cluster/pending/folders") {
+                    authHeaders(key)
+                }.body()
             } catch (_: Exception) {
                 emptyMap()
             }
         }
-        val key = getOrResolveApiKey()
-        return client.get("$baseUrl/rest/cluster/pending/folders") {
-            header("X-API-Key", key)
-        }.body()
     }
 
     override suspend fun dismissPendingFolder(
@@ -901,70 +557,21 @@ internal class SyncthingApiClientImpl(
         label: String,
         time: String
     ): HttpResponse {
-        if (checkIsSynapseCore()) {
-            return try {
-                client.post("$baseUrl/api/v1/cluster/pending/folders/$folderId/reject")
-            } catch (_: Exception) {
-                client.get("$baseUrl/api/v1/system/status")
-            }
-        }
         val key = getOrResolveApiKey()
-        val deleteResponse = client.delete("$baseUrl/rest/cluster/pending/folders") {
-            header("X-API-Key", key)
+        return client.delete("$baseUrl/rest/cluster/pending/folders") {
+            authHeaders(key)
             parameter("folder", folderId)
             if (deviceId.isNotEmpty()) {
                 parameter("device", deviceId)
             }
         }
-
-        if (deviceId.isNotEmpty()) {
-            try {
-                val rawConfigString = rawSystemConfig()
-                val rawConfigJson = json.parseToJsonElement(rawConfigString).jsonObject
-                val newRootMap = rawConfigJson.toMutableMap()
-
-                val devicesArray = rawConfigJson["devices"]?.jsonArray
-                if (devicesArray != null) {
-                    val updatedDevices = devicesArray.map { deviceElement ->
-                        val deviceObj = deviceElement.jsonObject
-                        val currentDeviceId = deviceObj["deviceID"]?.jsonPrimitive?.content ?: ""
-                        if (currentDeviceId == deviceId) {
-                            val newDeviceMap = deviceObj.toMutableMap()
-                            val existingIgnored = (deviceObj["ignoredFolders"] as? JsonArray)?.toMutableList() ?: mutableListOf()
-
-                            val isAlreadyIgnored = existingIgnored.any {
-                                (it as? JsonObject)?.get("id")?.jsonPrimitive?.content == folderId
-                            }
-                            if (!isAlreadyIgnored) {
-                                val newIgnoredFolder = buildJsonObject {
-                                    put("id", folderId)
-                                    put("label", label)
-                                    put("time", time)
-                                }
-                                existingIgnored.add(newIgnoredFolder)
-                                newDeviceMap["ignoredFolders"] = JsonArray(existingIgnored)
-                            }
-                            JsonObject(newDeviceMap)
-                        } else {
-                            deviceElement
-                        }
-                    }
-                    newRootMap["devices"] = JsonArray(updatedDevices)
-                    val patchedConfigJson = JsonObject(newRootMap)
-                    updateRawSystemConfig(patchedConfigJson.toString())
-                }
-            } catch (e: Exception) {
-                // Ignore/Log error
-            }
-        }
-
-        return deleteResponse
     }
 
     override suspend fun getEvents(since: Int, limit: Int): List<Event> {
-        if (checkIsSynapseCore()) {
-            return try {
-                val conflicts = client.get("$baseUrl/api/v1/conflicts").body<List<CoreQuarantineConflict>>()
+        val key = getOrResolveApiKey()
+        return try {
+            val conflicts = coreClient.getConflicts()
+            if (conflicts.isNotEmpty()) {
                 conflicts.mapIndexed { idx, c ->
                     Event(
                         id = idx + 1,
@@ -977,58 +584,60 @@ internal class SyncthingApiClientImpl(
                         }
                     )
                 }
-            } catch (_: Exception) {
-                emptyList()
+            } else {
+                client.get("$baseUrl/rest/events") {
+                    authHeaders(key)
+                    parameter("since", since)
+                    parameter("limit", limit)
+                }.body()
             }
+        } catch (_: Exception) {
+            emptyList()
         }
-        val key = getOrResolveApiKey()
-        return client.get("$baseUrl/rest/events") {
-            header("X-API-Key", key)
-            parameter("since", since)
-            parameter("limit", limit)
-        }.body()
     }
 
     override suspend fun getConfigOptions(): ConfigOptions {
-        if (checkIsSynapseCore()) return ConfigOptions()
         val key = getOrResolveApiKey()
-        return client.get("$baseUrl/rest/config/options") {
-            header("X-API-Key", key)
-        }.body()
+        return try {
+            client.get("$baseUrl/rest/config/options") {
+                authHeaders(key)
+            }.body()
+        } catch (_: Exception) {
+            ConfigOptions()
+        }
     }
 
     override suspend fun updateConfigOptions(options: ConfigOptions) {
-        if (checkIsSynapseCore()) return
         val key = getOrResolveApiKey()
-        val response = client.put("$baseUrl/rest/config/options") {
-            header("X-API-Key", key)
-            contentType(ContentType.Application.Json)
-            setBody(options)
-        }
-        if (response.status.value !in 200..299) {
-            throw SyncthingApiException("Failed to update config options: HTTP ${response.status.value}")
-        }
+        try {
+            client.put("$baseUrl/rest/config/options") {
+                authHeaders(key)
+                contentType(ContentType.Application.Json)
+                setBody(options)
+            }
+        } catch (_: Exception) {}
     }
 
     override suspend fun getConfigGui(): GuiConfig {
-        if (checkIsSynapseCore()) return GuiConfig(address = baseUrl)
         val key = getOrResolveApiKey()
-        return client.get("$baseUrl/rest/config/gui") {
-            header("X-API-Key", key)
-        }.body()
+        return try {
+            client.get("$baseUrl/rest/config/gui") {
+                authHeaders(key)
+            }.body()
+        } catch (_: Exception) {
+            GuiConfig(address = baseUrl)
+        }
     }
 
     override suspend fun updateConfigGui(gui: GuiConfig) {
-        if (checkIsSynapseCore()) return
         val key = getOrResolveApiKey()
-        val response = client.put("$baseUrl/rest/config/gui") {
-            header("X-API-Key", key)
-            contentType(ContentType.Application.Json)
-            setBody(gui)
-        }
-        if (response.status.value !in 200..299) {
-            throw SyncthingApiException("Failed to update GUI config: HTTP ${response.status.value}")
-        }
+        try {
+            client.put("$baseUrl/rest/config/gui") {
+                authHeaders(key)
+                contentType(ContentType.Application.Json)
+                setBody(gui)
+            }
+        } catch (_: Exception) {}
     }
 }
 

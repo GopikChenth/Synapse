@@ -233,6 +233,29 @@ fun DeviceItemCard(
                         color = statusColor,
                         fontWeight = FontWeight.Bold
                     )
+
+                    if (device.connected) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        val isBep = device.clientVersion.contains("bep", ignoreCase = true) ||
+                                    device.clientVersion.contains("syncthing", ignoreCase = true) ||
+                                    device.connectionType.contains("bep", ignoreCase = true)
+                        val badgeText = if (isBep) "BEP v1 (TLS 1.3)" else "QUIC (FastCDC)"
+                        val badgeBg = if (isBep) Color(0xFF1E88E5).copy(alpha = 0.15f) else Color(0xFF7C4DFF).copy(alpha = 0.15f)
+                        val badgeColor = if (isBep) Color(0xFF1E88E5) else Color(0xFF7C4DFF)
+
+                        Box(
+                            modifier = Modifier
+                                .background(badgeBg, shape = RoundedCornerShape(4.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = badgeText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = badgeColor,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
 
                 if (sharedFolders.isNotEmpty()) {

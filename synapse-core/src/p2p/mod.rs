@@ -6,6 +6,7 @@
 //! - High-performance QUIC multiplexed streams via Quinn
 //! - Content-addressed block exchange and file revision replication
 
+pub mod bep;
 pub mod crypto;
 pub mod identity;
 pub mod nat;
@@ -13,6 +14,7 @@ pub mod relay;
 pub mod swarm;
 pub mod throttle;
 
+pub use bep::{start_bep_listener, BEP_DEFAULT_PORT, BEP_MAGIC, BepClusterConfig, BepFolder, BepHello};
 pub use crypto::{CryptoError, EncryptedChunkEnvelope, EncryptionAlgorithm};
 pub use swarm::{ChunkAssignment, FilePullItem, PullOrder, SchedulingStrategy, SwarmScheduler};
 pub use throttle::{BandwidthLimiter, RateLimiter};
@@ -106,6 +108,7 @@ pub struct PeerInfo {
     pub device_name: String,
     pub addr: SocketAddr,
     pub last_seen: std::time::Instant,
+    pub client_type: String,
 }
 
 #[derive(Clone)]
@@ -113,6 +116,7 @@ pub struct P2PManager {
     identity: NodeIdentity,
     device_name: String,
     p2p_port: u16,
+    bep_port: u16,
     sync_engine: SyncEngine,
     peers: Arc<Mutex<HashMap<String, PeerInfo>>>,
     peer_count: Arc<AtomicUsize>,
@@ -138,6 +142,7 @@ impl P2PManager {
         identity: NodeIdentity,
         device_name: String,
         p2p_port: u16,
+        bep_port: u16,
         sync_engine: SyncEngine,
         peer_count: Arc<AtomicUsize>,
         event_sender: broadcast::Sender<CoreEvent>,
@@ -146,6 +151,7 @@ impl P2PManager {
             identity,
             device_name,
             p2p_port,
+            bep_port,
             sync_engine,
             peers: Arc::new(Mutex::new(HashMap::new())),
             peer_count,
@@ -155,6 +161,22 @@ impl P2PManager {
 
     pub fn device_id(&self) -> &str {
         &self.identity.device_id
+    }
+
+    pub async fn register_peer(&self, peer: PeerInfo) {
+        let mut map = self.peers.lock().await;
+        map.insert(peer.device_id.clone(), peer);
+        self.peer_count.store(map.len(), Ordering::Relaxed);
+    }
+
+    pub async fn get_peer_info(&self, device_id: &str) -> Option<PeerInfo> {
+        let map = self.peers.lock().await;
+        map.get(device_id).cloned()
+    }
+
+    pub async fn list_connected_peers(&self) -> HashMap<String, PeerInfo> {
+        let map = self.peers.lock().await;
+        map.clone()
     }
 
     /// Spawns UDP broadcast discovery listener and periodic announcer.
@@ -230,6 +252,7 @@ impl P2PManager {
                                     device_name: peer.device_name.clone(),
                                     addr: peer_addr,
                                     last_seen: std::time::Instant::now(),
+                                    client_type: "synapse-quic (FastCDC)".into(),
                                 },
                             );
                             peer_count.store(map.len(), Ordering::Relaxed);
@@ -424,6 +447,7 @@ impl P2PManager {
                             device_name: device_name.clone(),
                             addr,
                             last_seen: std::time::Instant::now(),
+                            client_type: "synapse-quic (FastCDC)".into(),
                         },
                     );
                     self.peer_count.store(map.len(), Ordering::Relaxed);
@@ -482,8 +506,65 @@ impl P2PManager {
         Ok(endpoint)
     }
 
-    /// Spawns the QUIC server loop handling incoming peer connections.
+    /// Spawns both QUIC server and BEP v1 (Syncthing Block Exchange Protocol) TCP listeners.
     pub async fn run_server(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // 1. Start BEP v1 TCP listener for official Go Syncthing node interoperability
+        let bep_port = self.bep_port;
+        let local_name = self.device_name.clone();
+        let storage = self.sync_engine.storage().clone();
+        let folders = storage
+            .list_folders()
+            .map(|list| {
+                list.into_iter()
+                    .map(|f| BepFolder {
+                        label: f.folder_id.clone(),
+                        id: f.folder_id,
+                        read_only: false,
+                        paused: f.is_paused,
+                        device_ids: Vec::new(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let self_clone = self.clone();
+        let on_peer_connected = Arc::new(move |hello: BepHello, _config: BepClusterConfig, addr: SocketAddr| {
+            let p2p = self_clone.clone();
+            tokio::spawn(async move {
+                let storage = p2p.sync_engine.storage();
+                let matched_device_id = storage
+                    .list_devices()
+                    .ok()
+                    .and_then(|devs| {
+                        devs.into_iter()
+                            .find(|d| d.name == hello.device_name)
+                            .map(|d| d.device_id)
+                    })
+                    .unwrap_or_else(|| {
+                        format!("BEP-{}", blake3::hash(hello.device_name.as_bytes()).to_hex()[..16].to_ascii_uppercase())
+                    });
+
+                let client_str = format!("syncthing-bep-v1 ({}/{})", hello.client_name, hello.client_version);
+                p2p.register_peer(PeerInfo {
+                    device_id: matched_device_id.clone(),
+                    device_name: hello.device_name.clone(),
+                    addr,
+                    last_seen: std::time::Instant::now(),
+                    client_type: client_str,
+                }).await;
+
+                let _ = p2p.event_sender.send(CoreEvent::PeerConnected {
+                    peer_id: matched_device_id,
+                    addr: addr.to_string(),
+                });
+            });
+        });
+
+        if let Err(e) = start_bep_listener(bep_port, local_name, folders, on_peer_connected).await {
+            warn!("Unable to start BEP v1 listener on port {}: {}", bep_port, e);
+        }
+
+        // 2. Start high-speed QUIC server for native Synapse mesh
         let bind_addr = SocketAddr::from(([0, 0, 0, 0], self.p2p_port));
         let endpoint = match Self::create_quic_server(bind_addr) {
             Ok(ep) => ep,
