@@ -109,6 +109,22 @@ pub enum CoreEvent {
         name: String,
         address: String,
     },
+    /// A device moved through the pairing lifecycle (see `device_pairing_lifecycle`).
+    #[serde(rename = "DEVICE_STATE_CHANGED")]
+    DeviceStateChanged {
+        device_id: String,
+        from: String,
+        to: String,
+    },
+    /// A folder's lifecycle state changed (see `folder_sync_lifecycle`).
+    #[serde(rename = "FOLDER_STATE_CHANGED")]
+    FolderStateChanged {
+        folder_id: String,
+        from: String,
+        to: String,
+        /// Why the folder is in `error`, when it is.
+        error: Option<String>,
+    },
     #[serde(rename = "REMOTE_INDEX_UPDATED")]
     RemoteIndexUpdated {
         device_id: String,
@@ -376,25 +392,12 @@ impl ConflictEngine {
 
         // State Machine Transition Guard: Enforces valid lifecycle transitions
         let current_status = conflict.parsed_status();
-        if !current_status.can_transition_to(crate::state::ConflictStatus::Resolved) {
-            return Err(Box::new(crate::state::StateTransitionError {
-                entity: "conflict".to_string(),
-                entity_id: conflict_id.to_string(),
-                current_state: current_status.as_str().to_string(),
-                attempted_transition: crate::state::ConflictStatus::Resolved.as_str().to_string(),
-                allowed_transitions: current_status
-                    .allowed_transitions()
-                    .into_iter()
-                    .map(|s| s.as_str().to_string())
-                    .collect(),
-                available_actions: current_status
-                    .available_actions()
-                    .into_iter()
-                    .map(String::from)
-                    .collect(),
-                is_terminal: current_status.is_terminal(),
-            }));
-        }
+        // Guarded transition (shared StateMachine trait): structured error on violation
+        crate::state::StateMachine::transition(
+            &current_status,
+            conflict_id,
+            crate::state::ConflictStatus::Resolved,
+        )?;
 
         let folder = match self.storage.get_folder(&conflict.folder_id)? {
             Some(f) => f,
@@ -527,25 +530,12 @@ impl ConflictEngine {
         };
 
         let current_status = conflict.parsed_status();
-        if !current_status.can_transition_to(crate::state::ConflictStatus::Ignored) {
-            return Err(Box::new(crate::state::StateTransitionError {
-                entity: "conflict".to_string(),
-                entity_id: conflict_id.to_string(),
-                current_state: current_status.as_str().to_string(),
-                attempted_transition: crate::state::ConflictStatus::Ignored.as_str().to_string(),
-                allowed_transitions: current_status
-                    .allowed_transitions()
-                    .into_iter()
-                    .map(|s| s.as_str().to_string())
-                    .collect(),
-                available_actions: current_status
-                    .available_actions()
-                    .into_iter()
-                    .map(String::from)
-                    .collect(),
-                is_terminal: current_status.is_terminal(),
-            }));
-        }
+        // Guarded transition (shared StateMachine trait): structured error on violation
+        crate::state::StateMachine::transition(
+            &current_status,
+            conflict_id,
+            crate::state::ConflictStatus::Ignored,
+        )?;
 
         self.storage.ignore_conflict(conflict_id)?;
         Ok(())
@@ -559,25 +549,12 @@ impl ConflictEngine {
         };
 
         let current_status = conflict.parsed_status();
-        if !current_status.can_transition_to(crate::state::ConflictStatus::Pending) {
-            return Err(Box::new(crate::state::StateTransitionError {
-                entity: "conflict".to_string(),
-                entity_id: conflict_id.to_string(),
-                current_state: current_status.as_str().to_string(),
-                attempted_transition: crate::state::ConflictStatus::Pending.as_str().to_string(),
-                allowed_transitions: current_status
-                    .allowed_transitions()
-                    .into_iter()
-                    .map(|s| s.as_str().to_string())
-                    .collect(),
-                available_actions: current_status
-                    .available_actions()
-                    .into_iter()
-                    .map(String::from)
-                    .collect(),
-                is_terminal: current_status.is_terminal(),
-            }));
-        }
+        // Guarded transition (shared StateMachine trait): structured error on violation
+        crate::state::StateMachine::transition(
+            &current_status,
+            conflict_id,
+            crate::state::ConflictStatus::Pending,
+        )?;
 
         self.storage.reopen_conflict(conflict_id)?;
         Ok(())

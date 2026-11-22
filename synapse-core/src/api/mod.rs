@@ -10,20 +10,21 @@
 //! - Real-time WebSocket event streaming
 //! - Full compatibility route aliases for Syncthing API clients (`/rest/*`)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::{
         path::Path as AxumPath,
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        Query, Request, State,
     },
-    http::StatusCode,
+    http::{header, HeaderName, HeaderValue, Method, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post},
     Json, Router,
@@ -31,7 +32,7 @@ use axum::{
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 
 use crate::conflict::diff3::{self, DiffHunk};
@@ -46,9 +47,278 @@ use crate::storage::{
 pub struct AppState {
     pub start_time: Instant,
     pub sync_engine: SyncEngine,
+    /// API token every request must present. `None` (or empty) means the API
+    /// fails closed and rejects every request.
     pub auth_token: Option<String>,
     pub peer_count: Arc<std::sync::atomic::AtomicUsize>,
     pub p2p_manager: Arc<crate::p2p::P2PManager>,
+    /// Browser origins allowed to call the API (e.g. `http://localhost:8080` for the
+    /// web UI). Empty = no cross-origin access at all.
+    pub allowed_origins: Vec<String>,
+    /// Recent events, served to Syncthing-style long-poll clients (`GET /rest/events`).
+    pub event_log: Arc<EventLog>,
+}
+
+// =============================================================================
+// EVENT LOG (Syncthing-compatible long-poll for GET /rest/events)
+// =============================================================================
+
+/// Number of recent events kept in memory for long-poll clients.
+pub const EVENT_LOG_CAPACITY: usize = 1000;
+
+/// Ring buffer of recent events in Syncthing's event format:
+/// `{"id", "globalID", "type", "time", "data"}`.
+pub struct EventLog {
+    inner: std::sync::Mutex<EventLogInner>,
+    latest_id: tokio::sync::watch::Sender<u64>,
+}
+
+struct EventLogInner {
+    next_id: u64,
+    events: VecDeque<(u64, String, serde_json::Value)>,
+}
+
+impl EventLog {
+    pub fn new() -> Arc<Self> {
+        let (latest_id, _) = tokio::sync::watch::channel(0);
+        Arc::new(Self {
+            inner: std::sync::Mutex::new(EventLogInner { next_id: 1, events: VecDeque::new() }),
+            latest_id,
+        })
+    }
+
+    /// Records an engine event, converting it to Syncthing's event shape.
+    pub fn record(&self, event: &CoreEvent) {
+        let (event_type, data) = to_syncthing_event(event);
+        let id = {
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            let id = inner.next_id;
+            inner.next_id += 1;
+            let json = serde_json::json!({
+                "id": id,
+                "globalID": id,
+                "type": event_type,
+                "time": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "data": data,
+            });
+            inner.events.push_back((id, event_type, json));
+            while inner.events.len() > EVENT_LOG_CAPACITY {
+                inner.events.pop_front();
+            }
+            id
+        };
+        self.latest_id.send_replace(id);
+    }
+
+    /// Events with `id > since`, optionally filtered by type, keeping the newest `limit`
+    /// (0 = no limit). Oldest first, like Syncthing.
+    pub fn since(&self, since: u64, limit: usize, types: Option<&[String]>) -> Vec<serde_json::Value> {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut out: Vec<serde_json::Value> = inner
+            .events
+            .iter()
+            .filter(|(id, ty, _)| *id > since && types.is_none_or(|t| t.iter().any(|x| x == ty)))
+            .map(|(_, _, json)| json.clone())
+            .collect();
+        if limit > 0 && out.len() > limit {
+            out.drain(..out.len() - limit);
+        }
+        out
+    }
+
+    fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.latest_id.subscribe()
+    }
+
+    /// Spawns a task that records every event published on `sender`.
+    pub fn spawn_recorder(self: &Arc<Self>, sender: &broadcast::Sender<CoreEvent>) {
+        let mut rx = sender.subscribe();
+        let log = self.clone();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(event) => log.record(&event),
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Event log lagged; {} events were not recorded", n);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+}
+
+/// Maps an engine event to a Syncthing event type and `data` object. File activity uses
+/// Syncthing's names (`ItemStarted`, `ItemFinished`, `LocalChangeDetected`) so existing
+/// Syncthing clients understand it; everything else keeps its Synapse name.
+fn to_syncthing_event(event: &CoreEvent) -> (String, serde_json::Value) {
+    use serde_json::json;
+    match event {
+        CoreEvent::ItemStarted { folder_id, relative_path, action } => (
+            "ItemStarted".into(),
+            json!({ "folder": folder_id, "item": relative_path, "action": action, "type": "file" }),
+        ),
+        CoreEvent::ItemFinished { folder_id, relative_path, action, error } => (
+            "ItemFinished".into(),
+            json!({ "folder": folder_id, "item": relative_path, "action": action, "type": "file", "error": error }),
+        ),
+        CoreEvent::FileChanged { folder_id, relative_path, revision } => (
+            "LocalChangeDetected".into(),
+            json!({
+                "folder": folder_id, "folderID": folder_id, "path": relative_path,
+                "action": "modified", "type": "file", "revision": revision,
+            }),
+        ),
+        other => {
+            let value = serde_json::to_value(other).unwrap_or_default();
+            let event_type = value
+                .get("event")
+                .and_then(|v| v.as_str())
+                .unwrap_or("UNKNOWN")
+                .to_string();
+            let data = match value.get("data") {
+                Some(d) if d.is_object() => d.clone(),
+                Some(d) if !d.is_null() => json!({ "value": d }),
+                _ => json!({}),
+            };
+            (event_type, data)
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct EventsQuery {
+    since: Option<u64>,
+    limit: Option<usize>,
+    /// Seconds to wait for new events (Syncthing default 60, max 300).
+    timeout: Option<u64>,
+    /// Comma-separated event types to include.
+    events: Option<String>,
+}
+
+// =============================================================================
+// AUTHENTICATION & ORIGIN CHECKS
+// =============================================================================
+
+/// Header name accepted as an alternative to `Authorization: Bearer <token>`.
+pub const API_KEY_HEADER: &str = "x-api-key";
+
+/// Compares two byte strings without short-circuiting on the first mismatch.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Pulls the API token from `Authorization: Bearer`, `X-API-Key`, or — for the
+/// WebSocket event stream only, because browsers cannot set headers on upgrades —
+/// a `token` / `api_key` query parameter.
+fn extract_token(req: &Request) -> Option<String> {
+    let headers = req.headers();
+    if let Some(value) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+        let value = value.trim();
+        if value.len() > 7 && value[..7].eq_ignore_ascii_case("bearer ") {
+            return Some(value[7..].trim().to_string());
+        }
+    }
+    if let Some(value) = headers.get(API_KEY_HEADER).and_then(|v| v.to_str().ok()) {
+        return Some(value.trim().to_string());
+    }
+    if req.uri().path().ends_with("/events") {
+        if let Some(query) = req.uri().query() {
+            for pair in query.split('&') {
+                if let Some((key, value)) = pair.split_once('=') {
+                    if key == "token" || key == "api_key" {
+                        return Some(value.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Middleware: rejects requests from disallowed browser origins and requests
+/// without a valid API token.
+async fn require_api_token(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    if let Some(origin) = req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        if !state.allowed_origins.iter().any(|o| o == origin) {
+            warn!("Rejected API request from disallowed origin {}", origin);
+            return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+        }
+    }
+
+    let expected = match state.auth_token.as_deref() {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            warn!("API request rejected: no API token is configured (failing closed)");
+            return (StatusCode::UNAUTHORIZED, "API token not configured").into_response();
+        }
+    };
+
+    match extract_token(&req) {
+        Some(supplied) if constant_time_eq(supplied.as_bytes(), expected.as_bytes()) => next.run(req).await,
+        _ => (
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Bearer")],
+            "missing or invalid API token",
+        )
+            .into_response(),
+    }
+}
+
+/// HTTP status returned for an illegal lifecycle transition. Kept at 400 for compatibility
+/// with existing clients and tests; change it here (e.g. to 409 CONFLICT) to switch globally.
+pub const TRANSITION_ERROR_STATUS: StatusCode = StatusCode::BAD_REQUEST;
+
+/// Converts an engine error into a response. Lifecycle violations become a structured JSON
+/// body — `{"error":"invalid_transition","message":..., "current_state":...,
+/// "allowed_transitions":[...], "available_actions":[...]}` — so UIs can show what *is*
+/// possible and agents can self-correct. Anything else keeps `fallback` + plain text.
+fn error_response(err: &(dyn std::error::Error + Send + Sync + 'static), fallback: StatusCode) -> Response {
+    if let Some(t) = err.downcast_ref::<crate::state::StateTransitionError>() {
+        return transition_error_response(t);
+    }
+    if let Some(nf) = err.downcast_ref::<crate::state::EntityNotFound>() {
+        return (StatusCode::NOT_FOUND, nf.to_string()).into_response();
+    }
+    (fallback, err.to_string()).into_response()
+}
+
+fn transition_error_response(t: &crate::state::StateTransitionError) -> Response {
+    let mut body = serde_json::to_value(t).unwrap_or_else(|_| serde_json::json!({}));
+    body["error"] = "invalid_transition".into();
+    body["message"] = t.to_string().into();
+    (TRANSITION_ERROR_STATUS, Json(body)).into_response()
+}
+
+/// Builds a CORS layer for the configured origins, or `None` when no browser
+/// origin is allowed.
+fn build_cors_layer(allowed_origins: &[String]) -> Option<CorsLayer> {
+    let origins: Vec<HeaderValue> = allowed_origins
+        .iter()
+        .filter_map(|o| match o.parse::<HeaderValue>() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                warn!("Ignoring invalid allowed origin '{}'", o);
+                None
+            }
+        })
+        .collect();
+    if origins.is_empty() {
+        return None;
+    }
+    Some(
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(origins))
+            .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE, Method::OPTIONS])
+            .allow_headers([
+                header::AUTHORIZATION,
+                header::CONTENT_TYPE,
+                HeaderName::from_static(API_KEY_HEADER),
+            ]),
+    )
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,6 +339,12 @@ pub struct SystemStatusResponse {
     pub alloc: usize,
     #[serde(default)]
     pub sys: usize,
+    /// Engine lifecycle state (`engine_lifecycle`): starting, running, stopping, stopped, failed.
+    #[serde(default)]
+    pub engine_state: String,
+    /// Number of folders in each `folder_sync_lifecycle` state, e.g. `{"idle": 2, "error": 1}`.
+    #[serde(default)]
+    pub folders_by_state: std::collections::BTreeMap<String, usize>,
     #[serde(rename = "guiAddressUsed", default)]
     pub gui_address_used: String,
 }
@@ -176,6 +452,15 @@ pub struct FolderDto {
     pub marker_name: String,
     pub versioning_command: Option<String>,
     pub files_count: usize,
+    /// Current lifecycle state (`idle`, `scanning`, `syncing`, `paused`, `error`).
+    #[serde(default)]
+    pub state: String,
+    /// Why the folder is in `error`, if it is.
+    #[serde(default)]
+    pub error: Option<crate::engine::FolderError>,
+    /// Full lifecycle snapshot including `available_actions`.
+    #[serde(default)]
+    pub lifecycle: Option<crate::state::LifecycleView>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -240,7 +525,10 @@ impl ApiServer {
         auth_token: Option<String>,
         peer_count: Arc<std::sync::atomic::AtomicUsize>,
         p2p_manager: Arc<crate::p2p::P2PManager>,
+        allowed_origins: Vec<String>,
     ) -> Self {
+        let event_log = EventLog::new();
+        event_log.spawn_recorder(sync_engine.event_sender());
         Self {
             state: AppState {
                 start_time: Instant::now(),
@@ -248,19 +536,21 @@ impl ApiServer {
                 auth_token,
                 peer_count,
                 p2p_manager,
+                allowed_origins,
+                event_log,
             },
             bind_addr,
         }
     }
 
     /// Builds Axum router with security, CORS, and endpoint handlers.
+    ///
+    /// Every route — including the WebSocket event stream — requires the API token.
+    /// Cross-origin browser access is only granted to `state.allowed_origins`.
     pub fn create_router(state: AppState) -> Router {
-        let cors = CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any);
+        let cors = build_cors_layer(&state.allowed_origins);
 
-        Router::new()
+        let router = Router::new()
             .route("/api/v1/system/status", get(get_system_status))
             .route("/rest/system/status", get(get_system_status))
             .route("/api/v1/system/version", get(get_system_version))
@@ -310,6 +600,8 @@ impl ApiServer {
             .route("/api/v1/cluster/pending/devices/:id/reject", post(reject_pending_device))
             .route("/rest/cluster/pending/devices/:id/reject", post(reject_pending_device))
 
+            .route("/api/v1/cluster/rejected/devices", get(list_rejected_devices))
+            .route("/api/v1/cluster/rejected/devices/:id/unreject", post(unreject_device))
             .route("/api/v1/cluster/pending/folders", get(list_pending_folders))
             .route("/rest/cluster/pending/folders", get(list_pending_folders).delete(reject_pending_folder_query))
             .route("/api/v1/cluster/pending/folders/:id/accept", post(accept_pending_folder))
@@ -329,10 +621,31 @@ impl ApiServer {
             .route("/api/v1/conflicts/:id/reopen", post(reopen_conflict))
             .route("/rest/conflicts/:id/reopen", post(reopen_conflict))
 
-            .route("/api/v1/events", get(websocket_events_handler))
-            .route("/rest/events", get(websocket_events_handler))
-            .layer(cors)
-            .with_state(state)
+            .route("/api/v1/events", get(events_handler))
+            .route("/rest/events", get(events_handler))
+            .layer(middleware::from_fn_with_state(state.clone(), require_api_token));
+
+        // CORS is the outermost layer so browser preflights are answered before auth.
+        let router = match cors {
+            Some(cors) => router.layer(cors),
+            None => router,
+        };
+        router.with_state(state)
+    }
+
+    /// Runs the server until `shutdown` resolves, then stops accepting connections and lets
+    /// in-flight requests finish. `on_ready` is called once the listener is bound.
+    pub async fn run_until(
+        self,
+        shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+        on_ready: impl FnOnce(),
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let app = Self::create_router(self.state);
+        let listener = tokio::net::TcpListener::bind(&self.bind_addr).await?;
+        info!("Synapse Core REST & WebSocket API listening on http://{}", self.bind_addr);
+        on_ready();
+        axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
+        Ok(())
     }
 
     /// Runs the Axum server asynchronously.
@@ -360,11 +673,14 @@ async fn get_system_status(State(state): State<AppState>) -> impl IntoResponse {
     let mut is_syncing = false;
     let mut all_paused = !folders.is_empty();
 
+    let mut folders_by_state = std::collections::BTreeMap::new();
     for f in &folders {
         if !f.is_paused {
             all_paused = false;
         }
-        match state.sync_engine.get_folder_state(&f.folder_id) {
+        let folder_state = state.sync_engine.get_folder_state(&f.folder_id);
+        *folders_by_state.entry(folder_state.as_str().to_string()).or_insert(0) += 1;
+        match folder_state {
             crate::state::FolderSyncState::Scanning => is_scanning = true,
             crate::state::FolderSyncState::Syncing => is_syncing = true,
             _ => {}
@@ -387,7 +703,7 @@ async fn get_system_status(State(state): State<AppState>) -> impl IntoResponse {
         uptime_seconds: uptime,
         peer_count: peers,
         sync_state,
-        version: "1.0.0".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
         monitored_folders_count: folders.len(),
         pending_conflicts_count: conflicts.len(),
         memory_footprint_bytes: mem,
@@ -396,6 +712,11 @@ async fn get_system_status(State(state): State<AppState>) -> impl IntoResponse {
         alloc: mem,
         sys: mem,
         gui_address_used: "http://127.0.0.1:8384".into(),
+        engine_state: {
+            use crate::state::StateMachine;
+            crate::engine_control().state().name().to_string()
+        },
+        folders_by_state,
     })
 }
 
@@ -423,9 +744,13 @@ async fn get_system_ping() -> impl IntoResponse {
     Json(serde_json::json!({ "ping": "pong" }))
 }
 
+/// Requests a graceful engine shutdown (`engine_lifecycle`: running → stopping → stopped).
+/// Idempotent; responds with the resulting state.
 async fn system_shutdown() -> impl IntoResponse {
+    use crate::state::StateMachine;
     info!("System shutdown requested via API");
-    StatusCode::OK.into_response()
+    let state = crate::engine_control().request_shutdown();
+    (StatusCode::OK, Json(serde_json::json!({ "engine_state": state.name() }))).into_response()
 }
 
 async fn system_restart() -> impl IntoResponse {
@@ -434,54 +759,76 @@ async fn system_restart() -> impl IntoResponse {
 }
 
 async fn get_connections(State(state): State<AppState>) -> impl IntoResponse {
-    let devices = state.sync_engine.storage().list_devices().unwrap_or_default();
-    let peers = state.p2p_manager.list_connected_peers().await;
-    let mut map = HashMap::new();
+    use crate::state::{LifecycleView, PeerConnectionState};
+    let storage = state.sync_engine.storage();
+    let devices = storage.list_devices().unwrap_or_default();
+    let known = state.p2p_manager.list_known_peers().await;
+    let window = crate::p2p::PEER_PRESENCE_WINDOW.as_secs();
+    let mut map = serde_json::Map::new();
 
     for dev in devices {
-        let (is_conn, addr_str, client_type) = if let Some(peer) = peers.get(&dev.device_id) {
-            (true, peer.addr.to_string(), peer.client_type.clone())
-        } else {
-            (!dev.is_paused, dev.addresses.first().cloned().unwrap_or_else(|| "dynamic".into()), "synapse-quic (FastCDC)".into())
+        let peer = known.get(&dev.device_id);
+        let seen_secs = peer.map(|p| p.last_seen.elapsed().as_secs());
+        // Truthful presence: connected only if heard from recently (previously this was
+        // `!is_paused`, which reported never-seen devices as connected).
+        let conn_state = PeerConnectionState::derive(dev.is_paused, seen_secs, window);
+        let (addr_str, client_type) = match peer {
+            Some(p) if conn_state == PeerConnectionState::Online => (p.addr.to_string(), p.client_type.clone()),
+            _ => (
+                dev.addresses.first().cloned().unwrap_or_else(|| "dynamic".into()),
+                "synapse-quic (FastCDC)".into(),
+            ),
         };
-
-        map.insert(
-            dev.device_id.clone(),
-            PeerConnectionMetrics {
-                device_id: dev.device_id,
-                address: addr_str,
-                is_connected: is_conn,
-                in_bps: 0,
-                out_bps: 0,
-                total_in_bytes: 0,
-                total_out_bytes: 0,
-                latency_ms: 5,
-                client_type,
-            },
-        );
+        let metrics = PeerConnectionMetrics {
+            device_id: dev.device_id.clone(),
+            address: addr_str,
+            is_connected: conn_state.is_connected(),
+            in_bps: 0,
+            out_bps: 0,
+            total_in_bytes: 0,
+            total_out_bytes: 0,
+            latency_ms: 5,
+            client_type,
+        };
+        let mut v = serde_json::to_value(metrics).unwrap_or_default();
+        v["connection_state"] = conn_state.to_string().into();
+        v["last_seen_secs_ago"] = serde_json::to_value(seen_secs).unwrap_or_default();
+        v["lifecycle"] = serde_json::to_value(LifecycleView::of(conn_state)).unwrap_or_default();
+        map.insert(dev.device_id, v);
     }
 
-    // Include any active connected BEP or QUIC peers that aren't yet in configured devices
-    for (peer_id, peer) in peers {
-        if !map.contains_key(&peer_id) {
-            map.insert(
-                peer_id.clone(),
-                PeerConnectionMetrics {
-                    device_id: peer_id,
-                    address: peer.addr.to_string(),
-                    is_connected: true,
-                    in_bps: 0,
-                    out_bps: 0,
-                    total_in_bytes: 0,
-                    total_out_bytes: 0,
-                    latency_ms: 5,
-                    client_type: peer.client_type,
-                },
-            );
+    // Online peers that are not configured devices (e.g. pending pairing requests).
+    // Rejected devices are left out.
+    let rejected: std::collections::HashSet<String> = storage
+        .list_rejected_devices()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| r.device_id)
+        .collect();
+    for (peer_id, peer) in known {
+        let fresh = peer.last_seen.elapsed() <= crate::p2p::PEER_PRESENCE_WINDOW;
+        if !fresh || map.contains_key(&peer_id) || rejected.contains(&peer_id) {
+            continue;
         }
+        let metrics = PeerConnectionMetrics {
+            device_id: peer_id.clone(),
+            address: peer.addr.to_string(),
+            is_connected: true,
+            in_bps: 0,
+            out_bps: 0,
+            total_in_bytes: 0,
+            total_out_bytes: 0,
+            latency_ms: 5,
+            client_type: peer.client_type,
+        };
+        let mut v = serde_json::to_value(metrics).unwrap_or_default();
+        v["connection_state"] = "online".into();
+        v["last_seen_secs_ago"] = peer.last_seen.elapsed().as_secs().into();
+        v["lifecycle"] = serde_json::to_value(LifecycleView::of(PeerConnectionState::Online)).unwrap_or_default();
+        map.insert(peer_id, v);
     }
 
-    Json(map)
+    Json(serde_json::Value::Object(map))
 }
 
 async fn get_system_statemachines() -> impl IntoResponse {
@@ -607,6 +954,9 @@ async fn list_folders(State(state): State<AppState>) -> impl IntoResponse {
     let mut dtos = Vec::new();
     for f in folders {
         let files = state.sync_engine.storage().list_files_in_folder(&f.folder_id).unwrap_or_default();
+        let folder_state = state.sync_engine.get_folder_state(&f.folder_id).as_str().to_string();
+        let folder_error = state.sync_engine.folder_error(&f.folder_id);
+        let folder_lifecycle = state.sync_engine.folder_lifecycle(&f.folder_id);
         dtos.push(FolderDto {
             folder_id: f.folder_id,
             local_path: f.local_path,
@@ -619,6 +969,9 @@ async fn list_folders(State(state): State<AppState>) -> impl IntoResponse {
             marker_name: f.marker_name,
             versioning_command: f.versioning_command,
             files_count: files.len(),
+            state: folder_state,
+            error: folder_error,
+            lifecycle: Some(folder_lifecycle),
         });
     }
 
@@ -643,10 +996,13 @@ async fn register_folder(
     }
 
     // Trigger initial index scan
+    // Initial scan, then watch for changes (previously new folders were only watched
+    // after an engine restart).
     let engine = state.sync_engine.clone();
     let fid = payload.folder_id;
     tokio::task::spawn_blocking(move || {
         let _ = engine.index_folder(&fid);
+        engine.start_watching(&fid);
     });
 
     (StatusCode::CREATED, Json(folder)).into_response()
@@ -656,6 +1012,7 @@ async fn delete_folder(
     AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    state.sync_engine.stop_watching(&id);
     match state.sync_engine.storage().delete_folder(&id) {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -668,7 +1025,7 @@ async fn patch_folder_config(
     Json(payload): Json<PatchFolderRequest>,
 ) -> impl IntoResponse {
     if let Some(paused) = payload.paused {
-        match state.sync_engine.storage().set_folder_paused(&id, paused) {
+        match state.sync_engine.set_folder_paused(&id, paused) {
             Ok(_) => StatusCode::OK.into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         }
@@ -681,7 +1038,7 @@ async fn pause_folder(
     AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    match state.sync_engine.storage().set_folder_paused(&id, true) {
+    match state.sync_engine.set_folder_paused(&id, true) {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -691,7 +1048,7 @@ async fn resume_folder(
     AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    match state.sync_engine.storage().set_folder_paused(&id, false) {
+    match state.sync_engine.set_folder_paused(&id, false) {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -725,6 +1082,15 @@ async fn rescan_folder_query(
     }
 }
 
+/// Adds lifecycle fields (`error`, `lifecycle`) to a folder status response without
+/// changing any existing field.
+fn folder_status_with_lifecycle(state: &AppState, folder_id: &str, st: crate::storage::FolderStatusMetrics) -> Response {
+    let mut value = serde_json::to_value(&st).unwrap_or_else(|_| serde_json::json!({}));
+    value["error"] = serde_json::to_value(state.sync_engine.folder_error(folder_id)).unwrap_or_default();
+    value["lifecycle"] = serde_json::to_value(state.sync_engine.folder_lifecycle(folder_id)).unwrap_or_default();
+    Json(value).into_response()
+}
+
 async fn get_folder_status(
     AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
@@ -732,7 +1098,7 @@ async fn get_folder_status(
     match state.sync_engine.storage().get_folder_status(&id) {
         Ok(mut st) => {
             st.state = state.sync_engine.get_folder_state(&id).as_str().to_string();
-            Json(st).into_response()
+            folder_status_with_lifecycle(&state, &id, st)
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -746,7 +1112,7 @@ async fn get_folder_status_query(
         match state.sync_engine.storage().get_folder_status(fid) {
             Ok(mut st) => {
                 st.state = state.sync_engine.get_folder_state(fid).as_str().to_string();
-                Json(st).into_response()
+                folder_status_with_lifecycle(&state, fid, st)
             }
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         }
@@ -865,9 +1231,31 @@ async fn set_folder_ignores_query(
 // ROUTE HANDLERS: DEVICES & CLUSTERING
 // =============================================================================
 
+/// Serializes a paired device with its lifecycle fields: `pairing_state`,
+/// `connection_state`, `last_seen_secs_ago`, and `lifecycle` (pairing machine, including
+/// `available_actions`). Existing fields are unchanged.
+async fn device_json(state: &AppState, dev: &DeviceRecord) -> serde_json::Value {
+    use crate::state::{DevicePairingState, LifecycleView, StateMachine};
+    let pairing = if dev.is_paused { DevicePairingState::Paused } else { DevicePairingState::Paired };
+    let connection = state.p2p_manager.peer_connection_state(&dev.device_id, dev.is_paused).await;
+    let mut v = serde_json::to_value(dev).unwrap_or_default();
+    v["pairing_state"] = pairing.name().into();
+    v["connection_state"] = connection.to_string().into();
+    v["last_seen_secs_ago"] =
+        serde_json::to_value(state.p2p_manager.peer_seen_secs_ago(&dev.device_id).await).unwrap_or_default();
+    v["lifecycle"] = serde_json::to_value(LifecycleView::of(pairing)).unwrap_or_default();
+    v
+}
+
 async fn list_devices(State(state): State<AppState>) -> impl IntoResponse {
     match state.sync_engine.storage().list_devices() {
-        Ok(devs) => Json(devs).into_response(),
+        Ok(devs) => {
+            let mut out = Vec::with_capacity(devs.len());
+            for d in &devs {
+                out.push(device_json(&state, d).await);
+            }
+            Json(out).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -893,7 +1281,7 @@ async fn get_device(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     match state.sync_engine.storage().get_device(&id) {
-        Ok(Some(d)) => Json(d).into_response(),
+        Ok(Some(d)) => Json(device_json(&state, &d).await).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "Device not found").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -909,24 +1297,50 @@ async fn remove_device(
     }
 }
 
+/// Runs a guarded device pairing transition and publishes the resulting events.
+fn device_transition_response(state: &AppState, device_id: &str, action: crate::state::DeviceAction) -> Response {
+    use crate::state::{DevicePairingState, StateMachine};
+    let storage = state.sync_engine.storage();
+    let before = storage.device_pairing_state(device_id).ok().flatten();
+    let pending = storage.get_pending_device(device_id).ok().flatten();
+    match storage.apply_device_action(device_id, action) {
+        Ok(after) => {
+            // Legacy event first: existing clients expect DEVICE_PAIRED immediately after accept.
+            if before == Some(DevicePairingState::Pending) && after == DevicePairingState::Paired {
+                if let Some(p) = pending {
+                    let _ = state.sync_engine.event_sender().send(CoreEvent::DevicePaired {
+                        device_id: p.device_id,
+                        name: p.name,
+                    });
+                }
+            }
+            if let Some(before) = before {
+                if before != after {
+                    let _ = state.sync_engine.event_sender().send(CoreEvent::DeviceStateChanged {
+                        device_id: device_id.to_string(),
+                        from: before.name().to_string(),
+                        to: after.name().to_string(),
+                    });
+                }
+            }
+            StatusCode::OK.into_response()
+        }
+        Err(e) => error_response(&*e, StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
 async fn pause_device(
     AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    match state.sync_engine.storage().set_device_paused(&id, true) {
-        Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    device_transition_response(&state, &id, crate::state::DeviceAction::Pause)
 }
 
 async fn resume_device(
     AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    match state.sync_engine.storage().set_device_paused(&id, false) {
-        Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    device_transition_response(&state, &id, crate::state::DeviceAction::Resume)
 }
 
 async fn pause_device_query(
@@ -934,10 +1348,7 @@ async fn pause_device_query(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     if let Some(device_id) = params.get("device") {
-        match state.sync_engine.storage().set_device_paused(device_id, true) {
-            Ok(_) => StatusCode::OK.into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        }
+        device_transition_response(&state, device_id, crate::state::DeviceAction::Pause)
     } else {
         (StatusCode::BAD_REQUEST, "Missing device query parameter").into_response()
     }
@@ -948,10 +1359,7 @@ async fn resume_device_query(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     if let Some(device_id) = params.get("device") {
-        match state.sync_engine.storage().set_device_paused(device_id, false) {
-            Ok(_) => StatusCode::OK.into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        }
+        device_transition_response(&state, device_id, crate::state::DeviceAction::Resume)
     } else {
         (StatusCode::BAD_REQUEST, "Missing device query parameter").into_response()
     }
@@ -959,7 +1367,22 @@ async fn resume_device_query(
 
 async fn list_pending_devices(State(state): State<AppState>) -> impl IntoResponse {
     match state.sync_engine.storage().list_pending_devices() {
-        Ok(p) => Json(p).into_response(),
+        Ok(p) => {
+            let view = serde_json::to_value(crate::state::LifecycleView::of(
+                crate::state::DevicePairingState::Pending,
+            ))
+            .unwrap_or_default();
+            let items: Vec<serde_json::Value> = p
+                .into_iter()
+                .map(|r| {
+                    let mut v = serde_json::to_value(r).unwrap_or_default();
+                    v["pairing_state"] = "pending".into();
+                    v["lifecycle"] = view.clone();
+                    v
+                })
+                .collect();
+            Json(items).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -968,29 +1391,43 @@ async fn accept_pending_device(
     AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let pending = state.sync_engine.storage().get_pending_device(&id).ok().flatten();
-    match state.sync_engine.storage().accept_pending_device(&id) {
-        Ok(_) => {
-            if let Some(p) = pending {
-                let _ = state.sync_engine.event_sender().send(CoreEvent::DevicePaired {
-                    device_id: p.device_id,
-                    name: p.name,
-                });
-            }
-            StatusCode::OK.into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    device_transition_response(&state, &id, crate::state::DeviceAction::Accept)
 }
 
 async fn reject_pending_device(
     AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    match state.sync_engine.storage().reject_pending_device(&id) {
-        Ok(_) => StatusCode::OK.into_response(),
+    device_transition_response(&state, &id, crate::state::DeviceAction::Reject)
+}
+
+/// `GET /api/v1/cluster/rejected/devices`: pairing requests that were rejected.
+async fn list_rejected_devices(State(state): State<AppState>) -> impl IntoResponse {
+    match state.sync_engine.storage().list_rejected_devices() {
+        Ok(list) => {
+            let view = crate::state::LifecycleView::of(crate::state::DevicePairingState::Rejected);
+            let items: Vec<serde_json::Value> = list
+                .into_iter()
+                .map(|r| {
+                    let mut v = serde_json::to_value(r).unwrap_or_default();
+                    v["pairing_state"] = "rejected".into();
+                    v["lifecycle"] = serde_json::to_value(&view).unwrap_or_default();
+                    v
+                })
+                .collect();
+            Json(items).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+/// `POST /api/v1/cluster/rejected/devices/:id/unreject`: moves a rejected device back to
+/// pending so it can be accepted.
+async fn unreject_device(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    device_transition_response(&state, &id, crate::state::DeviceAction::Unreject)
 }
 
 async fn reject_pending_device_query(
@@ -998,10 +1435,7 @@ async fn reject_pending_device_query(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     if let Some(device_id) = params.get("device") {
-        match state.sync_engine.storage().reject_pending_device(device_id) {
-            Ok(_) => StatusCode::OK.into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        }
+        device_transition_response(&state, device_id, crate::state::DeviceAction::Reject)
     } else {
         (StatusCode::BAD_REQUEST, "Missing device query parameter").into_response()
     }
@@ -1226,7 +1660,7 @@ async fn resolve_conflict(
 ) -> impl IntoResponse {
     match state.sync_engine.conflict_engine().resolve(&id, &payload) {
         Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(e) => error_response(&*e, StatusCode::BAD_REQUEST),
     }
 }
 
@@ -1236,7 +1670,7 @@ async fn ignore_conflict(
 ) -> impl IntoResponse {
     match state.sync_engine.conflict_engine().ignore(&id) {
         Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(e) => error_response(&*e, StatusCode::BAD_REQUEST),
     }
 }
 
@@ -1246,7 +1680,7 @@ async fn reopen_conflict(
 ) -> impl IntoResponse {
     match state.sync_engine.conflict_engine().reopen(&id) {
         Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(e) => error_response(&*e, StatusCode::BAD_REQUEST),
     }
 }
 
@@ -1254,11 +1688,50 @@ async fn reopen_conflict(
 // ROUTE HANDLERS: WEBSOCKET EVENT STREAM
 // =============================================================================
 
-async fn websocket_events_handler(
-    ws: WebSocketUpgrade,
+/// `GET /api/v1/events`, `GET /rest/events`.
+///
+/// - With WebSocket upgrade headers: live event stream (Synapse native).
+/// - Plain GET: Syncthing-compatible long-poll. Returns events with `id > since`
+///   (newest `limit`), waiting up to `timeout` seconds for new ones. With `since=0`
+///   (first load) it returns immediately unless `timeout` is given.
+async fn events_handler(
+    ws: Option<WebSocketUpgrade>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<EventsQuery>,
     State(state): State<AppState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_websocket(socket, state))
+) -> Response {
+    if let Some(ws) = ws {
+        return ws.on_upgrade(move |socket| handle_websocket(socket, state)).into_response();
+    }
+    let wants_websocket = headers
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+    if wants_websocket {
+        // Upgrade requested but not possible on this connection.
+        return StatusCode::UPGRADE_REQUIRED.into_response();
+    }
+
+    let since = query.since.unwrap_or(0);
+    let limit = query.limit.unwrap_or(0);
+    let types: Option<Vec<String>> = query.events.as_deref().map(|list| {
+        list.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect()
+    });
+    let default_timeout = if since == 0 { 0 } else { 60 };
+    let timeout = Duration::from_secs(query.timeout.unwrap_or(default_timeout).min(300));
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    let mut changes = state.event_log.subscribe();
+    loop {
+        let events = state.event_log.since(since, limit, types.as_deref());
+        if !events.is_empty() || tokio::time::Instant::now() >= deadline {
+            return Json(events).into_response();
+        }
+        match tokio::time::timeout_at(deadline, changes.changed()).await {
+            Ok(Ok(())) => continue,
+            _ => return Json(Vec::<serde_json::Value>::new()).into_response(),
+        }
+    }
 }
 
 async fn handle_websocket(mut socket: WebSocket, state: AppState) {

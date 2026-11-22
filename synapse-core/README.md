@@ -94,17 +94,18 @@ The user inspects side-by-side diff hunks in the Synapse UI and chooses an expli
 
 ## Local Control Plane: REST & WebSocket API Documentation
 
-The Synapse Core daemon exposes an internal HTTP and WebSocket API on `127.0.0.1:9090` (configurable via `--addr` and `--port`). All endpoints are CORS-enabled for web and desktop UI integration.
+The Synapse Core daemon exposes an internal HTTP and WebSocket API on `127.0.0.1:9090` (configurable via `--addr` and `--port`). Every endpoint requires the API token; browser (CORS) access is off unless enabled with `--allow-origin`.
 
 ### Base URL & Headers
 ```http
 http://127.0.0.1:9090/api/v1
 Content-Type: application/json
 ```
-If started with `--token <token>`, include the authorization header:
+Include the API token on every request (`X-API-Key: <token>` also works):
 ```http
 Authorization: Bearer <token>
 ```
+The token is whatever you pass with `--token` / `SYNAPSE_TOKEN`; otherwise the daemon generates one on first start and stores it in `<SYNAPSE_HOME>/api.token` (mode `0600`). Requests without it get `401`; requests from browser origins not allowed via `--allow-origin` get `403`.
 
 ---
 
@@ -418,7 +419,8 @@ Options:
   -p, --port <PORT>          Control plane HTTP & WS port [default: 9090]
       --p2p-port <PORT>      P2P QUIC transport listening port [default: 9190]
       --discovery-port <P>   Local UDP discovery broadcast port [default: 21027]
-      --token <TOKEN>        Security authentication token [env: SYNAPSE_TOKEN=]
+      --token <TOKEN>        API token; default: generated into <home>/api.token [env: SYNAPSE_TOKEN=]
+      --allow-origin <ORIGIN>  Browser origin allowed to call the API (repeatable)
       --device-name <NAME>   Custom human-readable device name
   -h, --help                 Print help
   -V, --version              Print version

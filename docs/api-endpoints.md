@@ -3,7 +3,7 @@
 **Version:** 1.0.0  
 **Engine:** Synapse Core (Native Rust Daemon)  
 **Default Bind Address:** `http://127.0.0.1:9090` (Configurable via `-a` / `-p`)  
-**Authentication:** Optional Bearer Token (`--token <token>` or `env: SYNAPSE_TOKEN`)
+**Authentication:** Required API token (`--token <token>` / `env: SYNAPSE_TOKEN`, or auto-generated in `<SYNAPSE_HOME>/api.token`)
 
 ---
 
@@ -19,14 +19,18 @@ The Synapse Core local control plane exposes an embedded HTTP REST and WebSocket
 
 ## 2. Global Headers & Authentication
 
-When the daemon is started with a security token, all incoming HTTP requests must include the Bearer token authorization header:
+Every request — REST and WebSocket — must carry the API token. Requests without it get `401 Unauthorized`.
 
 ```http
 Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
-All endpoints support Cross-Origin Resource Sharing (`CORS`) with wildcard origins to facilitate web management dashboards.
+`X-API-Key: <token>` is also accepted (Syncthing-style clients). Because browsers cannot set headers on a WebSocket upgrade, the event stream (`/api/v1/events`, `/rest/events`) additionally accepts `?token=<token>`. No other route accepts the token in the URL.
+
+**Where the token comes from:** pass `--token <token>` (or `SYNAPSE_TOKEN`). If none is given, the daemon creates a random 256-bit hex token on first start and stores it in `<SYNAPSE_HOME>/api.token` (file mode `0600` on Unix). UI clients and the CLI read it from there. The API never runs without a token.
+
+**Cross-origin (browser) access** is disabled by default: any request carrying an `Origin` header that is not explicitly allowed gets `403 Forbidden`. To use a browser-based UI, start the daemon with `--allow-origin <origin>` (repeatable), e.g. `--allow-origin http://localhost:8080`.
 
 ---
 
@@ -469,6 +473,7 @@ All non-2xx responses return a standardized JSON error message or descriptive te
 | `201 Created` | Resource registered or created |
 | `204 No Content` | Resource deleted successfully |
 | `400 Bad Request` | Invalid JSON syntax or missing query parameters |
-| `401 Unauthorized` | Missing or invalid Bearer security token |
+| `401 Unauthorized` | Missing or invalid API token |
+| `403 Forbidden` | Request came from a browser origin not listed with `--allow-origin` |
 | `404 Not Found` | Requested folder, device, or conflict not found |
 | `500 Internal Error` | Database failure, I/O lock, or engine error |

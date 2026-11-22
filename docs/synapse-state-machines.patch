@@ -1,0 +1,2880 @@
+--- a/synapse-core/src/state/mod.rs
++++ b/synapse-core/src/state/mod.rs
+@@ -84,6 +84,145 @@
+ impl std::error::Error for StateTransitionError {}
+ 
+ // =============================================================================
++// 1b. SHARED STATE MACHINE TRAIT
++// =============================================================================
++
++/// Common contract for every lifecycle in Synapse Core.
++///
++/// Implement the handful of required items and every machine gets — for free and
++/// identically — guarded transitions with structured errors, introspection metadata,
++/// and a registry definition. This is the one place to look when adding a lifecycle:
++/// no hand-written `StateTransitionError`s, no hand-written registry JSON.
++pub trait StateMachine: Copy + Eq + fmt::Debug + Send + Sync + 'static {
++    /// Stable registry id, e.g. `"folder_sync_lifecycle"`.
++    const MACHINE_ID: &'static str;
++    /// Human-friendly title.
++    const DISPLAY_NAME: &'static str;
++    /// Subsystem the machine belongs to (`"engine"`, `"cluster"`, `"p2p"`, ...).
++    const SUBSYSTEM: &'static str;
++    /// What the machine governs.
++    const DESCRIPTION: &'static str;
++    /// Entity kind reported in transition errors (`"folder"`, `"device"`, ...).
++    const ENTITY: &'static str;
++
++    /// Every state, in display order.
++    fn states() -> &'static [Self];
++    /// State a new entity starts in.
++    fn initial() -> Self;
++    /// Canonical wire name of the state (stable; used in JSON and errors).
++    fn name(&self) -> &'static str;
++    /// Human/agent-readable explanation of the state.
++    fn describe(&self) -> &'static str;
++    /// Terminal states have no way out.
++    fn terminal(&self) -> bool {
++        false
++    }
++    /// Whether moving to `next` is legal. Staying in the same state should be allowed
++    /// when the operation is idempotent.
++    fn permits(&self, next: Self) -> bool;
++    /// User/agent actions that make sense in this state.
++    fn actions(&self) -> Vec<&'static str>;
++
++    /// States reachable in one step (excluding staying put).
++    fn successors(&self) -> Vec<Self> {
++        Self::states().iter().copied().filter(|n| *n != *self && self.permits(*n)).collect()
++    }
++
++    /// Whether an action name is currently available.
++    fn allows_action(&self, action: &str) -> bool {
++        self.actions().iter().any(|a| a.eq_ignore_ascii_case(action))
++    }
++
++    /// Introspection metadata for this state.
++    fn meta(&self) -> StateMetadata {
++        StateMetadata {
++            state: self.name().to_string(),
++            description: self.describe().to_string(),
++            is_terminal: self.terminal(),
++            allowed_transitions: self.successors().iter().map(|s| s.name().to_string()).collect(),
++            available_actions: self.actions().into_iter().map(String::from).collect(),
++        }
++    }
++
++    /// Structured error describing why `attempted` is not possible from this state.
++    fn rejection(&self, entity_id: &str, attempted: &str) -> StateTransitionError {
++        StateTransitionError {
++            entity: Self::ENTITY.to_string(),
++            entity_id: entity_id.to_string(),
++            current_state: self.name().to_string(),
++            attempted_transition: attempted.to_string(),
++            allowed_transitions: self.successors().iter().map(|s| s.name().to_string()).collect(),
++            available_actions: self.actions().into_iter().map(String::from).collect(),
++            is_terminal: self.terminal(),
++        }
++    }
++
++    /// Guarded transition: `Ok(next)` if legal, otherwise a structured error that tells
++    /// the caller (UI or agent) what *is* possible.
++    #[allow(clippy::result_large_err)] // rich, rarely-constructed public error type by design
++    fn transition(&self, entity_id: &str, next: Self) -> Result<Self, StateTransitionError> {
++        if self.permits(next) {
++            Ok(next)
++        } else {
++            Err(self.rejection(entity_id, next.name()))
++        }
++    }
++
++    /// Registry definition, generated from the items above.
++    fn definition() -> StateMachineDef {
++        StateMachineDef {
++            machine_id: Self::MACHINE_ID.to_string(),
++            display_name: Self::DISPLAY_NAME.to_string(),
++            subsystem: Self::SUBSYSTEM.to_string(),
++            description: Self::DESCRIPTION.to_string(),
++            initial_state: Self::initial().name().to_string(),
++            states: Self::states().iter().map(|s| s.meta()).collect(),
++        }
++    }
++}
++
++/// Snapshot of one entity's lifecycle, suitable for embedding in API responses so
++/// clients render state and enable actions from the server instead of re-deriving them.
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct LifecycleView {
++    pub machine_id: String,
++    pub state: String,
++    pub description: String,
++    pub is_terminal: bool,
++    pub allowed_transitions: Vec<String>,
++    pub available_actions: Vec<String>,
++}
++
++impl LifecycleView {
++    pub fn of<S: StateMachine>(state: S) -> Self {
++        let meta = state.meta();
++        Self {
++            machine_id: S::MACHINE_ID.to_string(),
++            state: meta.state,
++            description: meta.description,
++            is_terminal: meta.is_terminal,
++            allowed_transitions: meta.allowed_transitions,
++            available_actions: meta.available_actions,
++        }
++    }
++}
++
++/// Returned when an operation targets an entity that does not exist (maps to HTTP 404).
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct EntityNotFound {
++    pub entity: String,
++    pub entity_id: String,
++}
++
++impl fmt::Display for EntityNotFound {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(f, "{} '{}' not found", self.entity, self.entity_id)
++    }
++}
++
++impl std::error::Error for EntityNotFound {}
++
++// =============================================================================
+ // 2. CONFLICT LIFECYCLE STATE MACHINE
+ // =============================================================================
+ 
+@@ -492,7 +631,7 @@
+             Self::Pending => "Device pairing request is pending user or agent confirmation",
+             Self::Paired => "Device is mutually paired and participating in the cluster",
+             Self::Paused => "Device communication is temporarily paused",
+-            Self::Rejected => "Device pairing request was rejected",
++            Self::Rejected => "Device pairing request was rejected; further requests from it are ignored until un-rejected",
+         }
+     }
+ 
+@@ -502,6 +641,8 @@
+             (Self::Pending, Self::Rejected) => true,
+             (Self::Paired, Self::Paused) => true,
+             (Self::Paused, Self::Paired) => true,
++            // Un-reject: the device may ask to pair again
++            (Self::Rejected, Self::Pending) => true,
+             (s1, s2) if *s1 == s2 => true,
+             _ => false,
+         }
+@@ -520,7 +661,7 @@
+             Self::Pending => vec!["ACCEPT", "REJECT"],
+             Self::Paired => vec!["PAUSE", "REMOVE", "SHARE_FOLDER", "UNSHARE_FOLDER"],
+             Self::Paused => vec!["RESUME", "REMOVE"],
+-            Self::Rejected => vec![],
++            Self::Rejected => vec!["UNREJECT"],
+         }
+     }
+ 
+@@ -528,7 +669,7 @@
+         StateMetadata {
+             state: self.as_str().to_string(),
+             description: self.description().to_string(),
+-            is_terminal: matches!(self, Self::Rejected),
++            is_terminal: false,
+             allowed_transitions: self
+                 .allowed_transitions()
+                 .into_iter()
+@@ -636,6 +777,296 @@
+     }
+ }
+ 
++
++// =============================================================================
++// 8b. StateMachine IMPLEMENTATIONS (existing enums keep their inherent API)
++// =============================================================================
++
++impl StateMachine for ConflictStatus {
++    const MACHINE_ID: &'static str = "conflict_lifecycle";
++    const DISPLAY_NAME: &'static str = "Quarantine Conflict Resolution State Machine";
++    const SUBSYSTEM: &'static str = "conflict";
++    const DESCRIPTION: &'static str = "Controls the staging, inspection, and 3-way resolution of divergent concurrent edits without filesystem pollution.";
++    const ENTITY: &'static str = "conflict";
++    fn states() -> &'static [Self] { &Self::ALL }
++    fn initial() -> Self { Self::Pending }
++    fn name(&self) -> &'static str { self.as_str() }
++    fn describe(&self) -> &'static str { self.description() }
++    fn terminal(&self) -> bool { self.is_terminal() }
++    fn permits(&self, next: Self) -> bool { self.can_transition_to(next) }
++    fn actions(&self) -> Vec<&'static str> { self.available_actions() }
++    fn successors(&self) -> Vec<Self> { self.allowed_transitions() }
++}
++
++impl StateMachine for FolderSyncState {
++    const MACHINE_ID: &'static str = "folder_sync_lifecycle";
++    const DISPLAY_NAME: &'static str = "Folder Synchronization Lifecycle State Machine";
++    const SUBSYSTEM: &'static str = "engine";
++    const DESCRIPTION: &'static str = "Monitors the continuous indexing, delta chunking, and block transfer phases for registered synchronization roots.";
++    const ENTITY: &'static str = "folder";
++    fn states() -> &'static [Self] { &Self::ALL }
++    fn initial() -> Self { Self::Idle }
++    fn name(&self) -> &'static str { self.as_str() }
++    fn describe(&self) -> &'static str { self.description() }
++    fn terminal(&self) -> bool { self.is_terminal() }
++    fn permits(&self, next: Self) -> bool { self.can_transition_to(next) }
++    fn actions(&self) -> Vec<&'static str> { self.available_actions() }
++    fn successors(&self) -> Vec<Self> { self.allowed_transitions() }
++}
++
++/// User/agent commands on a device. Each is only valid from specific states, so e.g.
++/// "accept" cannot be used to resume a paused device even though both end in `paired`.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum DeviceAction {
++    Accept,
++    Reject,
++    Pause,
++    Resume,
++    Unreject,
++}
++
++impl DeviceAction {
++    /// Action name as listed in `available_actions`.
++    pub fn name(&self) -> &'static str {
++        match self {
++            Self::Accept => "ACCEPT",
++            Self::Reject => "REJECT",
++            Self::Pause => "PAUSE",
++            Self::Resume => "RESUME",
++            Self::Unreject => "UNREJECT",
++        }
++    }
++
++    /// State the device ends up in.
++    pub fn target(&self) -> DevicePairingState {
++        match self {
++            Self::Accept | Self::Resume => DevicePairingState::Paired,
++            Self::Reject => DevicePairingState::Rejected,
++            Self::Pause => DevicePairingState::Paused,
++            Self::Unreject => DevicePairingState::Pending,
++        }
++    }
++
++    /// Validates the action from `current`. Repeating an action whose result already holds
++    /// (pausing a paused device, accepting a paired one) is an idempotent no-op.
++    #[allow(clippy::result_large_err)]
++    pub fn check(&self, device_id: &str, current: DevicePairingState) -> Result<DevicePairingState, StateTransitionError> {
++        let target = self.target();
++        if current == target {
++            return Ok(target);
++        }
++        if !current.allows_action(self.name()) {
++            return Err(current.rejection(device_id, target.name()));
++        }
++        current.transition(device_id, target)
++    }
++}
++
++impl StateMachine for DevicePairingState {
++    const MACHINE_ID: &'static str = "device_pairing_lifecycle";
++    const DISPLAY_NAME: &'static str = "Cluster Device Pairing State Machine";
++    const SUBSYSTEM: &'static str = "cluster";
++    const DESCRIPTION: &'static str = "Governs node discovery, mutual cryptographic handshake, trust verification, and cluster participation.";
++    const ENTITY: &'static str = "device";
++    fn states() -> &'static [Self] { &Self::ALL }
++    fn initial() -> Self { Self::Pending }
++    fn name(&self) -> &'static str { self.as_str() }
++    fn describe(&self) -> &'static str { self.description() }
++    fn permits(&self, next: Self) -> bool { self.can_transition_to(next) }
++    fn actions(&self) -> Vec<&'static str> { self.available_actions() }
++    fn successors(&self) -> Vec<Self> { self.allowed_transitions() }
++}
++
++// =============================================================================
++// 10. PEER CONNECTION STATE MACHINE
++// =============================================================================
++
++/// Live network presence of a paired device, derived from when it was last heard from.
++///
++/// Replaces the old implicit rule `is_connected = !is_paused`, which reported every
++/// unpaused device as connected even if it had never been seen.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
++#[serde(rename_all = "lowercase")]
++pub enum PeerConnectionState {
++    /// Paired, but not heard from since this engine started.
++    #[default]
++    Unknown,
++    /// Heard from within the presence window.
++    Online,
++    /// Was online, but has not been heard from within the presence window.
++    Offline,
++    /// Communication with the device is paused by the user.
++    Paused,
++}
++
++impl PeerConnectionState {
++    pub const ALL: [PeerConnectionState; 4] = [Self::Unknown, Self::Online, Self::Offline, Self::Paused];
++
++    /// Derives the state from facts. `seen_secs_ago` is `None` if never seen.
++    pub fn derive(paused: bool, seen_secs_ago: Option<u64>, presence_window_secs: u64) -> Self {
++        if paused {
++            return Self::Paused;
++        }
++        match seen_secs_ago {
++            None => Self::Unknown,
++            Some(age) if age <= presence_window_secs => Self::Online,
++            Some(_) => Self::Offline,
++        }
++    }
++
++    pub fn is_connected(&self) -> bool {
++        matches!(self, Self::Online)
++    }
++}
++
++impl StateMachine for PeerConnectionState {
++    const MACHINE_ID: &'static str = "peer_connection_lifecycle";
++    const DISPLAY_NAME: &'static str = "Peer Connection Presence State Machine";
++    const SUBSYSTEM: &'static str = "p2p";
++    const DESCRIPTION: &'static str = "Tracks whether a paired device is currently reachable, based on discovery and protocol traffic within a presence window.";
++    const ENTITY: &'static str = "peer";
++    fn states() -> &'static [Self] { &Self::ALL }
++    fn initial() -> Self { Self::Unknown }
++    fn name(&self) -> &'static str {
++        match self {
++            Self::Unknown => "unknown",
++            Self::Online => "online",
++            Self::Offline => "offline",
++            Self::Paused => "paused",
++        }
++    }
++    fn describe(&self) -> &'static str {
++        match self {
++            Self::Unknown => "Device is paired but has not been seen on the network since the engine started",
++            Self::Online => "Device was heard from within the presence window and is reachable",
++            Self::Offline => "Device was seen before but has not been heard from within the presence window",
++            Self::Paused => "Communication with this device is paused",
++        }
++    }
++    fn permits(&self, next: Self) -> bool {
++        use PeerConnectionState::*;
++        matches!(
++            (self, next),
++            (Unknown, Online) | (Unknown, Paused)
++                | (Online, Offline) | (Online, Paused)
++                | (Offline, Online) | (Offline, Paused)
++                | (Paused, Unknown) | (Paused, Online) | (Paused, Offline)
++        ) || *self == next
++    }
++    fn actions(&self) -> Vec<&'static str> {
++        match self {
++            Self::Paused => vec!["RESUME"],
++            _ => vec!["PAUSE"],
++        }
++    }
++}
++
++impl fmt::Display for PeerConnectionState {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str(self.name())
++    }
++}
++
++// =============================================================================
++// 11. ENGINE LIFECYCLE STATE MACHINE
++// =============================================================================
++
++/// Lifecycle of the Synapse Core engine process / library instance.
++///
++/// Replaces the implicit `RUNNING: AtomicBool` and the no-op shutdown endpoint.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
++#[serde(rename_all = "lowercase")]
++pub enum EngineLifecycleState {
++    /// Not running.
++    #[default]
++    Stopped,
++    /// Opening storage, loading identity, binding listeners.
++    Starting,
++    /// Serving the API and syncing.
++    Running,
++    /// Graceful shutdown requested; finishing in-flight work.
++    Stopping,
++    /// Startup or runtime failure; can be started again.
++    Failed,
++}
++
++impl EngineLifecycleState {
++    pub const ALL: [EngineLifecycleState; 5] =
++        [Self::Stopped, Self::Starting, Self::Running, Self::Stopping, Self::Failed];
++
++    pub fn as_u8(self) -> u8 {
++        match self {
++            Self::Stopped => 0,
++            Self::Starting => 1,
++            Self::Running => 2,
++            Self::Stopping => 3,
++            Self::Failed => 4,
++        }
++    }
++
++    pub fn from_u8(v: u8) -> Self {
++        match v {
++            1 => Self::Starting,
++            2 => Self::Running,
++            3 => Self::Stopping,
++            4 => Self::Failed,
++            _ => Self::Stopped,
++        }
++    }
++}
++
++impl StateMachine for EngineLifecycleState {
++    const MACHINE_ID: &'static str = "engine_lifecycle";
++    const DISPLAY_NAME: &'static str = "Engine Process Lifecycle State Machine";
++    const SUBSYSTEM: &'static str = "engine";
++    const DESCRIPTION: &'static str = "Start-up, steady operation, and graceful shutdown of the Synapse Core engine (daemon or embedded library).";
++    const ENTITY: &'static str = "engine";
++    fn states() -> &'static [Self] { &Self::ALL }
++    fn initial() -> Self { Self::Stopped }
++    fn name(&self) -> &'static str {
++        match self {
++            Self::Stopped => "stopped",
++            Self::Starting => "starting",
++            Self::Running => "running",
++            Self::Stopping => "stopping",
++            Self::Failed => "failed",
++        }
++    }
++    fn describe(&self) -> &'static str {
++        match self {
++            Self::Stopped => "Engine is not running",
++            Self::Starting => "Engine is opening storage, loading identity, and binding listeners",
++            Self::Running => "Engine is serving the control API and synchronizing folders",
++            Self::Stopping => "Graceful shutdown in progress; in-flight work is finishing",
++            Self::Failed => "Engine failed to start or stopped unexpectedly",
++        }
++    }
++    fn permits(&self, next: Self) -> bool {
++        use EngineLifecycleState::*;
++        matches!(
++            (self, next),
++            (Stopped, Starting)
++                | (Starting, Running) | (Starting, Failed) | (Starting, Stopping)
++                | (Running, Stopping) | (Running, Failed)
++                | (Stopping, Stopped)
++                | (Failed, Starting)
++        ) || *self == next
++    }
++    fn actions(&self) -> Vec<&'static str> {
++        match self {
++            Self::Stopped | Self::Failed => vec!["START"],
++            Self::Starting | Self::Running => vec!["SHUTDOWN"],
++            Self::Stopping => vec![],
++        }
++    }
++}
++
++impl fmt::Display for EngineLifecycleState {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str(self.name())
++    }
++}
++
+ // =============================================================================
+ // 9. COMPLETE STATE MACHINE REGISTRY & INTROSPECTION
+ // =============================================================================
+@@ -645,30 +1076,9 @@
+ /// Designed specifically for AI agent discovery (AX) and dynamic runtime verification.
+ pub fn get_all_state_machines() -> Vec<StateMachineDef> {
+     vec![
+-        StateMachineDef {
+-            machine_id: "conflict_lifecycle".to_string(),
+-            display_name: "Quarantine Conflict Resolution State Machine".to_string(),
+-            subsystem: "conflict".to_string(),
+-            description: "Controls the staging, inspection, and 3-way resolution of divergent concurrent edits without filesystem pollution.".to_string(),
+-            initial_state: ConflictStatus::Pending.as_str().to_string(),
+-            states: ConflictStatus::ALL.iter().map(|s| s.metadata()).collect(),
+-        },
+-        StateMachineDef {
+-            machine_id: "folder_sync_lifecycle".to_string(),
+-            display_name: "Folder Synchronization Lifecycle State Machine".to_string(),
+-            subsystem: "engine".to_string(),
+-            description: "Monitors the continuous indexing, delta chunking, and block transfer phases for registered synchronization roots.".to_string(),
+-            initial_state: FolderSyncState::Idle.as_str().to_string(),
+-            states: FolderSyncState::ALL.iter().map(|s| s.metadata()).collect(),
+-        },
+-        StateMachineDef {
+-            machine_id: "device_pairing_lifecycle".to_string(),
+-            display_name: "Cluster Device Pairing State Machine".to_string(),
+-            subsystem: "cluster".to_string(),
+-            description: "Governs node discovery, mutual cryptographic handshake, trust verification, and cluster participation.".to_string(),
+-            initial_state: DevicePairingState::Pending.as_str().to_string(),
+-            states: DevicePairingState::ALL.iter().map(|s| s.metadata()).collect(),
+-        },
++        ConflictStatus::definition(),
++        FolderSyncState::definition(),
++        DevicePairingState::definition(),
+         StateMachineDef {
+             machine_id: "relay_session_lifecycle".to_string(),
+             display_name: "Encrypted Relay Fallback Session State Machine".to_string(),
+@@ -757,6 +1167,8 @@
+                 },
+             ],
+         },
++        PeerConnectionState::definition(),
++        EngineLifecycleState::definition(),
+     ]
+ }
+ 
+@@ -821,7 +1233,7 @@
+     #[test]
+     fn test_all_state_machines_registry_intact() {
+         let registry = get_all_state_machines();
+-        assert_eq!(registry.len(), 5);
++        assert_eq!(registry.len(), 7);
+ 
+         let conflict_sm = registry.iter().find(|m| m.machine_id == "conflict_lifecycle").unwrap();
+         assert_eq!(conflict_sm.initial_state, "PENDING");
+@@ -831,4 +1243,127 @@
+         assert_eq!(folder_sm.initial_state, "idle");
+         assert_eq!(folder_sm.states.len(), 5);
+     }
++
++    // ---------------------------------------------------------------------
++    // Shared StateMachine trait: invariants that every machine must satisfy
++    // ---------------------------------------------------------------------
++
++    fn check_machine<S: StateMachine>() {
++        let states = S::states();
++        assert!(states.contains(&S::initial()), "{}: initial state not in states()", S::MACHINE_ID);
++        let mut names: Vec<&str> = states.iter().map(|s| s.name()).collect();
++        names.sort();
++        names.dedup();
++        assert_eq!(names.len(), states.len(), "{}: duplicate state names", S::MACHINE_ID);
++        for s in states {
++            assert!(s.permits(*s) || s.terminal(), "{}: '{}' should allow idempotent re-entry", S::MACHINE_ID, s.name());
++            for n in s.successors() {
++                assert!(s.permits(n), "{}: successor '{}' of '{}' not permitted", S::MACHINE_ID, n.name(), s.name());
++                assert!(s.transition("x", n).is_ok());
++            }
++            for n in states {
++                if !s.permits(*n) {
++                    let err = s.transition("id-1", *n).unwrap_err();
++                    assert_eq!(err.entity, S::ENTITY);
++                    assert_eq!(err.entity_id, "id-1");
++                    assert_eq!(err.current_state, s.name());
++                    assert_eq!(err.attempted_transition, n.name());
++                    assert_eq!(err.available_actions, s.meta().available_actions);
++                }
++            }
++            if s.terminal() {
++                assert!(s.successors().is_empty(), "{}: terminal '{}' has successors", S::MACHINE_ID, s.name());
++            }
++        }
++        let def = S::definition();
++        assert_eq!(def.machine_id, S::MACHINE_ID);
++        assert_eq!(def.states.len(), states.len());
++        assert!(
++            get_all_state_machines().iter().any(|m| *m == def),
++            "{}: registry entry differs from the generated definition",
++            S::MACHINE_ID
++        );
++    }
++
++    #[test]
++    fn test_every_state_machine_satisfies_trait_invariants() {
++        check_machine::<ConflictStatus>();
++        check_machine::<FolderSyncState>();
++        check_machine::<DevicePairingState>();
++        check_machine::<PeerConnectionState>();
++        check_machine::<EngineLifecycleState>();
++    }
++
++    #[test]
++    fn test_trait_metadata_matches_legacy_inherent_metadata() {
++        for s in ConflictStatus::ALL { assert_eq!(StateMachine::meta(&s), s.metadata()); }
++        for s in FolderSyncState::ALL { assert_eq!(StateMachine::meta(&s), s.metadata()); }
++        for s in DevicePairingState::ALL { assert_eq!(StateMachine::meta(&s), s.metadata()); }
++    }
++
++    #[test]
++    fn test_registry_ids_unique_and_complete() {
++        let reg = get_all_state_machines();
++        let mut ids: Vec<&str> = reg.iter().map(|m| m.machine_id.as_str()).collect();
++        ids.sort();
++        let before = ids.len();
++        ids.dedup();
++        assert_eq!(before, ids.len(), "duplicate machine ids");
++        for id in ["conflict_lifecycle", "folder_sync_lifecycle", "device_pairing_lifecycle",
++                   "relay_session_lifecycle", "swarm_chunk_lifecycle",
++                   "peer_connection_lifecycle", "engine_lifecycle"] {
++            assert!(ids.contains(&id), "missing {}", id);
++        }
++    }
++
++    #[test]
++    fn test_device_rejection_can_be_undone() {
++        let r = DevicePairingState::Rejected;
++        assert!(!StateMachine::terminal(&r));
++        assert!(r.successors().contains(&DevicePairingState::Pending));
++        assert!(!r.successors().contains(&DevicePairingState::Paired));
++        assert!(r.allows_action("unreject"));
++        assert!(r.transition("d", DevicePairingState::Paired).is_err());
++    }
++
++    #[test]
++    fn test_peer_connection_state_derivation() {
++        use PeerConnectionState::*;
++        assert_eq!(PeerConnectionState::derive(false, None, 30), Unknown);
++        assert_eq!(PeerConnectionState::derive(false, Some(0), 30), Online);
++        assert_eq!(PeerConnectionState::derive(false, Some(30), 30), Online);
++        assert_eq!(PeerConnectionState::derive(false, Some(31), 30), Offline);
++        assert_eq!(PeerConnectionState::derive(true, Some(0), 30), Paused);
++        assert_eq!(PeerConnectionState::derive(true, None, 30), Paused);
++        assert!(Online.is_connected());
++        assert!(!Unknown.is_connected() && !Offline.is_connected() && !Paused.is_connected());
++        assert_eq!(serde_json::to_string(&Offline).unwrap(), "\"offline\"");
++    }
++
++    #[test]
++    fn test_engine_lifecycle_transitions() {
++        use EngineLifecycleState::*;
++        assert!(Stopped.transition("e", Starting).is_ok());
++        assert!(Starting.transition("e", Running).is_ok());
++        assert!(Running.transition("e", Stopping).is_ok());
++        assert!(Stopping.transition("e", Stopped).is_ok());
++        assert!(Failed.transition("e", Starting).is_ok());
++        // Can't skip graceful shutdown or start twice
++        assert!(Running.transition("e", Stopped).is_err());
++        assert!(Running.transition("e", Starting).is_err());
++        assert!(Stopping.transition("e", Running).is_err());
++        for s in EngineLifecycleState::ALL {
++            assert_eq!(EngineLifecycleState::from_u8(s.as_u8()), s);
++        }
++    }
++
++    #[test]
++    fn test_lifecycle_view_serialization() {
++        let v = LifecycleView::of(FolderSyncState::Error);
++        assert_eq!(v.machine_id, "folder_sync_lifecycle");
++        assert_eq!(v.state, "error");
++        assert!(v.available_actions.contains(&"RESCAN".to_string()));
++        let json = serde_json::to_value(&v).unwrap();
++        assert_eq!(json["state"], "error");
++    }
+ }
+--- a/synapse-core/src/lib.rs
++++ b/synapse-core/src/lib.rs
+@@ -16,7 +16,7 @@
+ use std::net::SocketAddr;
+ use std::os::raw::{c_char, c_int};
+ use std::path::PathBuf;
+-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
++use std::sync::atomic::{AtomicUsize, Ordering};
+ use std::sync::Arc;
+ 
+ use tokio::runtime::Runtime;
+@@ -150,6 +150,105 @@
+         .filter(|t| !t.is_empty())
+ }
+ 
++// =============================================================================
++// ENGINE LIFECYCLE (engine_lifecycle state machine)
++// =============================================================================
++
++/// Process-wide engine lifecycle and shutdown signal. One engine runs per process; the
++/// daemon, the control API, and the JNI exports all go through this.
++pub struct EngineControl {
++    state: std::sync::atomic::AtomicU8,
++    shutdown: tokio::sync::watch::Sender<bool>,
++}
++
++static ENGINE_CONTROL: std::sync::OnceLock<EngineControl> = std::sync::OnceLock::new();
++
++/// The process-wide [`EngineControl`].
++pub fn engine_control() -> &'static EngineControl {
++    ENGINE_CONTROL.get_or_init(|| EngineControl {
++        state: std::sync::atomic::AtomicU8::new(state::EngineLifecycleState::Stopped.as_u8()),
++        shutdown: tokio::sync::watch::channel(false).0,
++    })
++}
++
++impl EngineControl {
++    /// Current lifecycle state.
++    pub fn state(&self) -> state::EngineLifecycleState {
++        state::EngineLifecycleState::from_u8(self.state.load(Ordering::SeqCst))
++    }
++
++    /// Guarded, race-free transition (compare-and-swap).
++    #[allow(clippy::result_large_err)]
++    pub fn transition(
++        &self,
++        next: state::EngineLifecycleState,
++    ) -> Result<state::EngineLifecycleState, state::StateTransitionError> {
++        use state::StateMachine;
++        loop {
++            let current = self.state();
++            current.transition("engine", next)?;
++            if self
++                .state
++                .compare_exchange(current.as_u8(), next.as_u8(), Ordering::SeqCst, Ordering::SeqCst)
++                .is_ok()
++            {
++                if current != next {
++                    info!("Engine lifecycle: {} -> {}", current, next);
++                }
++                return Ok(next);
++            }
++        }
++    }
++
++    /// Requests a graceful shutdown. Idempotent: returns the resulting state, and is a no-op
++    /// when the engine is already stopping, stopped, or failed.
++    pub fn request_shutdown(&self) -> state::EngineLifecycleState {
++        use state::EngineLifecycleState as S;
++        match self.state() {
++            S::Starting | S::Running => {
++                let _ = self.transition(S::Stopping);
++                self.shutdown.send_replace(true);
++                S::Stopping
++            }
++            other => other,
++        }
++    }
++
++    /// `true` once shutdown has been requested for the current run.
++    pub fn is_shutdown_requested(&self) -> bool {
++        *self.shutdown.borrow()
++    }
++
++    /// Resolves when shutdown is requested.
++    pub async fn shutdown_requested(&self) {
++        let mut rx = self.shutdown.subscribe();
++        while !*rx.borrow_and_update() {
++            if rx.changed().await.is_err() {
++                return;
++            }
++        }
++    }
++
++    /// Claims the engine for a new run. Strict (not idempotent): only one engine may be
++    /// starting or running per process.
++    #[allow(clippy::result_large_err)]
++    fn begin_start(&self) -> Result<(), state::StateTransitionError> {
++        use state::{EngineLifecycleState as S, StateMachine};
++        for from in [S::Stopped, S::Failed] {
++            if self
++                .state
++                .compare_exchange(from.as_u8(), S::Starting.as_u8(), Ordering::SeqCst, Ordering::SeqCst)
++                .is_ok()
++            {
++                info!("Engine lifecycle: {} -> {}", from, S::Starting);
++                self.shutdown.send_replace(false);
++                return Ok(());
++            }
++        }
++        Err(self.state().rejection("engine", S::Starting.name()))
++    }
++}
++
+ /// Active instance of Synapse Core engine.
+ pub struct SynapseCore {
+     config: SynapseConfig,
+@@ -162,7 +261,19 @@
+ 
+ impl SynapseCore {
+     /// Initializes and prepares the Synapse Core environment.
+-    pub fn init(mut config: SynapseConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
++    pub fn init(config: SynapseConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
++        let control = engine_control();
++        control.begin_start()?;
++        match Self::init_inner(config) {
++            Ok(core) => Ok(core),
++            Err(e) => {
++                let _ = control.transition(state::EngineLifecycleState::Failed);
++                Err(e)
++            }
++        }
++    }
++
++    fn init_inner(mut config: SynapseConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+         std::fs::create_dir_all(&config.home_dir)?;
+ 
+         // The control API always requires a token. Use the one supplied, or load/create
+@@ -223,14 +334,34 @@
+         &self.event_sender
+     }
+ 
+-    /// Spawns API server, discovery, watchers, and QUIC listener on Tokio runtime.
++    /// Spawns API server, discovery, watchers, and QUIC listener on Tokio runtime, and runs
++    /// until [`EngineControl::request_shutdown`] is called (API, signal, or JNI).
++    ///
++    /// Lifecycle: `starting → running → stopping → stopped`, or `→ failed` on error.
+     pub async fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
++        let control = engine_control();
++        let result = self.run_inner().await;
++        let _ = match &result {
++            Ok(()) => {
++                if control.state() != state::EngineLifecycleState::Stopping {
++                    let _ = control.transition(state::EngineLifecycleState::Stopping);
++                }
++                control.transition(state::EngineLifecycleState::Stopped)
++            }
++            Err(_) => control.transition(state::EngineLifecycleState::Failed),
++        };
++        result
++    }
++
++    async fn run_inner(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+         info!("Starting Synapse Core engine...");
++        let control = engine_control();
+ 
+         // 1. Start P2P local discovery
+         self.p2p_manager.start_discovery(self.config.discovery_port);
+ 
+-        // 2. Spawn watchers for existing folders
++        // 2. Spawn watchers for existing folders. Each watcher thread lives until shutdown
++        //    (previously it parked forever, which also blocked runtime shutdown).
+         if let Ok(folders) = self.storage.list_folders() {
+             for f in folders {
+                 if !f.is_paused {
+@@ -238,8 +369,9 @@
+                     tokio::task::spawn_blocking(move || {
+                         let _ = engine.index_folder(&f.folder_id);
+                         let _watcher = engine.spawn_watcher(f.folder_id, f.local_path);
+-                        // Keep watcher alive in background thread
+-                        std::thread::park();
++                        while !engine_control().is_shutdown_requested() {
++                            std::thread::park_timeout(std::time::Duration::from_millis(500));
++                        }
+                     });
+                 }
+             }
+@@ -253,7 +385,7 @@
+             }
+         });
+ 
+-        // 4. Start local API server
++        // 4. Start local API server; serve until shutdown is requested
+         let api_server = ApiServer::new(
+             self.sync_engine.clone(),
+             self.config.api_addr,
+@@ -263,7 +395,12 @@
+             self.config.allowed_origins.clone(),
+         );
+ 
+-        api_server.run().await?;
++        api_server
++            .run_until(control.shutdown_requested(), || {
++                let _ = engine_control().transition(state::EngineLifecycleState::Running);
++            })
++            .await?;
++        info!("Synapse Core stopped");
+         Ok(())
+     }
+ }
+@@ -272,12 +409,12 @@
+ // C / JNI ABI EXPORTS FOR ANDROID (libsynapse.so)
+ // =============================================================================
+ 
+-static RUNNING: AtomicBool = AtomicBool::new(false);
+-#[allow(dead_code)]
+-static mut RUNTIME: Option<Runtime> = None;
+-
+ /// Starts the Synapse Core daemon from C / JNI.
+ ///
++/// Returns `0` on success or if already starting/running, `-1` null `home_dir`, `-2` invalid
++/// UTF-8, `-3` runtime creation failed, `-4` engine init failed, `-5` a previous instance is
++/// still stopping (retry shortly).
++///
+ /// # Safety
+ /// `home_dir` must be a valid, null-terminated UTF-8 C string.
+ #[no_mangle]
+@@ -286,8 +423,11 @@
+     api_port: c_int,
+     p2p_port: c_int,
+ ) -> c_int {
+-    if RUNNING.load(Ordering::SeqCst) {
+-        return 0; // Already running
++    use state::EngineLifecycleState as S;
++    match engine_control().state() {
++        S::Starting | S::Running => return 0, // Already running
++        S::Stopping => return -5,
++        S::Stopped | S::Failed => {}
+     }
+ 
+     if home_dir.is_null() {
+@@ -315,10 +455,10 @@
+ 
+     match SynapseCore::init(config) {
+         Ok(core) => {
+-            RUNNING.store(true, Ordering::SeqCst);
+             std::thread::spawn(move || {
+                 let _ = rt.block_on(core.run());
+-                RUNNING.store(false, Ordering::SeqCst);
++                // Background tasks (discovery, QUIC) are cancelled here; don't wait forever.
++                rt.shutdown_timeout(std::time::Duration::from_secs(2));
+             });
+             0
+         }
+@@ -326,19 +466,27 @@
+     }
+ }
+ 
+-/// Checks if Synapse Core is currently active.
++/// Checks if Synapse Core is active (starting, running, or still stopping).
+ #[no_mangle]
+ pub extern "C" fn synapse_is_running() -> c_int {
+-    if RUNNING.load(Ordering::SeqCst) {
+-        1
+-    } else {
+-        0
++    use state::EngineLifecycleState as S;
++    match engine_control().state() {
++        S::Starting | S::Running | S::Stopping => 1,
++        S::Stopped | S::Failed => 0,
+     }
+ }
+ 
+-/// Stops the Synapse Core daemon.
++/// Current engine lifecycle state: `0` stopped, `1` starting, `2` running, `3` stopping,
++/// `4` failed (see the `engine_lifecycle` state machine).
++#[no_mangle]
++pub extern "C" fn synapse_state() -> c_int {
++    engine_control().state().as_u8() as c_int
++}
++
++/// Requests a graceful stop of the Synapse Core daemon. Returns immediately; poll
++/// `synapse_is_running()` / `synapse_state()` to observe completion.
+ #[no_mangle]
+ pub extern "C" fn synapse_stop() -> c_int {
+-    RUNNING.store(false, Ordering::SeqCst);
++    engine_control().request_shutdown();
+     0
+ }
+--- a/synapse-core/src/main.rs
++++ b/synapse-core/src/main.rs
+@@ -332,16 +332,30 @@
+             info!("Discovery Port: {}", config.discovery_port);
+ 
+             let core = SynapseCore::init(config)?;
++            let run = core.run();
++            tokio::pin!(run);
+ 
+             tokio::select! {
+-                res = core.run() => {
++                res = &mut run => {
+                     if let Err(e) = res {
+                         error!("Synapse Core exited with error: {}", e);
+                     }
++                    return Ok(());
+                 }
+-                _ = tokio::signal::ctrl_c() => {
++                _ = termination_signal() => {
+                     info!("Received shutdown signal. Stopping Synapse Core gracefully...");
+                 }
++                _ = synapse_core::engine_control().shutdown_requested() => {
++                    info!("Shutdown requested via API. Stopping Synapse Core gracefully...");
++                }
++            }
++
++            // Let the engine finish in-flight work (engine_lifecycle: stopping -> stopped).
++            synapse_core::engine_control().request_shutdown();
++            match tokio::time::timeout(std::time::Duration::from_secs(10), &mut run).await {
++                Ok(Err(e)) => error!("Synapse Core exited with error: {}", e),
++                Err(_) => error!("Graceful shutdown timed out after 10s; exiting"),
++                Ok(Ok(())) => {}
+             }
+ 
+             Ok(())
+@@ -349,6 +363,29 @@
+     }
+ }
+ 
++/// Resolves on Ctrl-C, or on SIGTERM on Unix (systemd, `kill`, desktop app shutdown).
++async fn termination_signal() {
++    #[cfg(unix)]
++    {
++        use tokio::signal::unix::{signal, SignalKind};
++        match signal(SignalKind::terminate()) {
++            Ok(mut term) => {
++                tokio::select! {
++                    _ = tokio::signal::ctrl_c() => {}
++                    _ = term.recv() => {}
++                }
++            }
++            Err(_) => {
++                let _ = tokio::signal::ctrl_c().await;
++            }
++        }
++    }
++    #[cfg(not(unix))]
++    {
++        let _ = tokio::signal::ctrl_c().await;
++    }
++}
++
+ async fn reqwest_check(url: &str, token: Option<&str>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+     let client = reqwest_minimal_get(format!("{}/api/v1/system/status", url), token).await?;
+     Ok(client)
+--- a/synapse-core/src/engine/mod.rs
++++ b/synapse-core/src/engine/mod.rs
+@@ -26,9 +26,47 @@
+     verify_folder_marker,
+ };
+ use crate::engine::ignore::IgnoreEngine;
+-use crate::state::FolderSyncState;
++use crate::state::{FolderSyncState, LifecycleView, StateMachine};
+ use crate::storage::{FileRecord, RevisionRecord, StorageEngine};
+ 
++/// The kinds of work a folder can be doing. Each running unit of work holds a
++/// [`FolderWorkGuard`]; the folder's lifecycle state is *derived* from what is running,
++/// so it can never get stuck in `scanning`/`syncing` after an error or panic.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum FolderWork {
++    Scan,
++    Sync,
++}
++
++/// Why a folder is in the `error` state.
++#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
++pub struct FolderError {
++    pub message: String,
++    /// Unix seconds when the error was recorded.
++    pub since: i64,
++}
++
++#[derive(Debug, Default, Clone)]
++struct FolderActivity {
++    scans: u32,
++    syncs: u32,
++    last_error: Option<FolderError>,
++}
++
++/// RAII handle for running folder work. Dropping it (normally, on `?`, or during a panic)
++/// ends the work and re-derives the folder state.
++pub struct FolderWorkGuard {
++    engine: SyncEngine,
++    folder_id: String,
++    work: FolderWork,
++}
++
++impl Drop for FolderWorkGuard {
++    fn drop(&mut self) {
++        self.engine.end_work(&self.folder_id, self.work);
++    }
++}
++
+ #[derive(Clone)]
+ pub struct SyncEngine {
+     storage: StorageEngine,
+@@ -36,7 +74,9 @@
+     conflict_engine: Arc<ConflictEngine>,
+     event_sender: broadcast::Sender<CoreEvent>,
+     device_id: String,
++    /// Manual state overrides (tools/tests). The engine itself never writes here.
+     folder_states: Arc<RwLock<HashMap<String, FolderSyncState>>>,
++    folder_activity: Arc<std::sync::Mutex<HashMap<String, FolderActivity>>>,
+ }
+ 
+ impl SyncEngine {
+@@ -53,16 +93,39 @@
+             event_sender,
+             device_id,
+             folder_states: Arc::new(RwLock::new(HashMap::new())),
++            folder_activity: Arc::new(std::sync::Mutex::new(HashMap::new())),
+         }
+     }
+ 
+-    /// Queries the dynamic operational state of a folder.
++    /// Current lifecycle state of a folder, derived (in priority order) from:
++    /// paused flag → running sync → running scan → last recorded error → manual override → idle.
+     pub fn get_folder_state(&self, folder_id: &str) -> FolderSyncState {
++        let activity = self
++            .folder_activity
++            .lock()
++            .unwrap_or_else(|e| e.into_inner())
++            .get(folder_id)
++            .cloned();
++        self.derive_folder_state(folder_id, activity.as_ref())
++    }
++
++    fn derive_folder_state(&self, folder_id: &str, activity: Option<&FolderActivity>) -> FolderSyncState {
+         if let Ok(Some(folder)) = self.storage.get_folder(folder_id) {
+             if folder.is_paused {
+                 return FolderSyncState::Paused;
+             }
+         }
++        if let Some(a) = activity {
++            if a.syncs > 0 {
++                return FolderSyncState::Syncing;
++            }
++            if a.scans > 0 {
++                return FolderSyncState::Scanning;
++            }
++            if a.last_error.is_some() {
++                return FolderSyncState::Error;
++            }
++        }
+         if let Ok(states) = self.folder_states.read() {
+             if let Some(&state) = states.get(folder_id) {
+                 return state;
+@@ -71,11 +134,119 @@
+         FolderSyncState::Idle
+     }
+ 
+-    /// Sets the dynamic operational state of a folder.
++    /// Why the folder is in `error`, if it is.
++    pub fn folder_error(&self, folder_id: &str) -> Option<FolderError> {
++        self.folder_activity
++            .lock()
++            .unwrap_or_else(|e| e.into_inner())
++            .get(folder_id)
++            .and_then(|a| a.last_error.clone())
++    }
++
++    /// Lifecycle snapshot (state, allowed transitions, available actions) for API responses.
++    pub fn folder_lifecycle(&self, folder_id: &str) -> LifecycleView {
++        LifecycleView::of(self.get_folder_state(folder_id))
++    }
++
++    /// Manually overrides a folder's reported state when no work is running and no error is
++    /// recorded. Intended for tools and tests; the engine derives state from running work.
+     pub fn set_folder_state(&self, folder_id: &str, state: FolderSyncState) {
++        let before = self.get_folder_state(folder_id);
+         if let Ok(mut states) = self.folder_states.write() {
+             states.insert(folder_id.to_string(), state);
+         }
++        self.publish_folder_change(folder_id, before);
++    }
++
++    /// Starts a unit of folder work. Returns `None` for a scan when one is already running
++    /// on this folder (duplicate scans are skipped instead of racing each other).
++    pub fn begin_work(&self, folder_id: &str, work: FolderWork) -> Option<FolderWorkGuard> {
++        let before = self.get_folder_state(folder_id);
++        {
++            let mut map = self.folder_activity.lock().unwrap_or_else(|e| e.into_inner());
++            let a = map.entry(folder_id.to_string()).or_default();
++            match work {
++                FolderWork::Scan if a.scans > 0 => return None,
++                FolderWork::Scan => a.scans += 1,
++                FolderWork::Sync => a.syncs += 1,
++            }
++        }
++        self.publish_folder_change(folder_id, before);
++        Some(FolderWorkGuard { engine: self.clone(), folder_id: folder_id.to_string(), work })
++    }
++
++    fn end_work(&self, folder_id: &str, work: FolderWork) {
++        let before = self.get_folder_state(folder_id);
++        {
++            let mut map = self.folder_activity.lock().unwrap_or_else(|e| e.into_inner());
++            if let Some(a) = map.get_mut(folder_id) {
++                match work {
++                    FolderWork::Scan => a.scans = a.scans.saturating_sub(1),
++                    FolderWork::Sync => a.syncs = a.syncs.saturating_sub(1),
++                }
++            }
++        }
++        self.publish_folder_change(folder_id, before);
++    }
++
++    /// Records the outcome of folder work: success clears a previous error, failure records why.
++    pub fn record_folder_outcome(&self, folder_id: &str, outcome: Result<(), String>) {
++        let mut map = self.folder_activity.lock().unwrap_or_else(|e| e.into_inner());
++        let a = map.entry(folder_id.to_string()).or_default();
++        a.last_error = match outcome {
++            Ok(()) => None,
++            Err(message) => Some(FolderError { message, since: chrono::Utc::now().timestamp() }),
++        };
++    }
++
++    /// Clears a recorded error (e.g. after the user resumes or fixes the folder).
++    pub fn clear_folder_error(&self, folder_id: &str) {
++        let before = self.get_folder_state(folder_id);
++        if let Some(a) = self.folder_activity.lock().unwrap_or_else(|e| e.into_inner()).get_mut(folder_id) {
++            a.last_error = None;
++        }
++        self.publish_folder_change(folder_id, before);
++    }
++
++    /// Pauses or resumes a folder through its lifecycle: persists the flag, publishes
++    /// `FOLDER_STATE_CHANGED`, and on resume clears a previously recorded error so the next
++    /// scan starts clean.
++    pub fn set_folder_paused(&self, folder_id: &str, paused: bool) -> rusqlite::Result<()> {
++        let before = self.get_folder_state(folder_id);
++        self.storage.set_folder_paused(folder_id, paused)?;
++        if !paused {
++            if let Some(a) = self.folder_activity.lock().unwrap_or_else(|e| e.into_inner()).get_mut(folder_id) {
++                a.last_error = None;
++            }
++        }
++        self.publish_folder_change(folder_id, before);
++        Ok(())
++    }
++
++    /// Re-derives the folder state and, if it changed, validates the transition against the
++    /// folder state machine and publishes `FOLDER_STATE_CHANGED`.
++    fn publish_folder_change(&self, folder_id: &str, before: FolderSyncState) {
++        let after = self.get_folder_state(folder_id);
++        if after == before {
++            return;
++        }
++        if !before.permits(after) {
++            warn!(
++                "Folder {} moved {} -> {}, which the folder state machine does not list as a legal transition",
++                folder_id, before, after
++            );
++        }
++        let error = if after == FolderSyncState::Error {
++            self.folder_error(folder_id).map(|e| e.message)
++        } else {
++            None
++        };
++        let _ = self.event_sender.send(CoreEvent::FolderStateChanged {
++            folder_id: folder_id.to_string(),
++            from: before.as_str().to_string(),
++            to: after.as_str().to_string(),
++            error,
++        });
+     }
+ 
+     pub fn storage(&self) -> &StorageEngine {
+@@ -118,20 +289,39 @@
+     }
+ 
+     /// Indexes an entire folder recursively from scratch or incremental delta.
++    ///
++    /// Lifecycle: `idle|error → scanning → idle` on success, `→ error` (with reason) on failure.
++    /// A scan requested while one is already running on the folder is skipped (returns `Ok(0)`).
+     pub fn index_folder(&self, folder_id: &str) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
++        if let Some(folder) = self.storage.get_folder(folder_id)? {
++            if folder.is_paused {
++                info!("Folder {} is paused; skipping indexing", folder_id);
++                return Ok(0);
++            }
++        }
++        let Some(_work) = self.begin_work(folder_id, FolderWork::Scan) else {
++            info!("Folder {} is already being scanned; skipping duplicate scan", folder_id);
++            return Ok(0);
++        };
++        let result = self.index_folder_inner(folder_id);
++        self.record_folder_outcome(
++            folder_id,
++            result.as_ref().map(|_| ()).map_err(|e| format!("Scan failed: {}", e)),
++        );
++        result
++    }
++
++    fn index_folder_inner(&self, folder_id: &str) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+         let folder = match self.storage.get_folder(folder_id)? {
+             Some(f) => f,
+             None => return Err(format!("Folder not registered: {}", folder_id).into()),
+         };
+ 
+         if folder.is_paused {
+-            self.set_folder_state(folder_id, FolderSyncState::Paused);
+             info!("Folder {} is paused; skipping indexing", folder_id);
+             return Ok(0);
+         }
+ 
+-        self.set_folder_state(folder_id, FolderSyncState::Scanning);
+-
+         let base_path = PathBuf::from(&folder.local_path);
+         if !base_path.exists() {
+             fs::create_dir_all(&base_path)?;
+@@ -142,7 +332,6 @@
+             let _ = ensure_folder_marker(&base_path, &folder.marker_name);
+             if let Err(e2) = verify_folder_marker(&base_path, &folder.marker_name) {
+                 warn!("Mount safety check failed for folder {}: {}", folder_id, e2);
+-                self.set_folder_state(folder_id, FolderSyncState::Error);
+                 return Err(Box::new(e2));
+             }
+         }
+@@ -189,7 +378,6 @@
+             }
+         }
+ 
+-        self.set_folder_state(folder_id, FolderSyncState::Idle);
+         Ok(indexed_count)
+     }
+ 
+@@ -303,6 +491,8 @@
+ 
+     /// Handles an incoming remote file revision during sync.
+     /// Traverses the Merkle DAG to evaluate ancestry and invokes the 3-Way Conflict Pipeline if divergent.
++    ///
++    /// Lifecycle: the folder is `syncing` while this runs; failure records an `error` reason.
+     pub fn reconcile_remote_revision(
+         &self,
+         folder_id: &str,
+@@ -311,6 +501,28 @@
+         remote_chunk_hashes: &[String],
+         remote_payload: &[u8],
+     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
++        let _work = self.begin_work(folder_id, FolderWork::Sync);
++        let result = self.reconcile_remote_revision_inner(
++            folder_id,
++            relative_path,
++            remote_rev,
++            remote_chunk_hashes,
++            remote_payload,
++        );
++        if let Err(e) = &result {
++            self.record_folder_outcome(folder_id, Err(format!("Applying remote change to '{}' failed: {}", relative_path, e)));
++        }
++        result
++    }
++
++    fn reconcile_remote_revision_inner(
++        &self,
++        folder_id: &str,
++        relative_path: &str,
++        remote_rev: &RevisionNode,
++        remote_chunk_hashes: &[String],
++        remote_payload: &[u8],
++    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+         let folder = match self.storage.get_folder(folder_id)? {
+             Some(f) => f,
+             None => return Err(format!("Folder not registered: {}", folder_id).into()),
+@@ -322,8 +534,6 @@
+             return Ok(());
+         }
+ 
+-        self.set_folder_state(folder_id, FolderSyncState::Syncing);
+-
+         let rel_clean = sanitize_relative_path(relative_path);
+         let base_path = PathBuf::from(&folder.local_path);
+         let local_path = base_path.join(&rel_clean);
+@@ -452,7 +662,6 @@
+             }
+         }
+ 
+-        self.set_folder_state(folder_id, FolderSyncState::Idle);
+         Ok(())
+     }
+ 
+--- a/synapse-core/src/storage/mod.rs
++++ b/synapse-core/src/storage/mod.rs
+@@ -8,7 +8,7 @@
+ use std::path::{Path, PathBuf};
+ use std::sync::{Arc, Mutex};
+ 
+-use rusqlite::{params, Connection, Result as SqlResult};
++use rusqlite::{OptionalExtension, params, Connection, Result as SqlResult};
+ use serde::{Deserialize, Serialize};
+ 
+ /// Folder synchronization configuration and policy.
+@@ -88,6 +88,15 @@
+ }
+ 
+ /// Pending incoming device pairing request.
++/// A pairing request that was rejected; further requests from this device are ignored.
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct RejectedDeviceRecord {
++    pub device_id: String,
++    pub name: String,
++    pub address: String,
++    pub rejected_at: i64,
++}
++
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct PendingDeviceRecord {
+     pub device_id: String,
+@@ -394,6 +403,15 @@
+                 received_at INTEGER NOT NULL
+             );
+ 
++            -- Rejected pairing requests (device_pairing_lifecycle: rejected). Further requests
++            -- from these devices are ignored until un-rejected.
++            CREATE TABLE IF NOT EXISTS rejected_devices (
++                device_id TEXT PRIMARY KEY,
++                name TEXT NOT NULL,
++                address TEXT NOT NULL,
++                rejected_at INTEGER NOT NULL
++            );
++
+             -- Folder Sharing Matrix (Which folders are shared with which devices)
+             CREATE TABLE IF NOT EXISTS folder_devices (
+                 folder_id TEXT NOT NULL,
+@@ -867,8 +885,19 @@
+     // PENDING PAIRING OPERATIONS
+     // =========================================================================
+ 
++    /// Records an incoming pairing request. Ignored (no-op) for devices that are already
++    /// paired or whose requests were rejected.
+     pub fn add_pending_device(&self, rec: &PendingDeviceRecord) -> SqlResult<()> {
+         let conn = self.conn.lock().unwrap();
++        let known: bool = conn.query_row(
++            "SELECT EXISTS(SELECT 1 FROM devices WHERE device_id = ?1)
++                 OR EXISTS(SELECT 1 FROM rejected_devices WHERE device_id = ?1)",
++            params![rec.device_id],
++            |row| row.get(0),
++        )?;
++        if known {
++            return Ok(());
++        }
+         conn.execute(
+             "INSERT INTO pending_devices (device_id, name, address, received_at)
+              VALUES (?1, ?2, ?3, ?4)
+@@ -923,37 +952,154 @@
+     }
+ 
+     pub fn accept_pending_device(&self, device_id: &str) -> SqlResult<()> {
+-        let conn = self.conn.lock().unwrap();
+-        let mut stmt = conn.prepare(
++        let mut conn = self.conn.lock().unwrap();
++        // One transaction: a crash can never leave the device both paired and pending.
++        let tx = conn.transaction()?;
++        let pending = tx.query_row(
+             "SELECT device_id, name, address, received_at FROM pending_devices WHERE device_id = ?1",
++            params![device_id],
++            |row| {
++                Ok(PendingDeviceRecord {
++                    device_id: row.get(0)?,
++                    name: row.get(1)?,
++                    address: row.get(2)?,
++                    received_at: row.get(3)?,
++                })
++            },
+         )?;
+-        let pending = stmt.query_row(params![device_id], |row| {
+-            Ok(PendingDeviceRecord {
+-                device_id: row.get(0)?,
+-                name: row.get(1)?,
+-                address: row.get(2)?,
+-                received_at: row.get(3)?,
+-            })
+-        })?;
+ 
+         let addrs = vec![pending.address];
+         let addrs_json = serde_json::to_string(&addrs).unwrap_or_else(|_| "[]".to_string());
+ 
+-        conn.execute(
++        tx.execute(
+             "INSERT INTO devices (device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at)
+              VALUES (?1, ?2, ?3, 0, 1, 0, NULL, ?4)
+              ON CONFLICT(device_id) DO UPDATE SET name = excluded.name",
+             params![pending.device_id, pending.name, addrs_json, pending.received_at],
+         )?;
+ 
+-        conn.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
+-        Ok(())
++        tx.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
++        tx.commit()
+     }
+ 
++    /// Rejects a pending pairing request and remembers the rejection so the device does not
++    /// re-appear as pending every time it announces itself. No-op if not pending.
+     pub fn reject_pending_device(&self, device_id: &str) -> SqlResult<()> {
++        let mut conn = self.conn.lock().unwrap();
++        let tx = conn.transaction()?;
++        let pending: Option<(String, String)> = tx
++            .query_row(
++                "SELECT name, address FROM pending_devices WHERE device_id = ?1",
++                params![device_id],
++                |row| Ok((row.get(0)?, row.get(1)?)),
++            )
++            .optional()?;
++        if let Some((name, address)) = pending {
++            tx.execute(
++                "INSERT INTO rejected_devices (device_id, name, address, rejected_at) VALUES (?1, ?2, ?3, ?4)
++                 ON CONFLICT(device_id) DO UPDATE SET name = excluded.name, address = excluded.address,
++                     rejected_at = excluded.rejected_at",
++                params![device_id, name, address, chrono::Utc::now().timestamp_millis()],
++            )?;
++        }
++        tx.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
++        tx.commit()
++    }
++
++    /// Lists rejected pairing requests (most recent first).
++    pub fn list_rejected_devices(&self) -> SqlResult<Vec<RejectedDeviceRecord>> {
+         let conn = self.conn.lock().unwrap();
+-        conn.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
+-        Ok(())
++        let mut stmt = conn.prepare(
++            "SELECT device_id, name, address, rejected_at FROM rejected_devices ORDER BY rejected_at DESC",
++        )?;
++        let rows = stmt.query_map([], |row| {
++            Ok(RejectedDeviceRecord {
++                device_id: row.get(0)?,
++                name: row.get(1)?,
++                address: row.get(2)?,
++                rejected_at: row.get(3)?,
++            })
++        })?;
++        rows.collect()
++    }
++
++    /// Un-rejects a device: moves it back to pending so it can be accepted. Returns `false`
++    /// if the device was not rejected.
++    pub fn unreject_device(&self, device_id: &str) -> SqlResult<bool> {
++        let mut conn = self.conn.lock().unwrap();
++        let tx = conn.transaction()?;
++        let rejected: Option<(String, String)> = tx
++            .query_row(
++                "SELECT name, address FROM rejected_devices WHERE device_id = ?1",
++                params![device_id],
++                |row| Ok((row.get(0)?, row.get(1)?)),
++            )
++            .optional()?;
++        let Some((name, address)) = rejected else {
++            return Ok(false);
++        };
++        tx.execute(
++            "INSERT INTO pending_devices (device_id, name, address, received_at) VALUES (?1, ?2, ?3, ?4)
++             ON CONFLICT(device_id) DO UPDATE SET name = excluded.name, address = excluded.address",
++            params![device_id, name, address, chrono::Utc::now().timestamp_millis()],
++        )?;
++        tx.execute("DELETE FROM rejected_devices WHERE device_id = ?1", params![device_id])?;
++        tx.commit()?;
++        Ok(true)
++    }
++
++    /// Current pairing state of a device, or `None` if the engine knows nothing about it.
++    pub fn device_pairing_state(&self, device_id: &str) -> SqlResult<Option<crate::state::DevicePairingState>> {
++        use crate::state::DevicePairingState;
++        let conn = self.conn.lock().unwrap();
++        let paused: Option<bool> = conn
++            .query_row("SELECT is_paused FROM devices WHERE device_id = ?1", params![device_id], |r| r.get(0))
++            .optional()?;
++        if let Some(paused) = paused {
++            return Ok(Some(if paused { DevicePairingState::Paused } else { DevicePairingState::Paired }));
++        }
++        let pending: bool = conn.query_row(
++            "SELECT EXISTS(SELECT 1 FROM pending_devices WHERE device_id = ?1)",
++            params![device_id],
++            |r| r.get(0),
++        )?;
++        if pending {
++            return Ok(Some(DevicePairingState::Pending));
++        }
++        let rejected: bool = conn.query_row(
++            "SELECT EXISTS(SELECT 1 FROM rejected_devices WHERE device_id = ?1)",
++            params![device_id],
++            |r| r.get(0),
++        )?;
++        Ok(if rejected { Some(DevicePairingState::Rejected) } else { None })
++    }
++
++    /// Applies a pairing action (accept, reject, pause, resume, unreject) with guarded
++    /// transitions. Illegal actions return a structured `StateTransitionError`; unknown devices
++    /// return `EntityNotFound`. Returns the resulting state.
++    pub fn apply_device_action(
++        &self,
++        device_id: &str,
++        action: crate::state::DeviceAction,
++    ) -> Result<crate::state::DevicePairingState, Box<dyn std::error::Error + Send + Sync>> {
++        use crate::state::{DeviceAction as A, EntityNotFound};
++        let current = self.device_pairing_state(device_id)?.ok_or_else(|| EntityNotFound {
++            entity: "device".into(),
++            entity_id: device_id.into(),
++        })?;
++        let target = action.check(device_id, current)?;
++        if current != target {
++            match action {
++                A::Accept => self.accept_pending_device(device_id)?,
++                A::Reject => self.reject_pending_device(device_id)?,
++                A::Pause => self.set_device_paused(device_id, true)?,
++                A::Resume => self.set_device_paused(device_id, false)?,
++                A::Unreject => {
++                    self.unreject_device(device_id)?;
++                }
++            }
++        }
++        Ok(target)
+     }
+ 
+     // =========================================================================
+--- a/synapse-core/src/p2p/mod.rs
++++ b/synapse-core/src/p2p/mod.rs
+@@ -19,7 +19,7 @@
+ pub use swarm::{ChunkAssignment, FilePullItem, PullOrder, SchedulingStrategy, SwarmScheduler};
+ pub use throttle::{BandwidthLimiter, RateLimiter};
+ 
+-use std::collections::HashMap;
++use std::collections::{HashMap, HashSet};
+ use std::net::SocketAddr;
+ use std::sync::atomic::{AtomicUsize, Ordering};
+ use std::sync::Arc;
+@@ -111,6 +111,16 @@
+     pub client_type: String,
+ }
+ 
++/// How long a peer counts as online after we last heard from it (discovery broadcast,
++/// QUIC Hello, or BEP handshake). Discovery announces every 5 s, so 30 s tolerates several
++/// lost broadcasts. See `peer_connection_lifecycle`.
++pub const PEER_PRESENCE_WINDOW: Duration = Duration::from_secs(30);
++
++/// Number of peers heard from within the presence window.
++fn fresh_peer_count(map: &HashMap<String, PeerInfo>) -> usize {
++    map.values().filter(|p| p.last_seen.elapsed() <= PEER_PRESENCE_WINDOW).count()
++}
++
+ #[derive(Clone)]
+ pub struct P2PManager {
+     identity: NodeIdentity,
+@@ -119,6 +129,8 @@
+     bep_port: u16,
+     sync_engine: SyncEngine,
+     peers: Arc<Mutex<HashMap<String, PeerInfo>>>,
++    /// Peers last reported online by the presence sweep (to emit one PEER_DISCONNECTED each).
++    online_peers: Arc<Mutex<HashSet<String>>>,
+     peer_count: Arc<AtomicUsize>,
+     event_sender: broadcast::Sender<CoreEvent>,
+ }
+@@ -154,6 +166,7 @@
+             bep_port,
+             sync_engine,
+             peers: Arc::new(Mutex::new(HashMap::new())),
++            online_peers: Arc::new(Mutex::new(HashSet::new())),
+             peer_count,
+             event_sender,
+         }
+@@ -166,7 +179,7 @@
+     pub async fn register_peer(&self, peer: PeerInfo) {
+         let mut map = self.peers.lock().await;
+         map.insert(peer.device_id.clone(), peer);
+-        self.peer_count.store(map.len(), Ordering::Relaxed);
++        self.peer_count.store(fresh_peer_count(&map), Ordering::Relaxed);
+     }
+ 
+     pub async fn get_peer_info(&self, device_id: &str) -> Option<PeerInfo> {
+@@ -174,13 +187,69 @@
+         map.get(device_id).cloned()
+     }
+ 
++    /// Peers heard from within [`PEER_PRESENCE_WINDOW`] (i.e. currently online).
+     pub async fn list_connected_peers(&self) -> HashMap<String, PeerInfo> {
+         let map = self.peers.lock().await;
+-        map.clone()
++        map.iter()
++            .filter(|(_, p)| p.last_seen.elapsed() <= PEER_PRESENCE_WINDOW)
++            .map(|(k, v)| (k.clone(), v.clone()))
++            .collect()
++    }
++
++    /// Every peer heard from since start-up, including ones that have since gone quiet.
++    pub async fn list_known_peers(&self) -> HashMap<String, PeerInfo> {
++        self.peers.lock().await.clone()
++    }
++
++    /// Seconds since the device was last heard from, or `None` if never seen.
++    pub async fn peer_seen_secs_ago(&self, device_id: &str) -> Option<u64> {
++        self.peers.lock().await.get(device_id).map(|p| p.last_seen.elapsed().as_secs())
++    }
++
++    /// Presence state of a device (see `peer_connection_lifecycle`).
++    pub async fn peer_connection_state(&self, device_id: &str, paused: bool) -> crate::state::PeerConnectionState {
++        let seen = self.peer_seen_secs_ago(device_id).await;
++        crate::state::PeerConnectionState::derive(paused, seen, PEER_PRESENCE_WINDOW.as_secs())
++    }
++
++    /// Re-evaluates presence: peers that went quiet get exactly one `PEER_DISCONNECTED`, and
++    /// `peer_count` is refreshed. Runs every few seconds from `start_discovery`.
++    pub async fn sweep_presence(&self) {
++        let (fresh, stale): (HashSet<String>, HashSet<String>) = {
++            let map = self.peers.lock().await;
++            self.peer_count.store(fresh_peer_count(&map), Ordering::Relaxed);
++            let mut fresh = HashSet::new();
++            let mut stale = HashSet::new();
++            for (id, p) in map.iter() {
++                if p.last_seen.elapsed() <= PEER_PRESENCE_WINDOW {
++                    fresh.insert(id.clone());
++                } else {
++                    stale.insert(id.clone());
++                }
++            }
++            (fresh, stale)
++        };
++        let mut online = self.online_peers.lock().await;
++        for id in stale {
++            if online.remove(&id) {
++                info!("Peer {} has not been heard from in {:?}; marking offline", id, PEER_PRESENCE_WINDOW);
++                let _ = self.event_sender.send(CoreEvent::PeerDisconnected { peer_id: id });
++            }
++        }
++        online.extend(fresh);
+     }
+ 
+     /// Spawns UDP broadcast discovery listener and periodic announcer.
+     pub fn start_discovery(&self, discovery_port: u16) {
++        // 0. Presence sweep (online → offline transitions)
++        let sweeper = self.clone();
++        tokio::spawn(async move {
++            loop {
++                tokio::time::sleep(Duration::from_secs(5)).await;
++                sweeper.sweep_presence().await;
++            }
++        });
++
+         let device_id = self.identity.device_id.clone();
+         let p2p_port = self.p2p_port;
+         let peers = self.peers.clone();
+@@ -216,11 +285,12 @@
+                                     true
+                                 }
+                                 Ok(None) => {
+-                                    // Unknown peer: record in pending pairing requests
+-                                    let is_new_pending = storage_listener
+-                                        .get_pending_device(&peer.device_id)
+-                                        .map(|p| p.is_none())
+-                                        .unwrap_or(true);
++                                    // Unknown peer: record in pending pairing requests (no-op for
++                                    // rejected devices; only brand-new requests raise an event).
++                                    let is_new_pending = matches!(
++                                        storage_listener.device_pairing_state(&peer.device_id),
++                                        Ok(None)
++                                    );
+                                     let _ = storage_listener.add_pending_device(&PendingDeviceRecord {
+                                         device_id: peer.device_id.clone(),
+                                         name: peer.device_name.clone(),
+@@ -255,7 +325,7 @@
+                                     client_type: "synapse-quic (FastCDC)".into(),
+                                 },
+                             );
+-                            peer_count.store(map.len(), Ordering::Relaxed);
++                            peer_count.store(fresh_peer_count(&map), Ordering::Relaxed);
+ 
+                             // Introducer propagation via UDP broadcast discovery:
+                             // If discovered peer is marked as an introducer (introducer = 1) in SQLite
+@@ -405,17 +475,14 @@
+                     let _ = self.handle_cluster_announcement(&device_id, &cluster_devices, false);
+                 }
+                 let storage = self.sync_engine.storage();
+-                let is_paired = match storage.get_device(&device_id) {
+-                    Ok(Some(dev)) => !dev.is_paused,
+-                    _ => false,
+-                };
++                // Pairing lifecycle decides what a Hello means: paired → peer, paused → known
++                // but silent, pending → refresh, rejected → ignored, unknown → new request.
++                let pairing = storage.device_pairing_state(&device_id).ok().flatten();
++                let is_paired = matches!(pairing, Some(crate::state::DevicePairingState::Paired));
+ 
+-                if !is_paired {
++                if matches!(pairing, None | Some(crate::state::DevicePairingState::Pending)) {
+                     let peer_addr_str = peer_addr.map(|a| a.to_string()).unwrap_or_else(|| "dynamic".into());
+-                    let is_new_pending = storage
+-                        .get_pending_device(&device_id)
+-                        .map(|p| p.is_none())
+-                        .unwrap_or(true);
++                    let is_new_pending = pairing.is_none();
+ 
+                     let _ = storage.add_pending_device(&PendingDeviceRecord {
+                         device_id: device_id.clone(),
+@@ -450,7 +517,7 @@
+                             client_type: "synapse-quic (FastCDC)".into(),
+                         },
+                     );
+-                    self.peer_count.store(map.len(), Ordering::Relaxed);
++                    self.peer_count.store(fresh_peer_count(&map), Ordering::Relaxed);
+ 
+                     if is_new && is_paired {
+                         let _ = self.event_sender.send(CoreEvent::PeerConnected {
+--- a/synapse-core/src/p2p/relay.rs
++++ b/synapse-core/src/p2p/relay.rs
+@@ -530,6 +530,34 @@
+ 
+ #[cfg(test)]
+ mod tests {
++
++    /// The relay entry in the state-machine registry is hand-written; this guards against it
++    /// drifting from the transitions `RelaySession` actually enforces.
++    #[test]
++    fn test_relay_registry_matches_enforced_transitions() {
++        use RelaySessionState::*;
++        let all = [Disconnected, Connecting, Joined, Invited, Active, Closed];
++        let name = |s: RelaySessionState| match s {
++            Disconnected => "disconnected", Connecting => "connecting", Joined => "joined",
++            Invited => "invited", Active => "active", Closed => "closed",
++        };
++        let registry = crate::state::get_all_state_machines();
++        let def = registry.iter().find(|m| m.machine_id == "relay_session_lifecycle").unwrap();
++        assert_eq!(def.states.len(), all.len());
++        for from in all {
++            let mut session = RelaySession::new("s".into(), "a".into(), "b".into(), "r".into());
++            session.state = from;
++            let enforced: Vec<&str> = all.iter().copied()
++                .filter(|&to| to != from && session.can_transition_to(to))
++                .map(name).collect();
++            let meta = def.states.iter().find(|m| m.state == name(from)).unwrap();
++            let mut documented: Vec<&str> = meta.allowed_transitions.iter().map(String::as_str).collect();
++            let mut enforced_sorted = enforced.clone();
++            documented.sort(); enforced_sorted.sort();
++            assert_eq!(documented, enforced_sorted, "registry drift for relay state '{}'", name(from));
++            assert_eq!(meta.is_terminal, enforced.is_empty(), "terminal flag drift for '{}'", name(from));
++        }
++    }
+     use super::*;
+     use rand::rngs::OsRng;
+ 
+--- a/synapse-core/src/conflict/mod.rs
++++ b/synapse-core/src/conflict/mod.rs
+@@ -109,6 +109,22 @@
+         name: String,
+         address: String,
+     },
++    /// A device moved through the pairing lifecycle (see `device_pairing_lifecycle`).
++    #[serde(rename = "DEVICE_STATE_CHANGED")]
++    DeviceStateChanged {
++        device_id: String,
++        from: String,
++        to: String,
++    },
++    /// A folder's lifecycle state changed (see `folder_sync_lifecycle`).
++    #[serde(rename = "FOLDER_STATE_CHANGED")]
++    FolderStateChanged {
++        folder_id: String,
++        from: String,
++        to: String,
++        /// Why the folder is in `error`, when it is.
++        error: Option<String>,
++    },
+     #[serde(rename = "REMOTE_INDEX_UPDATED")]
+     RemoteIndexUpdated {
+         device_id: String,
+@@ -376,25 +392,12 @@
+ 
+         // State Machine Transition Guard: Enforces valid lifecycle transitions
+         let current_status = conflict.parsed_status();
+-        if !current_status.can_transition_to(crate::state::ConflictStatus::Resolved) {
+-            return Err(Box::new(crate::state::StateTransitionError {
+-                entity: "conflict".to_string(),
+-                entity_id: conflict_id.to_string(),
+-                current_state: current_status.as_str().to_string(),
+-                attempted_transition: crate::state::ConflictStatus::Resolved.as_str().to_string(),
+-                allowed_transitions: current_status
+-                    .allowed_transitions()
+-                    .into_iter()
+-                    .map(|s| s.as_str().to_string())
+-                    .collect(),
+-                available_actions: current_status
+-                    .available_actions()
+-                    .into_iter()
+-                    .map(String::from)
+-                    .collect(),
+-                is_terminal: current_status.is_terminal(),
+-            }));
+-        }
++        // Guarded transition (shared StateMachine trait): structured error on violation
++        crate::state::StateMachine::transition(
++            &current_status,
++            conflict_id,
++            crate::state::ConflictStatus::Resolved,
++        )?;
+ 
+         let folder = match self.storage.get_folder(&conflict.folder_id)? {
+             Some(f) => f,
+@@ -527,25 +530,12 @@
+         };
+ 
+         let current_status = conflict.parsed_status();
+-        if !current_status.can_transition_to(crate::state::ConflictStatus::Ignored) {
+-            return Err(Box::new(crate::state::StateTransitionError {
+-                entity: "conflict".to_string(),
+-                entity_id: conflict_id.to_string(),
+-                current_state: current_status.as_str().to_string(),
+-                attempted_transition: crate::state::ConflictStatus::Ignored.as_str().to_string(),
+-                allowed_transitions: current_status
+-                    .allowed_transitions()
+-                    .into_iter()
+-                    .map(|s| s.as_str().to_string())
+-                    .collect(),
+-                available_actions: current_status
+-                    .available_actions()
+-                    .into_iter()
+-                    .map(String::from)
+-                    .collect(),
+-                is_terminal: current_status.is_terminal(),
+-            }));
+-        }
++        // Guarded transition (shared StateMachine trait): structured error on violation
++        crate::state::StateMachine::transition(
++            &current_status,
++            conflict_id,
++            crate::state::ConflictStatus::Ignored,
++        )?;
+ 
+         self.storage.ignore_conflict(conflict_id)?;
+         Ok(())
+@@ -559,25 +549,12 @@
+         };
+ 
+         let current_status = conflict.parsed_status();
+-        if !current_status.can_transition_to(crate::state::ConflictStatus::Pending) {
+-            return Err(Box::new(crate::state::StateTransitionError {
+-                entity: "conflict".to_string(),
+-                entity_id: conflict_id.to_string(),
+-                current_state: current_status.as_str().to_string(),
+-                attempted_transition: crate::state::ConflictStatus::Pending.as_str().to_string(),
+-                allowed_transitions: current_status
+-                    .allowed_transitions()
+-                    .into_iter()
+-                    .map(|s| s.as_str().to_string())
+-                    .collect(),
+-                available_actions: current_status
+-                    .available_actions()
+-                    .into_iter()
+-                    .map(String::from)
+-                    .collect(),
+-                is_terminal: current_status.is_terminal(),
+-            }));
+-        }
++        // Guarded transition (shared StateMachine trait): structured error on violation
++        crate::state::StateMachine::transition(
++            &current_status,
++            conflict_id,
++            crate::state::ConflictStatus::Pending,
++        )?;
+ 
+         self.storage.reopen_conflict(conflict_id)?;
+         Ok(())
+--- a/synapse-core/src/api/mod.rs
++++ b/synapse-core/src/api/mod.rs
+@@ -268,6 +268,31 @@
+     }
+ }
+ 
++/// HTTP status returned for an illegal lifecycle transition. Kept at 400 for compatibility
++/// with existing clients and tests; change it here (e.g. to 409 CONFLICT) to switch globally.
++pub const TRANSITION_ERROR_STATUS: StatusCode = StatusCode::BAD_REQUEST;
++
++/// Converts an engine error into a response. Lifecycle violations become a structured JSON
++/// body — `{"error":"invalid_transition","message":..., "current_state":...,
++/// "allowed_transitions":[...], "available_actions":[...]}` — so UIs can show what *is*
++/// possible and agents can self-correct. Anything else keeps `fallback` + plain text.
++fn error_response(err: &(dyn std::error::Error + Send + Sync + 'static), fallback: StatusCode) -> Response {
++    if let Some(t) = err.downcast_ref::<crate::state::StateTransitionError>() {
++        return transition_error_response(t);
++    }
++    if let Some(nf) = err.downcast_ref::<crate::state::EntityNotFound>() {
++        return (StatusCode::NOT_FOUND, nf.to_string()).into_response();
++    }
++    (fallback, err.to_string()).into_response()
++}
++
++fn transition_error_response(t: &crate::state::StateTransitionError) -> Response {
++    let mut body = serde_json::to_value(t).unwrap_or_else(|_| serde_json::json!({}));
++    body["error"] = "invalid_transition".into();
++    body["message"] = t.to_string().into();
++    (TRANSITION_ERROR_STATUS, Json(body)).into_response()
++}
++
+ /// Builds a CORS layer for the configured origins, or `None` when no browser
+ /// origin is allowed.
+ fn build_cors_layer(allowed_origins: &[String]) -> Option<CorsLayer> {
+@@ -314,6 +339,12 @@
+     pub alloc: usize,
+     #[serde(default)]
+     pub sys: usize,
++    /// Engine lifecycle state (`engine_lifecycle`): starting, running, stopping, stopped, failed.
++    #[serde(default)]
++    pub engine_state: String,
++    /// Number of folders in each `folder_sync_lifecycle` state, e.g. `{"idle": 2, "error": 1}`.
++    #[serde(default)]
++    pub folders_by_state: std::collections::BTreeMap<String, usize>,
+     #[serde(rename = "guiAddressUsed", default)]
+     pub gui_address_used: String,
+ }
+@@ -421,6 +452,15 @@
+     pub marker_name: String,
+     pub versioning_command: Option<String>,
+     pub files_count: usize,
++    /// Current lifecycle state (`idle`, `scanning`, `syncing`, `paused`, `error`).
++    #[serde(default)]
++    pub state: String,
++    /// Why the folder is in `error`, if it is.
++    #[serde(default)]
++    pub error: Option<crate::engine::FolderError>,
++    /// Full lifecycle snapshot including `available_actions`.
++    #[serde(default)]
++    pub lifecycle: Option<crate::state::LifecycleView>,
+ }
+ 
+ #[derive(Debug, Serialize, Deserialize)]
+@@ -560,6 +600,8 @@
+             .route("/api/v1/cluster/pending/devices/:id/reject", post(reject_pending_device))
+             .route("/rest/cluster/pending/devices/:id/reject", post(reject_pending_device))
+ 
++            .route("/api/v1/cluster/rejected/devices", get(list_rejected_devices))
++            .route("/api/v1/cluster/rejected/devices/:id/unreject", post(unreject_device))
+             .route("/api/v1/cluster/pending/folders", get(list_pending_folders))
+             .route("/rest/cluster/pending/folders", get(list_pending_folders).delete(reject_pending_folder_query))
+             .route("/api/v1/cluster/pending/folders/:id/accept", post(accept_pending_folder))
+@@ -591,6 +633,21 @@
+         router.with_state(state)
+     }
+ 
++    /// Runs the server until `shutdown` resolves, then stops accepting connections and lets
++    /// in-flight requests finish. `on_ready` is called once the listener is bound.
++    pub async fn run_until(
++        self,
++        shutdown: impl std::future::Future<Output = ()> + Send + 'static,
++        on_ready: impl FnOnce(),
++    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
++        let app = Self::create_router(self.state);
++        let listener = tokio::net::TcpListener::bind(&self.bind_addr).await?;
++        info!("Synapse Core REST & WebSocket API listening on http://{}", self.bind_addr);
++        on_ready();
++        axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
++        Ok(())
++    }
++
+     /// Runs the Axum server asynchronously.
+     pub async fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+         let app = Self::create_router(self.state);
+@@ -616,11 +673,14 @@
+     let mut is_syncing = false;
+     let mut all_paused = !folders.is_empty();
+ 
++    let mut folders_by_state = std::collections::BTreeMap::new();
+     for f in &folders {
+         if !f.is_paused {
+             all_paused = false;
+         }
+-        match state.sync_engine.get_folder_state(&f.folder_id) {
++        let folder_state = state.sync_engine.get_folder_state(&f.folder_id);
++        *folders_by_state.entry(folder_state.as_str().to_string()).or_insert(0) += 1;
++        match folder_state {
+             crate::state::FolderSyncState::Scanning => is_scanning = true,
+             crate::state::FolderSyncState::Syncing => is_syncing = true,
+             _ => {}
+@@ -643,7 +703,7 @@
+         uptime_seconds: uptime,
+         peer_count: peers,
+         sync_state,
+-        version: "1.0.0".into(),
++        version: env!("CARGO_PKG_VERSION").into(),
+         monitored_folders_count: folders.len(),
+         pending_conflicts_count: conflicts.len(),
+         memory_footprint_bytes: mem,
+@@ -652,6 +712,11 @@
+         alloc: mem,
+         sys: mem,
+         gui_address_used: "http://127.0.0.1:8384".into(),
++        engine_state: {
++            use crate::state::StateMachine;
++            crate::engine_control().state().name().to_string()
++        },
++        folders_by_state,
+     })
+ }
+ 
+@@ -679,9 +744,13 @@
+     Json(serde_json::json!({ "ping": "pong" }))
+ }
+ 
++/// Requests a graceful engine shutdown (`engine_lifecycle`: running → stopping → stopped).
++/// Idempotent; responds with the resulting state.
+ async fn system_shutdown() -> impl IntoResponse {
++    use crate::state::StateMachine;
+     info!("System shutdown requested via API");
+-    StatusCode::OK.into_response()
++    let state = crate::engine_control().request_shutdown();
++    (StatusCode::OK, Json(serde_json::json!({ "engine_state": state.name() }))).into_response()
+ }
+ 
+ async fn system_restart() -> impl IntoResponse {
+@@ -690,54 +759,76 @@
+ }
+ 
+ async fn get_connections(State(state): State<AppState>) -> impl IntoResponse {
+-    let devices = state.sync_engine.storage().list_devices().unwrap_or_default();
+-    let peers = state.p2p_manager.list_connected_peers().await;
+-    let mut map = HashMap::new();
++    use crate::state::{LifecycleView, PeerConnectionState};
++    let storage = state.sync_engine.storage();
++    let devices = storage.list_devices().unwrap_or_default();
++    let known = state.p2p_manager.list_known_peers().await;
++    let window = crate::p2p::PEER_PRESENCE_WINDOW.as_secs();
++    let mut map = serde_json::Map::new();
+ 
+     for dev in devices {
+-        let (is_conn, addr_str, client_type) = if let Some(peer) = peers.get(&dev.device_id) {
+-            (true, peer.addr.to_string(), peer.client_type.clone())
+-        } else {
+-            (!dev.is_paused, dev.addresses.first().cloned().unwrap_or_else(|| "dynamic".into()), "synapse-quic (FastCDC)".into())
++        let peer = known.get(&dev.device_id);
++        let seen_secs = peer.map(|p| p.last_seen.elapsed().as_secs());
++        // Truthful presence: connected only if heard from recently (previously this was
++        // `!is_paused`, which reported never-seen devices as connected).
++        let conn_state = PeerConnectionState::derive(dev.is_paused, seen_secs, window);
++        let (addr_str, client_type) = match peer {
++            Some(p) if conn_state == PeerConnectionState::Online => (p.addr.to_string(), p.client_type.clone()),
++            _ => (
++                dev.addresses.first().cloned().unwrap_or_else(|| "dynamic".into()),
++                "synapse-quic (FastCDC)".into(),
++            ),
+         };
+-
+-        map.insert(
+-            dev.device_id.clone(),
+-            PeerConnectionMetrics {
+-                device_id: dev.device_id,
+-                address: addr_str,
+-                is_connected: is_conn,
+-                in_bps: 0,
+-                out_bps: 0,
+-                total_in_bytes: 0,
+-                total_out_bytes: 0,
+-                latency_ms: 5,
+-                client_type,
+-            },
+-        );
++        let metrics = PeerConnectionMetrics {
++            device_id: dev.device_id.clone(),
++            address: addr_str,
++            is_connected: conn_state.is_connected(),
++            in_bps: 0,
++            out_bps: 0,
++            total_in_bytes: 0,
++            total_out_bytes: 0,
++            latency_ms: 5,
++            client_type,
++        };
++        let mut v = serde_json::to_value(metrics).unwrap_or_default();
++        v["connection_state"] = conn_state.to_string().into();
++        v["last_seen_secs_ago"] = serde_json::to_value(seen_secs).unwrap_or_default();
++        v["lifecycle"] = serde_json::to_value(LifecycleView::of(conn_state)).unwrap_or_default();
++        map.insert(dev.device_id, v);
+     }
+ 
+-    // Include any active connected BEP or QUIC peers that aren't yet in configured devices
+-    for (peer_id, peer) in peers {
+-        if !map.contains_key(&peer_id) {
+-            map.insert(
+-                peer_id.clone(),
+-                PeerConnectionMetrics {
+-                    device_id: peer_id,
+-                    address: peer.addr.to_string(),
+-                    is_connected: true,
+-                    in_bps: 0,
+-                    out_bps: 0,
+-                    total_in_bytes: 0,
+-                    total_out_bytes: 0,
+-                    latency_ms: 5,
+-                    client_type: peer.client_type,
+-                },
+-            );
++    // Online peers that are not configured devices (e.g. pending pairing requests).
++    // Rejected devices are left out.
++    let rejected: std::collections::HashSet<String> = storage
++        .list_rejected_devices()
++        .unwrap_or_default()
++        .into_iter()
++        .map(|r| r.device_id)
++        .collect();
++    for (peer_id, peer) in known {
++        let fresh = peer.last_seen.elapsed() <= crate::p2p::PEER_PRESENCE_WINDOW;
++        if !fresh || map.contains_key(&peer_id) || rejected.contains(&peer_id) {
++            continue;
+         }
++        let metrics = PeerConnectionMetrics {
++            device_id: peer_id.clone(),
++            address: peer.addr.to_string(),
++            is_connected: true,
++            in_bps: 0,
++            out_bps: 0,
++            total_in_bytes: 0,
++            total_out_bytes: 0,
++            latency_ms: 5,
++            client_type: peer.client_type,
++        };
++        let mut v = serde_json::to_value(metrics).unwrap_or_default();
++        v["connection_state"] = "online".into();
++        v["last_seen_secs_ago"] = peer.last_seen.elapsed().as_secs().into();
++        v["lifecycle"] = serde_json::to_value(LifecycleView::of(PeerConnectionState::Online)).unwrap_or_default();
++        map.insert(peer_id, v);
+     }
+ 
+-    Json(map)
++    Json(serde_json::Value::Object(map))
+ }
+ 
+ async fn get_system_statemachines() -> impl IntoResponse {
+@@ -863,6 +954,9 @@
+     let mut dtos = Vec::new();
+     for f in folders {
+         let files = state.sync_engine.storage().list_files_in_folder(&f.folder_id).unwrap_or_default();
++        let folder_state = state.sync_engine.get_folder_state(&f.folder_id).as_str().to_string();
++        let folder_error = state.sync_engine.folder_error(&f.folder_id);
++        let folder_lifecycle = state.sync_engine.folder_lifecycle(&f.folder_id);
+         dtos.push(FolderDto {
+             folder_id: f.folder_id,
+             local_path: f.local_path,
+@@ -875,6 +969,9 @@
+             marker_name: f.marker_name,
+             versioning_command: f.versioning_command,
+             files_count: files.len(),
++            state: folder_state,
++            error: folder_error,
++            lifecycle: Some(folder_lifecycle),
+         });
+     }
+ 
+@@ -924,7 +1021,7 @@
+     Json(payload): Json<PatchFolderRequest>,
+ ) -> impl IntoResponse {
+     if let Some(paused) = payload.paused {
+-        match state.sync_engine.storage().set_folder_paused(&id, paused) {
++        match state.sync_engine.set_folder_paused(&id, paused) {
+             Ok(_) => StatusCode::OK.into_response(),
+             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+         }
+@@ -937,7 +1034,7 @@
+     AxumPath(id): AxumPath<String>,
+     State(state): State<AppState>,
+ ) -> impl IntoResponse {
+-    match state.sync_engine.storage().set_folder_paused(&id, true) {
++    match state.sync_engine.set_folder_paused(&id, true) {
+         Ok(_) => StatusCode::OK.into_response(),
+         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+     }
+@@ -947,7 +1044,7 @@
+     AxumPath(id): AxumPath<String>,
+     State(state): State<AppState>,
+ ) -> impl IntoResponse {
+-    match state.sync_engine.storage().set_folder_paused(&id, false) {
++    match state.sync_engine.set_folder_paused(&id, false) {
+         Ok(_) => StatusCode::OK.into_response(),
+         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+     }
+@@ -981,6 +1078,15 @@
+     }
+ }
+ 
++/// Adds lifecycle fields (`error`, `lifecycle`) to a folder status response without
++/// changing any existing field.
++fn folder_status_with_lifecycle(state: &AppState, folder_id: &str, st: crate::storage::FolderStatusMetrics) -> Response {
++    let mut value = serde_json::to_value(&st).unwrap_or_else(|_| serde_json::json!({}));
++    value["error"] = serde_json::to_value(state.sync_engine.folder_error(folder_id)).unwrap_or_default();
++    value["lifecycle"] = serde_json::to_value(state.sync_engine.folder_lifecycle(folder_id)).unwrap_or_default();
++    Json(value).into_response()
++}
++
+ async fn get_folder_status(
+     AxumPath(id): AxumPath<String>,
+     State(state): State<AppState>,
+@@ -988,7 +1094,7 @@
+     match state.sync_engine.storage().get_folder_status(&id) {
+         Ok(mut st) => {
+             st.state = state.sync_engine.get_folder_state(&id).as_str().to_string();
+-            Json(st).into_response()
++            folder_status_with_lifecycle(&state, &id, st)
+         }
+         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+     }
+@@ -1002,7 +1108,7 @@
+         match state.sync_engine.storage().get_folder_status(fid) {
+             Ok(mut st) => {
+                 st.state = state.sync_engine.get_folder_state(fid).as_str().to_string();
+-                Json(st).into_response()
++                folder_status_with_lifecycle(&state, fid, st)
+             }
+             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+         }
+@@ -1121,9 +1227,31 @@
+ // ROUTE HANDLERS: DEVICES & CLUSTERING
+ // =============================================================================
+ 
++/// Serializes a paired device with its lifecycle fields: `pairing_state`,
++/// `connection_state`, `last_seen_secs_ago`, and `lifecycle` (pairing machine, including
++/// `available_actions`). Existing fields are unchanged.
++async fn device_json(state: &AppState, dev: &DeviceRecord) -> serde_json::Value {
++    use crate::state::{DevicePairingState, LifecycleView, StateMachine};
++    let pairing = if dev.is_paused { DevicePairingState::Paused } else { DevicePairingState::Paired };
++    let connection = state.p2p_manager.peer_connection_state(&dev.device_id, dev.is_paused).await;
++    let mut v = serde_json::to_value(dev).unwrap_or_default();
++    v["pairing_state"] = pairing.name().into();
++    v["connection_state"] = connection.to_string().into();
++    v["last_seen_secs_ago"] =
++        serde_json::to_value(state.p2p_manager.peer_seen_secs_ago(&dev.device_id).await).unwrap_or_default();
++    v["lifecycle"] = serde_json::to_value(LifecycleView::of(pairing)).unwrap_or_default();
++    v
++}
++
+ async fn list_devices(State(state): State<AppState>) -> impl IntoResponse {
+     match state.sync_engine.storage().list_devices() {
+-        Ok(devs) => Json(devs).into_response(),
++        Ok(devs) => {
++            let mut out = Vec::with_capacity(devs.len());
++            for d in &devs {
++                out.push(device_json(&state, d).await);
++            }
++            Json(out).into_response()
++        }
+         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+     }
+ }
+@@ -1149,7 +1277,7 @@
+     State(state): State<AppState>,
+ ) -> impl IntoResponse {
+     match state.sync_engine.storage().get_device(&id) {
+-        Ok(Some(d)) => Json(d).into_response(),
++        Ok(Some(d)) => Json(device_json(&state, &d).await).into_response(),
+         Ok(None) => (StatusCode::NOT_FOUND, "Device not found").into_response(),
+         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+     }
+@@ -1165,24 +1293,50 @@
+     }
+ }
+ 
++/// Runs a guarded device pairing transition and publishes the resulting events.
++fn device_transition_response(state: &AppState, device_id: &str, action: crate::state::DeviceAction) -> Response {
++    use crate::state::{DevicePairingState, StateMachine};
++    let storage = state.sync_engine.storage();
++    let before = storage.device_pairing_state(device_id).ok().flatten();
++    let pending = storage.get_pending_device(device_id).ok().flatten();
++    match storage.apply_device_action(device_id, action) {
++        Ok(after) => {
++            // Legacy event first: existing clients expect DEVICE_PAIRED immediately after accept.
++            if before == Some(DevicePairingState::Pending) && after == DevicePairingState::Paired {
++                if let Some(p) = pending {
++                    let _ = state.sync_engine.event_sender().send(CoreEvent::DevicePaired {
++                        device_id: p.device_id,
++                        name: p.name,
++                    });
++                }
++            }
++            if let Some(before) = before {
++                if before != after {
++                    let _ = state.sync_engine.event_sender().send(CoreEvent::DeviceStateChanged {
++                        device_id: device_id.to_string(),
++                        from: before.name().to_string(),
++                        to: after.name().to_string(),
++                    });
++                }
++            }
++            StatusCode::OK.into_response()
++        }
++        Err(e) => error_response(&*e, StatusCode::INTERNAL_SERVER_ERROR),
++    }
++}
++
+ async fn pause_device(
+     AxumPath(id): AxumPath<String>,
+     State(state): State<AppState>,
+ ) -> impl IntoResponse {
+-    match state.sync_engine.storage().set_device_paused(&id, true) {
+-        Ok(_) => StatusCode::OK.into_response(),
+-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+-    }
++    device_transition_response(&state, &id, crate::state::DeviceAction::Pause)
+ }
+ 
+ async fn resume_device(
+     AxumPath(id): AxumPath<String>,
+     State(state): State<AppState>,
+ ) -> impl IntoResponse {
+-    match state.sync_engine.storage().set_device_paused(&id, false) {
+-        Ok(_) => StatusCode::OK.into_response(),
+-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+-    }
++    device_transition_response(&state, &id, crate::state::DeviceAction::Resume)
+ }
+ 
+ async fn pause_device_query(
+@@ -1190,10 +1344,7 @@
+     State(state): State<AppState>,
+ ) -> impl IntoResponse {
+     if let Some(device_id) = params.get("device") {
+-        match state.sync_engine.storage().set_device_paused(device_id, true) {
+-            Ok(_) => StatusCode::OK.into_response(),
+-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+-        }
++        device_transition_response(&state, device_id, crate::state::DeviceAction::Pause)
+     } else {
+         (StatusCode::BAD_REQUEST, "Missing device query parameter").into_response()
+     }
+@@ -1204,10 +1355,7 @@
+     State(state): State<AppState>,
+ ) -> impl IntoResponse {
+     if let Some(device_id) = params.get("device") {
+-        match state.sync_engine.storage().set_device_paused(device_id, false) {
+-            Ok(_) => StatusCode::OK.into_response(),
+-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+-        }
++        device_transition_response(&state, device_id, crate::state::DeviceAction::Resume)
+     } else {
+         (StatusCode::BAD_REQUEST, "Missing device query parameter").into_response()
+     }
+@@ -1215,7 +1363,22 @@
+ 
+ async fn list_pending_devices(State(state): State<AppState>) -> impl IntoResponse {
+     match state.sync_engine.storage().list_pending_devices() {
+-        Ok(p) => Json(p).into_response(),
++        Ok(p) => {
++            let view = serde_json::to_value(crate::state::LifecycleView::of(
++                crate::state::DevicePairingState::Pending,
++            ))
++            .unwrap_or_default();
++            let items: Vec<serde_json::Value> = p
++                .into_iter()
++                .map(|r| {
++                    let mut v = serde_json::to_value(r).unwrap_or_default();
++                    v["pairing_state"] = "pending".into();
++                    v["lifecycle"] = view.clone();
++                    v
++                })
++                .collect();
++            Json(items).into_response()
++        }
+         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+     }
+ }
+@@ -1224,40 +1387,51 @@
+     AxumPath(id): AxumPath<String>,
+     State(state): State<AppState>,
+ ) -> impl IntoResponse {
+-    let pending = state.sync_engine.storage().get_pending_device(&id).ok().flatten();
+-    match state.sync_engine.storage().accept_pending_device(&id) {
+-        Ok(_) => {
+-            if let Some(p) = pending {
+-                let _ = state.sync_engine.event_sender().send(CoreEvent::DevicePaired {
+-                    device_id: p.device_id,
+-                    name: p.name,
+-                });
+-            }
+-            StatusCode::OK.into_response()
+-        }
+-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+-    }
++    device_transition_response(&state, &id, crate::state::DeviceAction::Accept)
+ }
+ 
+ async fn reject_pending_device(
+     AxumPath(id): AxumPath<String>,
+     State(state): State<AppState>,
+ ) -> impl IntoResponse {
+-    match state.sync_engine.storage().reject_pending_device(&id) {
+-        Ok(_) => StatusCode::OK.into_response(),
++    device_transition_response(&state, &id, crate::state::DeviceAction::Reject)
++}
++
++/// `GET /api/v1/cluster/rejected/devices`: pairing requests that were rejected.
++async fn list_rejected_devices(State(state): State<AppState>) -> impl IntoResponse {
++    match state.sync_engine.storage().list_rejected_devices() {
++        Ok(list) => {
++            let view = crate::state::LifecycleView::of(crate::state::DevicePairingState::Rejected);
++            let items: Vec<serde_json::Value> = list
++                .into_iter()
++                .map(|r| {
++                    let mut v = serde_json::to_value(r).unwrap_or_default();
++                    v["pairing_state"] = "rejected".into();
++                    v["lifecycle"] = serde_json::to_value(&view).unwrap_or_default();
++                    v
++                })
++                .collect();
++            Json(items).into_response()
++        }
+         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+     }
+ }
+ 
++/// `POST /api/v1/cluster/rejected/devices/:id/unreject`: moves a rejected device back to
++/// pending so it can be accepted.
++async fn unreject_device(
++    AxumPath(id): AxumPath<String>,
++    State(state): State<AppState>,
++) -> impl IntoResponse {
++    device_transition_response(&state, &id, crate::state::DeviceAction::Unreject)
++}
++
+ async fn reject_pending_device_query(
+     Query(params): Query<HashMap<String, String>>,
+     State(state): State<AppState>,
+ ) -> impl IntoResponse {
+     if let Some(device_id) = params.get("device") {
+-        match state.sync_engine.storage().reject_pending_device(device_id) {
+-            Ok(_) => StatusCode::OK.into_response(),
+-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+-        }
++        device_transition_response(&state, device_id, crate::state::DeviceAction::Reject)
+     } else {
+         (StatusCode::BAD_REQUEST, "Missing device query parameter").into_response()
+     }
+@@ -1482,7 +1656,7 @@
+ ) -> impl IntoResponse {
+     match state.sync_engine.conflict_engine().resolve(&id, &payload) {
+         Ok(_) => StatusCode::OK.into_response(),
+-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
++        Err(e) => error_response(&*e, StatusCode::BAD_REQUEST),
+     }
+ }
+ 
+@@ -1492,7 +1666,7 @@
+ ) -> impl IntoResponse {
+     match state.sync_engine.conflict_engine().ignore(&id) {
+         Ok(_) => StatusCode::OK.into_response(),
+-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
++        Err(e) => error_response(&*e, StatusCode::BAD_REQUEST),
+     }
+ }
+ 
+@@ -1502,7 +1676,7 @@
+ ) -> impl IntoResponse {
+     match state.sync_engine.conflict_engine().reopen(&id) {
+         Ok(_) => StatusCode::OK.into_response(),
+-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
++        Err(e) => error_response(&*e, StatusCode::BAD_REQUEST),
+     }
+ }
+ 
+--- a/synapse-core/tests/integration_test.rs
++++ b/synapse-core/tests/integration_test.rs
+@@ -433,7 +433,30 @@
+     let peer_metrics = &conn_map["DEV_PEER_01"];
+     assert_eq!(peer_metrics.device_id, "DEV_PEER_01");
+     assert_eq!(peer_metrics.address, "10.0.0.12:9190");
+-    assert!(peer_metrics.is_connected);
++    // Truthful presence (peer_connection_lifecycle): a paired device that has never been
++    // heard from is NOT connected. (Previously this reported `!is_paused`, i.e. true.)
++    assert!(!peer_metrics.is_connected);
++    let raw: serde_json::Value = serde_json::from_slice(&body).unwrap();
++    assert_eq!(raw["DEV_PEER_01"]["connection_state"], "unknown");
++    assert!(raw["DEV_PEER_01"]["last_seen_secs_ago"].is_null());
++
++    // Once the peer is heard from, it is online and reports its live address.
++    harness.app_state.p2p_manager.register_peer(synapse_core::p2p::PeerInfo {
++        device_id: "DEV_PEER_01".into(),
++        device_name: "Remote Workstation".into(),
++        addr: "10.0.0.12:9190".parse().unwrap(),
++        last_seen: std::time::Instant::now(),
++        client_type: "synapse-quic (FastCDC)".into(),
++    }).await;
++    let res = router.clone().oneshot(
++        Request::builder().header("Authorization", format!("Bearer {}", TEST_TOKEN))
++            .uri("/rest/system/connections").body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    let raw: serde_json::Value =
++        serde_json::from_slice(&axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap()).unwrap();
++    assert_eq!(raw["DEV_PEER_01"]["is_connected"], true);
++    assert_eq!(raw["DEV_PEER_01"]["connection_state"], "online");
++    assert_eq!(raw["DEV_PEER_01"]["lifecycle"]["machine_id"], "peer_connection_lifecycle");
+ 
+     let req_conn_v1 = Request::builder()
+         .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+@@ -2118,3 +2141,226 @@
+     assert_eq!(status, StatusCode::OK);
+     assert!(none.is_empty());
+ }
++
++// =============================================================================
++// LIFECYCLE STATE MACHINES: folder, device pairing, peer presence
++// =============================================================================
++
++async fn api_json(router: &axum::Router, method: &str, uri: &str) -> (StatusCode, serde_json::Value) {
++    let res = router.clone().oneshot(
++        Request::builder().method(method).uri(uri)
++            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
++            .body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    let status = res.status();
++    let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
++    (status, serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null))
++}
++
++fn drain_folder_events(rx: &mut tokio::sync::broadcast::Receiver<CoreEvent>, folder: &str) -> Vec<(String, String)> {
++    let mut out = Vec::new();
++    while let Ok(evt) = rx.try_recv() {
++        if let CoreEvent::FolderStateChanged { folder_id, from, to, .. } = evt {
++            if folder_id == folder { out.push((from, to)); }
++        }
++    }
++    out
++}
++
++/// Regression: an error part-way through a scan used to leave the folder stuck in
++/// "scanning" forever with no reason. Now it lands in "error" with a reason, and a
++/// successful rescan recovers it.
++#[tokio::test]
++async fn test_folder_lifecycle_never_sticks_and_reports_errors() {
++    use synapse_core::state::FolderSyncState;
++    let harness = TestHarness::new();
++    let router = ApiServer::create_router(harness.app_state.clone());
++    let mut rx = harness.sync_engine.event_sender().subscribe();
++
++    // A folder whose path is a *file*: the mount-safety marker cannot be created.
++    let bad_path = harness.temp_dir.join("not_a_dir");
++    fs::write(&bad_path, b"x").unwrap();
++    harness.storage.add_folder(&FolderRecord::new("broken", bad_path.to_string_lossy())).unwrap();
++
++    assert!(harness.sync_engine.index_folder("broken").is_err());
++    assert_eq!(harness.sync_engine.get_folder_state("broken"), FolderSyncState::Error);
++    let err = harness.sync_engine.folder_error("broken").expect("error reason recorded");
++    assert!(err.message.starts_with("Scan failed:"), "{}", err.message);
++    assert_eq!(
++        drain_folder_events(&mut rx, "broken"),
++        vec![("idle".into(), "scanning".into()), ("scanning".into(), "error".into())]
++    );
++
++    // API exposes state, reason, and what to do next
++    let (status, folders) = api_json(&router, "GET", "/api/v1/folders").await;
++    assert_eq!(status, StatusCode::OK);
++    let f = folders.as_array().unwrap().iter().find(|f| f["folder_id"] == "broken").unwrap();
++    assert_eq!(f["state"], "error");
++    assert!(f["error"]["message"].as_str().unwrap().contains("Scan failed"));
++    assert_eq!(f["lifecycle"]["machine_id"], "folder_sync_lifecycle");
++    assert!(f["lifecycle"]["available_actions"].as_array().unwrap().iter().any(|a| a == "RESCAN"));
++    let (_, st) = api_json(&router, "GET", "/api/v1/folders/broken/status").await;
++    assert_eq!(st["state"], "error");
++    assert!(st["error"]["message"].is_string());
++
++    // Fix the problem and rescan: back to idle, error cleared
++    fs::remove_file(&bad_path).unwrap();
++    fs::create_dir_all(&bad_path).unwrap();
++    harness.sync_engine.index_folder("broken").unwrap();
++    assert_eq!(harness.sync_engine.get_folder_state("broken"), FolderSyncState::Idle);
++    assert!(harness.sync_engine.folder_error("broken").is_none());
++    assert_eq!(
++        drain_folder_events(&mut rx, "broken"),
++        vec![("error".into(), "scanning".into()), ("scanning".into(), "idle".into())]
++    );
++}
++
++#[tokio::test]
++async fn test_folder_lifecycle_skips_duplicate_scans_and_survives_panics() {
++    use synapse_core::engine::FolderWork;
++    use synapse_core::state::FolderSyncState;
++    let harness = TestHarness::new();
++    let dir = harness.temp_dir.join("docs");
++    fs::create_dir_all(&dir).unwrap();
++    fs::write(dir.join("a.txt"), b"hello").unwrap();
++    harness.storage.add_folder(&FolderRecord::new("docs", dir.to_string_lossy())).unwrap();
++
++    // While a scan is running, a second scan is skipped instead of racing.
++    let guard = harness.sync_engine.begin_work("docs", FolderWork::Scan).unwrap();
++    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Scanning);
++    assert!(harness.sync_engine.begin_work("docs", FolderWork::Scan).is_none());
++    assert_eq!(harness.sync_engine.index_folder("docs").unwrap(), 0);
++    drop(guard);
++    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Idle);
++    assert_eq!(harness.sync_engine.index_folder("docs").unwrap(), 1);
++
++    // A panic during work still releases the folder.
++    let engine = harness.sync_engine.clone();
++    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++        let _g = engine.begin_work("docs", FolderWork::Sync).unwrap();
++        assert_eq!(engine.get_folder_state("docs"), FolderSyncState::Syncing);
++        panic!("simulated failure mid-sync");
++    }));
++    assert!(result.is_err());
++    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Idle);
++
++    // Pause/resume go through the lifecycle; resume clears a recorded error.
++    harness.sync_engine.record_folder_outcome("docs", Err("disk full".into()));
++    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Error);
++    harness.sync_engine.set_folder_paused("docs", true).unwrap();
++    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Paused);
++    harness.sync_engine.set_folder_paused("docs", false).unwrap();
++    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Idle);
++}
++
++/// Regression: rejecting a device used to delete the request, so it re-appeared on the
++/// next announcement forever. Now the rejection is remembered, can be undone, and every
++/// illegal move returns a structured error.
++#[tokio::test]
++async fn test_device_pairing_lifecycle_end_to_end() {
++    let harness = TestHarness::new();
++    let router = ApiServer::create_router(harness.app_state.clone());
++    let id = "PAIR-TEST-0001";
++    let pending = PendingDeviceRecord {
++        device_id: id.into(), name: "Tablet".into(), address: "192.0.2.5:22000".into(), received_at: 1,
++    };
++    harness.storage.add_pending_device(&pending).unwrap();
++
++    let (_, list) = api_json(&router, "GET", "/api/v1/cluster/pending/devices").await;
++    assert_eq!(list[0]["pairing_state"], "pending");
++    assert_eq!(list[0]["lifecycle"]["available_actions"], serde_json::json!(["ACCEPT", "REJECT"]));
++
++    // Reject -> remembered
++    let (status, _) = api_json(&router, "POST", &format!("/api/v1/cluster/pending/devices/{}/reject", id)).await;
++    assert_eq!(status, StatusCode::OK);
++    harness.storage.add_pending_device(&pending).unwrap(); // device announces itself again
++    let (_, list) = api_json(&router, "GET", "/api/v1/cluster/pending/devices").await;
++    assert!(list.as_array().unwrap().is_empty(), "rejected device re-appeared as pending");
++    let (_, rejected) = api_json(&router, "GET", "/api/v1/cluster/rejected/devices").await;
++    assert_eq!(rejected[0]["device_id"], id);
++    assert_eq!(rejected[0]["lifecycle"]["available_actions"], serde_json::json!(["UNREJECT"]));
++
++    // Illegal move: accept a rejected device -> structured error telling you what to do
++    let (status, err) = api_json(&router, "POST", &format!("/api/v1/cluster/pending/devices/{}/accept", id)).await;
++    assert_eq!(status, StatusCode::BAD_REQUEST);
++    assert_eq!(err["error"], "invalid_transition");
++    assert_eq!(err["entity"], "device");
++    assert_eq!(err["current_state"], "rejected");
++    assert_eq!(err["attempted_transition"], "paired");
++    assert_eq!(err["available_actions"], serde_json::json!(["UNREJECT"]));
++    assert!(err["message"].as_str().unwrap().contains("Invalid state transition"));
++
++    // Un-reject -> pending -> accept -> paired
++    let (status, _) = api_json(&router, "POST", &format!("/api/v1/cluster/rejected/devices/{}/unreject", id)).await;
++    assert_eq!(status, StatusCode::OK);
++    let (status, _) = api_json(&router, "POST", &format!("/api/v1/cluster/pending/devices/{}/accept", id)).await;
++    assert_eq!(status, StatusCode::OK);
++    let (_, dev) = api_json(&router, "GET", &format!("/api/v1/devices/{}", id)).await;
++    assert_eq!(dev["pairing_state"], "paired");
++    assert_eq!(dev["connection_state"], "unknown");
++    assert!(dev["lifecycle"]["available_actions"].as_array().unwrap().iter().any(|a| a == "PAUSE"));
++
++    // Paired devices never become pending again
++    harness.storage.add_pending_device(&pending).unwrap();
++    assert!(harness.storage.get_pending_device(id).unwrap().is_none());
++
++    // Pause is idempotent; accepting a paired device is illegal; unknown devices are 404
++    assert_eq!(api_json(&router, "POST", &format!("/api/v1/devices/{}/pause", id)).await.0, StatusCode::OK);
++    assert_eq!(api_json(&router, "POST", &format!("/api/v1/devices/{}/pause", id)).await.0, StatusCode::OK);
++    let (_, dev) = api_json(&router, "GET", &format!("/api/v1/devices/{}", id)).await;
++    assert_eq!(dev["pairing_state"], "paused");
++    assert_eq!(dev["connection_state"], "paused");
++    let (status, err) = api_json(&router, "POST", &format!("/api/v1/cluster/pending/devices/{}/accept", id)).await;
++    assert_eq!(status, StatusCode::BAD_REQUEST);
++    assert_eq!(err["current_state"], "paused");
++    assert_eq!(api_json(&router, "POST", "/api/v1/devices/NO-SUCH-DEVICE/pause").await.0, StatusCode::NOT_FOUND);
++
++    // Regression: a *paused* paired device saying Hello must not become a pairing request.
++    harness.app_state.p2p_manager.handle_p2p_message(
++        synapse_core::p2p::P2PMessage::Hello {
++            device_id: id.into(), device_name: "Tablet".into(), folders: vec![], cluster_devices: vec![],
++        },
++        Some("192.0.2.5:9190".parse().unwrap()),
++    ).await.unwrap();
++    assert!(harness.storage.get_pending_device(id).unwrap().is_none());
++    assert_eq!(api_json(&router, "POST", &format!("/api/v1/devices/{}/resume", id)).await.0, StatusCode::OK);
++}
++
++#[tokio::test]
++async fn test_peer_presence_goes_offline_and_emits_disconnect_once() {
++    let harness = TestHarness::new();
++    let router = ApiServer::create_router(harness.app_state.clone());
++    let p2p = harness.app_state.p2p_manager.clone();
++    harness.storage.add_device(&DeviceRecord {
++        device_id: "PRESENCE-1".into(), name: "Laptop".into(), addresses: vec!["dynamic".into()],
++        is_paused: false, is_trusted: true, introducer: false, cert_name: None, created_at: 0,
++    }).unwrap();
++    let mut rx = harness.sync_engine.event_sender().subscribe();
++
++    let seen = |secs_ago: u64| synapse_core::p2p::PeerInfo {
++        device_id: "PRESENCE-1".into(), device_name: "Laptop".into(),
++        addr: "192.0.2.9:9190".parse().unwrap(),
++        last_seen: std::time::Instant::now().checked_sub(Duration::from_secs(secs_ago)).unwrap(),
++        client_type: "synapse-quic (FastCDC)".into(),
++    };
++
++    p2p.register_peer(seen(0)).await;
++    p2p.sweep_presence().await;
++    let (_, conns) = api_json(&router, "GET", "/api/v1/connections").await;
++    assert_eq!(conns["PRESENCE-1"]["connection_state"], "online");
++    assert_eq!(conns["PRESENCE-1"]["is_connected"], true);
++
++    // Quiet for longer than the presence window -> offline, one disconnect event
++    p2p.register_peer(seen(synapse_core::p2p::PEER_PRESENCE_WINDOW.as_secs() + 5)).await;
++    p2p.sweep_presence().await;
++    p2p.sweep_presence().await;
++    let (_, conns) = api_json(&router, "GET", "/api/v1/connections").await;
++    assert_eq!(conns["PRESENCE-1"]["connection_state"], "offline");
++    assert_eq!(conns["PRESENCE-1"]["is_connected"], false);
++    let mut disconnects = 0;
++    while let Ok(evt) = rx.try_recv() {
++        if matches!(evt, CoreEvent::PeerDisconnected { ref peer_id } if peer_id == "PRESENCE-1") { disconnects += 1; }
++    }
++    assert_eq!(disconnects, 1);
++    assert_eq!(harness.app_state.peer_count.load(std::sync::atomic::Ordering::Relaxed), 0);
++}
+--- a/synapse-core/tests/lifecycle_test.rs
++++ b/synapse-core/tests/lifecycle_test.rs
+@@ -0,0 +1,97 @@
++//! Engine lifecycle (`engine_lifecycle` state machine), end to end.
++//!
++//! Lives in its own test binary because the engine lifecycle is process-wide and must not
++//! race the API tests in `integration_test.rs`.
++
++use std::net::{SocketAddr, TcpListener};
++use std::time::{Duration, Instant};
++
++use synapse_core::state::{EngineLifecycleState, StateMachine};
++use synapse_core::{engine_control, SynapseConfig, SynapseCore};
++
++const TOKEN: &str = "lifecycle-test-token-0123456789abcdef";
++
++fn free_port() -> u16 {
++    TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
++}
++
++fn config(home: &std::path::Path) -> SynapseConfig {
++    SynapseConfig {
++        home_dir: home.to_path_buf(),
++        api_addr: SocketAddr::from(([127, 0, 0, 1], free_port())),
++        p2p_port: free_port(),
++        bep_port: free_port(),
++        discovery_port: free_port(),
++        auth_token: Some(TOKEN.into()),
++        device_name: "lifecycle-test".into(),
++        allowed_origins: Vec::new(),
++    }
++}
++
++/// Minimal HTTP/1.1 request over a raw socket (keeps the test free of extra dependencies).
++async fn http(addr: SocketAddr, method: &str, path: &str) -> (u16, String) {
++    use tokio::io::{AsyncReadExt, AsyncWriteExt};
++    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
++    let req = format!(
++        "{} {} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
++        method, path, addr, TOKEN
++    );
++    stream.write_all(req.as_bytes()).await.unwrap();
++    let mut buf = String::new();
++    stream.read_to_string(&mut buf).await.unwrap();
++    let code = buf.split_whitespace().nth(1).unwrap_or("0").parse().unwrap_or(0);
++    let body = buf.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
++    (code, body)
++}
++
++async fn wait_for(state: EngineLifecycleState, timeout: Duration) {
++    let start = Instant::now();
++    while engine_control().state() != state {
++        assert!(start.elapsed() < timeout, "engine never reached '{}' (is '{}')", state, engine_control().state());
++        tokio::time::sleep(Duration::from_millis(20)).await;
++    }
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn test_engine_lifecycle_start_shutdown_restart() {
++    let home = std::env::temp_dir().join(format!("synapse_lifecycle_{}", uuid::Uuid::new_v4()));
++    let ctl = engine_control();
++    assert_eq!(ctl.state(), EngineLifecycleState::Stopped);
++    // Shutdown of a stopped engine is a harmless no-op
++    assert_eq!(ctl.request_shutdown(), EngineLifecycleState::Stopped);
++
++    for round in 0..2 {
++        let cfg = config(&home);
++        let api = cfg.api_addr;
++
++        let core = SynapseCore::init(cfg).unwrap();
++        assert_eq!(ctl.state(), EngineLifecycleState::Starting);
++        // A second engine cannot start while one is starting/running
++        assert!(SynapseCore::init(config(&home)).is_err());
++
++        let run = tokio::spawn(core.run());
++        wait_for(EngineLifecycleState::Running, Duration::from_secs(5)).await;
++
++        let (code, body) = http(api, "GET", "/api/v1/system/status").await;
++        assert_eq!(code, 200, "round {}: {}", round, body);
++        let status: serde_json::Value = serde_json::from_str(&body).unwrap();
++        assert_eq!(status["engine_state"], "running");
++
++        // Graceful shutdown through the API (previously a no-op that returned 200)
++        let (code, body) = http(api, "POST", "/api/v1/system/shutdown").await;
++        assert_eq!(code, 200);
++        let resp: serde_json::Value = serde_json::from_str(&body).unwrap();
++        assert_eq!(resp["engine_state"], "stopping");
++
++        let result = tokio::time::timeout(Duration::from_secs(5), run).await;
++        assert!(result.is_ok(), "round {}: engine did not stop within 5s", round);
++        result.unwrap().unwrap().unwrap();
++        assert_eq!(ctl.state(), EngineLifecycleState::Stopped);
++        assert_eq!(ctl.state().name(), "stopped");
++
++        // The listener is gone
++        assert!(tokio::net::TcpStream::connect(api).await.is_err());
++    }
++
++    let _ = std::fs::remove_dir_all(&home);
++}

@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "synaptic-core" ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    name: Engine (synapse-core) — build, test, lint, audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: synapse-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: synapse-core
+
+      - name: Build
+        run: cargo build --locked --all-targets
+
+      - name: Test (unit, integration, lifecycle, two-node sync)
+        run: cargo test --locked
+
+      - name: Lint (bug-class lints are errors; style lints are reported)
+        run: cargo clippy --locked --all-targets -- -D clippy::correctness -D clippy::suspicious
+
+      - name: Release build without test-only features
+        run: cargo build --locked --release --bin synapse-core
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Dependency vulnerability audit
+        run: cargo audit
+
+  app:
+    name: App (Kotlin) — compile desktop + Android debug
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Compile shared + desktop (JVM)
+        run: ./gradlew :app:shared:compileKotlinJvm :app:desktopApp:compileKotlin --no-daemon
+
+      - name: Assemble Android debug
+        run: ./gradlew :app:androidApp:assembleDebug --no-daemon

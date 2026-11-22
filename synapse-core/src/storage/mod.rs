@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{params, Connection, Result as SqlResult};
+use rusqlite::{OptionalExtension, params, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 
 /// Folder synchronization configuration and policy.
@@ -88,6 +88,15 @@ pub struct DeviceRecord {
 }
 
 /// Pending incoming device pairing request.
+/// A pairing request that was rejected; further requests from this device are ignored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RejectedDeviceRecord {
+    pub device_id: String,
+    pub name: String,
+    pub address: String,
+    pub rejected_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingDeviceRecord {
     pub device_id: String,
@@ -244,6 +253,11 @@ pub struct StorageEngine {
     quarantine_dir: PathBuf,
 }
 
+/// Returns `true` if `hash` is a 64-character lowercase hex string (a BLAKE3 digest).
+pub fn is_valid_chunk_hash(hash: &str) -> bool {
+    hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 impl StorageEngine {
     /// Initializes SQLite database and block storage directories inside the home folder.
     pub fn new(home_dir: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -387,6 +401,15 @@ impl StorageEngine {
                 name TEXT NOT NULL,
                 address TEXT NOT NULL,
                 received_at INTEGER NOT NULL
+            );
+
+            -- Rejected pairing requests (device_pairing_lifecycle: rejected). Further requests
+            -- from these devices are ignored until un-rejected.
+            CREATE TABLE IF NOT EXISTS rejected_devices (
+                device_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                address TEXT NOT NULL,
+                rejected_at INTEGER NOT NULL
             );
 
             -- Folder Sharing Matrix (Which folders are shared with which devices)
@@ -862,8 +885,19 @@ impl StorageEngine {
     // PENDING PAIRING OPERATIONS
     // =========================================================================
 
+    /// Records an incoming pairing request. Ignored (no-op) for devices that are already
+    /// paired or whose requests were rejected.
     pub fn add_pending_device(&self, rec: &PendingDeviceRecord) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
+        let known: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM devices WHERE device_id = ?1)
+                 OR EXISTS(SELECT 1 FROM rejected_devices WHERE device_id = ?1)",
+            params![rec.device_id],
+            |row| row.get(0),
+        )?;
+        if known {
+            return Ok(());
+        }
         conn.execute(
             "INSERT INTO pending_devices (device_id, name, address, received_at)
              VALUES (?1, ?2, ?3, ?4)
@@ -918,37 +952,154 @@ impl StorageEngine {
     }
 
     pub fn accept_pending_device(&self, device_id: &str) -> SqlResult<()> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let mut conn = self.conn.lock().unwrap();
+        // One transaction: a crash can never leave the device both paired and pending.
+        let tx = conn.transaction()?;
+        let pending = tx.query_row(
             "SELECT device_id, name, address, received_at FROM pending_devices WHERE device_id = ?1",
+            params![device_id],
+            |row| {
+                Ok(PendingDeviceRecord {
+                    device_id: row.get(0)?,
+                    name: row.get(1)?,
+                    address: row.get(2)?,
+                    received_at: row.get(3)?,
+                })
+            },
         )?;
-        let pending = stmt.query_row(params![device_id], |row| {
-            Ok(PendingDeviceRecord {
-                device_id: row.get(0)?,
-                name: row.get(1)?,
-                address: row.get(2)?,
-                received_at: row.get(3)?,
-            })
-        })?;
 
         let addrs = vec![pending.address];
         let addrs_json = serde_json::to_string(&addrs).unwrap_or_else(|_| "[]".to_string());
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO devices (device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at)
              VALUES (?1, ?2, ?3, 0, 1, 0, NULL, ?4)
              ON CONFLICT(device_id) DO UPDATE SET name = excluded.name",
             params![pending.device_id, pending.name, addrs_json, pending.received_at],
         )?;
 
-        conn.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
-        Ok(())
+        tx.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
+        tx.commit()
     }
 
+    /// Rejects a pending pairing request and remembers the rejection so the device does not
+    /// re-appear as pending every time it announces itself. No-op if not pending.
     pub fn reject_pending_device(&self, device_id: &str) -> SqlResult<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let pending: Option<(String, String)> = tx
+            .query_row(
+                "SELECT name, address FROM pending_devices WHERE device_id = ?1",
+                params![device_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((name, address)) = pending {
+            tx.execute(
+                "INSERT INTO rejected_devices (device_id, name, address, rejected_at) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(device_id) DO UPDATE SET name = excluded.name, address = excluded.address,
+                     rejected_at = excluded.rejected_at",
+                params![device_id, name, address, chrono::Utc::now().timestamp_millis()],
+            )?;
+        }
+        tx.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
+        tx.commit()
+    }
+
+    /// Lists rejected pairing requests (most recent first).
+    pub fn list_rejected_devices(&self) -> SqlResult<Vec<RejectedDeviceRecord>> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device_id])?;
-        Ok(())
+        let mut stmt = conn.prepare(
+            "SELECT device_id, name, address, rejected_at FROM rejected_devices ORDER BY rejected_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(RejectedDeviceRecord {
+                device_id: row.get(0)?,
+                name: row.get(1)?,
+                address: row.get(2)?,
+                rejected_at: row.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Un-rejects a device: moves it back to pending so it can be accepted. Returns `false`
+    /// if the device was not rejected.
+    pub fn unreject_device(&self, device_id: &str) -> SqlResult<bool> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let rejected: Option<(String, String)> = tx
+            .query_row(
+                "SELECT name, address FROM rejected_devices WHERE device_id = ?1",
+                params![device_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((name, address)) = rejected else {
+            return Ok(false);
+        };
+        tx.execute(
+            "INSERT INTO pending_devices (device_id, name, address, received_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(device_id) DO UPDATE SET name = excluded.name, address = excluded.address",
+            params![device_id, name, address, chrono::Utc::now().timestamp_millis()],
+        )?;
+        tx.execute("DELETE FROM rejected_devices WHERE device_id = ?1", params![device_id])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Current pairing state of a device, or `None` if the engine knows nothing about it.
+    pub fn device_pairing_state(&self, device_id: &str) -> SqlResult<Option<crate::state::DevicePairingState>> {
+        use crate::state::DevicePairingState;
+        let conn = self.conn.lock().unwrap();
+        let paused: Option<bool> = conn
+            .query_row("SELECT is_paused FROM devices WHERE device_id = ?1", params![device_id], |r| r.get(0))
+            .optional()?;
+        if let Some(paused) = paused {
+            return Ok(Some(if paused { DevicePairingState::Paused } else { DevicePairingState::Paired }));
+        }
+        let pending: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pending_devices WHERE device_id = ?1)",
+            params![device_id],
+            |r| r.get(0),
+        )?;
+        if pending {
+            return Ok(Some(DevicePairingState::Pending));
+        }
+        let rejected: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM rejected_devices WHERE device_id = ?1)",
+            params![device_id],
+            |r| r.get(0),
+        )?;
+        Ok(if rejected { Some(DevicePairingState::Rejected) } else { None })
+    }
+
+    /// Applies a pairing action (accept, reject, pause, resume, unreject) with guarded
+    /// transitions. Illegal actions return a structured `StateTransitionError`; unknown devices
+    /// return `EntityNotFound`. Returns the resulting state.
+    pub fn apply_device_action(
+        &self,
+        device_id: &str,
+        action: crate::state::DeviceAction,
+    ) -> Result<crate::state::DevicePairingState, Box<dyn std::error::Error + Send + Sync>> {
+        use crate::state::{DeviceAction as A, EntityNotFound};
+        let current = self.device_pairing_state(device_id)?.ok_or_else(|| EntityNotFound {
+            entity: "device".into(),
+            entity_id: device_id.into(),
+        })?;
+        let target = action.check(device_id, current)?;
+        if current != target {
+            match action {
+                A::Accept => self.accept_pending_device(device_id)?,
+                A::Reject => self.reject_pending_device(device_id)?,
+                A::Pause => self.set_device_paused(device_id, true)?,
+                A::Resume => self.set_device_paused(device_id, false)?,
+                A::Unreject => {
+                    self.unreject_device(device_id)?;
+                }
+            }
+        }
+        Ok(target)
     }
 
     // =========================================================================
@@ -1293,18 +1444,24 @@ impl StorageEngine {
     // CAS BLOCK STORAGE OPERATIONS
     // =========================================================================
 
-    fn get_chunk_file_path(&self, chunk_hash: &str) -> PathBuf {
-        let prefix = if chunk_hash.len() >= 2 { &chunk_hash[0..2] } else { "xx" };
-        let dir = self.blocks_dir.join(prefix);
-        if !dir.exists() {
-            let _ = fs::create_dir_all(&dir);
+    /// Maps a chunk hash to its CAS file path. Returns `None` for anything that is
+    /// not a 64-character lowercase hex BLAKE3 digest, so hashes received from
+    /// peers can never escape the blocks directory (e.g. `../../x`).
+    fn get_chunk_file_path(&self, chunk_hash: &str) -> Option<PathBuf> {
+        if !is_valid_chunk_hash(chunk_hash) {
+            return None;
         }
-        dir.join(format!("{}.chunk", chunk_hash))
+        Some(self.blocks_dir.join(&chunk_hash[0..2]).join(format!("{}.chunk", chunk_hash)))
     }
 
     /// Stores a chunk payload in the CAS store and updates the reference count in SQLite.
     pub fn put_chunk(&self, chunk_hash: &str, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let file_path = self.get_chunk_file_path(chunk_hash);
+        let file_path = self
+            .get_chunk_file_path(chunk_hash)
+            .ok_or_else(|| format!("invalid chunk hash: {:?}", chunk_hash))?;
+        if let Some(dir) = file_path.parent() {
+            fs::create_dir_all(dir)?;
+        }
         let exists = file_path.exists();
 
         if !exists {
@@ -1326,7 +1483,10 @@ impl StorageEngine {
 
     /// Reads chunk payload bytes from the CAS block store.
     pub fn get_chunk(&self, chunk_hash: &str) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-        let file_path = self.get_chunk_file_path(chunk_hash);
+        let file_path = match self.get_chunk_file_path(chunk_hash) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
         if !file_path.exists() {
             return Ok(None);
         }
@@ -1354,9 +1514,27 @@ impl StorageEngine {
         }
     }
 
+    /// Whether a chunk belongs to the current revision of a file in a folder shared with
+    /// `device_id` (i.e. whether that peer may download it).
+    pub fn chunk_visible_to_device(&self, chunk_hash: &str, device_id: &str) -> SqlResult<bool> {
+        if !is_valid_chunk_hash(chunk_hash) {
+            return Ok(false);
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM file_chunks fc
+                JOIN files f ON f.current_revision = fc.revision_hash
+                JOIN folder_devices fd ON fd.folder_id = f.folder_id
+                WHERE fc.chunk_hash = ?1 AND fd.device_id = ?2)",
+            params![chunk_hash, device_id],
+            |row| row.get(0),
+        )
+    }
+
     /// Checks if a chunk is locally available in CAS.
     pub fn has_chunk(&self, chunk_hash: &str) -> bool {
-        self.get_chunk_file_path(chunk_hash).exists()
+        self.get_chunk_file_path(chunk_hash).is_some_and(|p| p.exists())
     }
 
     /// Assembles an entire file from its ordered chunk list.
@@ -1526,6 +1704,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_chunk_hash_path_traversal_rejected() {
+        let temp_dir = std::env::temp_dir().join(format!("synapse_chunk_trav_{}", uuid::Uuid::new_v4()));
+        let engine = StorageEngine::new(&temp_dir).unwrap();
+
+        let escape_target = temp_dir.join("escaped");
+        let evil = format!("../../{}", escape_target.display());
+        for bad in [evil.as_str(), "../x", "", "zz", "é€", &"A".repeat(64), &"g".repeat(64)] {
+            assert!(engine.put_chunk(bad, b"payload").is_err(), "accepted bad hash {:?}", bad);
+            assert!(engine.get_chunk(bad).unwrap().is_none());
+            assert!(!engine.has_chunk(bad));
+        }
+        assert!(!temp_dir.join("escaped.chunk").exists());
+
+        // A real BLAKE3 hash still round-trips.
+        let data = b"hello chunk";
+        let hash = blake3::hash(data).to_hex().to_string();
+        engine.put_chunk(&hash, data).unwrap();
+        assert!(engine.has_chunk(&hash));
+        assert_eq!(engine.get_chunk(&hash).unwrap().unwrap(), data);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn test_storage_engine_crud() {
         let temp_dir = std::env::temp_dir().join(format!("synapse_test_{}", uuid::Uuid::new_v4()));
         let engine = StorageEngine::new(&temp_dir).unwrap();
@@ -1560,8 +1762,9 @@ mod tests {
         assert_eq!(shared_devs, vec![dev.device_id.clone()]);
 
         // 2. Put chunk and check CAS
-        let chunk_hash = "abc1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd";
         let chunk_data = b"Synapse CAS test block payload";
+        let chunk_hash_owned = blake3::hash(chunk_data).to_hex().to_string();
+        let chunk_hash = chunk_hash_owned.as_str();
         engine.put_chunk(chunk_hash, chunk_data).unwrap();
         assert!(engine.has_chunk(chunk_hash));
         let retrieved = engine.get_chunk(chunk_hash).unwrap().unwrap();

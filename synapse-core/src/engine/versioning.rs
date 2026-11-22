@@ -548,8 +548,76 @@ pub fn cleanup_expired_versions_at(
     Ok(report)
 }
 
-/// Executes an external custom versioning script when a file is modified or deleted.
-/// Substitutes `%FOLDER_PATH%`, `%FILE_PATH%`, and `%FULL_PATH%` placeholders.
+/// Splits a command template into program + arguments without invoking a shell.
+///
+/// Supports whitespace separation, single quotes (literal), double quotes, and
+/// (on Unix) backslash escapes. Returns `None` for unterminated quotes.
+pub fn split_command_template(template: &str) -> Option<Vec<String>> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_token = false;
+    let mut chars = template.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                in_token = true;
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(ch) => current.push(ch),
+                        None => return None,
+                    }
+                }
+            }
+            '"' => {
+                in_token = true;
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        #[cfg(unix)]
+                        Some('\\') => current.push(chars.next()?),
+                        Some(ch) => current.push(ch),
+                        None => return None,
+                    }
+                }
+            }
+            #[cfg(unix)]
+            '\\' => {
+                in_token = true;
+                if let Some(ch) = chars.next() {
+                    current.push(ch);
+                }
+            }
+            c if c.is_whitespace() => {
+                if in_token {
+                    args.push(std::mem::take(&mut current));
+                    in_token = false;
+                }
+            }
+            c => {
+                in_token = true;
+                current.push(c);
+            }
+        }
+    }
+    if in_token {
+        args.push(current);
+    }
+    Some(args)
+}
+
+/// Executes an external custom versioning program when a file is modified or deleted.
+///
+/// The template is split into a program and arguments **before** placeholders are
+/// substituted, and the program is started directly — never through `sh -c` or
+/// `cmd /C`. A substituted path is always exactly one argument, so file names
+/// received from peers cannot inject commands. Supported placeholders:
+/// `%FOLDER_PATH%`, `%FILE_PATH%`, `%FULL_PATH%`. The same values are also exported
+/// as `STFOLDERPATH` / `STFILEPATH` environment variables.
+///
+/// To use shell features, invoke a shell explicitly and reference the environment
+/// variables, e.g. `sh -c 'cp "$STFOLDERPATH/$STFILEPATH" /backup/'`.
 pub fn execute_external_versioning(
     folder_root: &Path,
     relative_path: &str,
@@ -563,31 +631,31 @@ pub fn execute_external_versioning(
     let file_str = relative_path.to_string();
     let full_path = folder_root.join(relative_path).to_string_lossy().to_string();
 
-    let cmd = command_template
-        .replace("%FOLDER_PATH%", &folder_str)
-        .replace("%FILE_PATH%", &file_str)
-        .replace("%FULL_PATH%", &full_path);
+    let tokens = split_command_template(command_template)
+        .ok_or("external versioning command has an unterminated quote")?;
+    let mut args = tokens.into_iter().map(|arg| {
+        arg.replace("%FOLDER_PATH%", &folder_str)
+            .replace("%FILE_PATH%", &file_str)
+            .replace("%FULL_PATH%", &full_path)
+    });
+    let program = args.next().ok_or("external versioning command is empty")?;
+    let args: Vec<String> = args.collect();
 
-    tracing::info!("Executing external file versioning script: {}", cmd);
+    tracing::info!(
+        "Executing external file versioning program: {} (args: {:?})",
+        program,
+        args
+    );
 
-    #[cfg(unix)]
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .env("STFOLDERPATH", &folder_str)
-        .env("STFILEPATH", &file_str)
-        .spawn()?;
-
-    #[cfg(windows)]
-    let mut child = std::process::Command::new("cmd")
-        .args(["/C", &cmd])
+    let mut child = std::process::Command::new(&program)
+        .args(&args)
         .env("STFOLDERPATH", &folder_str)
         .env("STFILEPATH", &file_str)
         .spawn()?;
 
     let status = child.wait()?;
     if !status.success() {
-        tracing::warn!("External versioning script exited with non-zero status: {:?}", status.code());
+        tracing::warn!("External versioning program exited with non-zero status: {:?}", status.code());
     }
 
     Ok(())
@@ -906,6 +974,49 @@ mod tests {
         // Verify script created the backup file
         assert!(out_backup.exists());
         assert_eq!(fs::read(&out_backup).unwrap(), b"content to archive");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_split_command_template_quoting() {
+        assert_eq!(
+            split_command_template("cp %FULL_PATH% '/backup dir/'").unwrap(),
+            vec!["cp", "%FULL_PATH%", "/backup dir/"]
+        );
+        assert_eq!(
+            split_command_template("  prog   \"a b\"  c ").unwrap(),
+            vec!["prog", "a b", "c"]
+        );
+        assert!(split_command_template("prog 'unterminated").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_external_versioning_rejects_filename_injection() {
+        let temp_dir = std::env::temp_dir().join(format!("synapse_ext_inj_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let canary = temp_dir.join("PWNED");
+        // Malicious file names a peer could send. Each would run `touch PWNED`
+        // if the path were interpolated into a shell string.
+        let evil_names = [
+            format!("a;touch {}", canary.display()),
+            format!("$(touch {})", canary.display()),
+            format!("`touch {}`", canary.display()),
+            format!("x && touch {}", canary.display()),
+        ];
+        for name in &evil_names {
+            // `true` ignores its arguments; only a shell would execute the payload.
+            let _ = execute_external_versioning(&temp_dir, name, "true %FILE_PATH% %FULL_PATH%");
+        }
+        assert!(!canary.exists(), "file name was executed as a shell command");
+
+        // The path arrives as one literal argument.
+        let out = temp_dir.join("argv.txt");
+        let cmd = format!("sh -c 'printf %s \"$1\" > {}' _ %FILE_PATH%", out.display());
+        execute_external_versioning(&temp_dir, "a;b $(c).txt", &cmd).unwrap();
+        assert_eq!(fs::read_to_string(&out).unwrap(), "a;b $(c).txt");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

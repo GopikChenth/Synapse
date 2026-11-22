@@ -44,6 +44,25 @@ android {
             enableV3Signing = true
             enableV4Signing = true
         }
+        // Release key: from CI secrets (env vars) or local ~/.gradle/gradle.properties.
+        // See docs/RELEASE_SIGNING.md. Never commit the keystore or its passwords.
+        val releaseKeystore = System.getenv("SYNAPSE_KEYSTORE_FILE")
+            ?: (project.findProperty("synapse.keystore.file") as String?)
+        if (releaseKeystore != null && file(releaseKeystore).exists()) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("SYNAPSE_KEYSTORE_PASSWORD")
+                    ?: (project.findProperty("synapse.keystore.password") as String?)
+                keyAlias = System.getenv("SYNAPSE_KEY_ALIAS")
+                    ?: (project.findProperty("synapse.key.alias") as String?)
+                keyPassword = System.getenv("SYNAPSE_KEY_PASSWORD")
+                    ?: (project.findProperty("synapse.key.password") as String?)
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
     }
     packaging {
         jniLibs {
@@ -57,7 +76,11 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("debug")
+            // Real release key when configured; otherwise debug (local builds keep working,
+            // but debug-signed releases cannot update each other or go on Google Play).
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug").also {
+                logger.warn("Synapse: no release signing key configured — release APK will be DEBUG-signed. See docs/RELEASE_SIGNING.md")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

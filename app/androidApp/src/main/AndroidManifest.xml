@@ -20,7 +20,7 @@
 
     <application
         android:name=".SynapseApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@drawable/logo"
         android:label="@string/app_name"
         android:roundIcon="@drawable/logo"
@@ -52,7 +52,7 @@
             android:exported="false">
             <property 
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" 
-                android:value="Synapse is a continuous peer-to-peer file synchronization app wrapper. It runs the local Syncthing daemon process in the background to sync folders with connected devices." />
+                android:value="Synapse is a continuous peer-to-peer file synchronization app. It runs the local Synapse Core sync engine in the background to keep folders in sync with your paired devices." />
         </service>
         
         <!-- Boot Receiver for Auto-Start -->

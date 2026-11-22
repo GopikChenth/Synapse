@@ -530,6 +530,34 @@ impl RelaySession {
 
 #[cfg(test)]
 mod tests {
+
+    /// The relay entry in the state-machine registry is hand-written; this guards against it
+    /// drifting from the transitions `RelaySession` actually enforces.
+    #[test]
+    fn test_relay_registry_matches_enforced_transitions() {
+        use RelaySessionState::*;
+        let all = [Disconnected, Connecting, Joined, Invited, Active, Closed];
+        let name = |s: RelaySessionState| match s {
+            Disconnected => "disconnected", Connecting => "connecting", Joined => "joined",
+            Invited => "invited", Active => "active", Closed => "closed",
+        };
+        let registry = crate::state::get_all_state_machines();
+        let def = registry.iter().find(|m| m.machine_id == "relay_session_lifecycle").unwrap();
+        assert_eq!(def.states.len(), all.len());
+        for from in all {
+            let mut session = RelaySession::new("s".into(), "a".into(), "b".into(), "r".into());
+            session.state = from;
+            let enforced: Vec<&str> = all.iter().copied()
+                .filter(|&to| to != from && session.can_transition_to(to))
+                .map(name).collect();
+            let meta = def.states.iter().find(|m| m.state == name(from)).unwrap();
+            let mut documented: Vec<&str> = meta.allowed_transitions.iter().map(String::as_str).collect();
+            let mut enforced_sorted = enforced.clone();
+            documented.sort(); enforced_sorted.sort();
+            assert_eq!(documented, enforced_sorted, "registry drift for relay state '{}'", name(from));
+            assert_eq!(meta.is_terminal, enforced.is_empty(), "terminal flag drift for '{}'", name(from));
+        }
+    }
     use super::*;
     use rand::rngs::OsRng;
 

@@ -84,6 +84,145 @@ impl fmt::Display for StateTransitionError {
 impl std::error::Error for StateTransitionError {}
 
 // =============================================================================
+// 1b. SHARED STATE MACHINE TRAIT
+// =============================================================================
+
+/// Common contract for every lifecycle in Synapse Core.
+///
+/// Implement the handful of required items and every machine gets — for free and
+/// identically — guarded transitions with structured errors, introspection metadata,
+/// and a registry definition. This is the one place to look when adding a lifecycle:
+/// no hand-written `StateTransitionError`s, no hand-written registry JSON.
+pub trait StateMachine: Copy + Eq + fmt::Debug + Send + Sync + 'static {
+    /// Stable registry id, e.g. `"folder_sync_lifecycle"`.
+    const MACHINE_ID: &'static str;
+    /// Human-friendly title.
+    const DISPLAY_NAME: &'static str;
+    /// Subsystem the machine belongs to (`"engine"`, `"cluster"`, `"p2p"`, ...).
+    const SUBSYSTEM: &'static str;
+    /// What the machine governs.
+    const DESCRIPTION: &'static str;
+    /// Entity kind reported in transition errors (`"folder"`, `"device"`, ...).
+    const ENTITY: &'static str;
+
+    /// Every state, in display order.
+    fn states() -> &'static [Self];
+    /// State a new entity starts in.
+    fn initial() -> Self;
+    /// Canonical wire name of the state (stable; used in JSON and errors).
+    fn name(&self) -> &'static str;
+    /// Human/agent-readable explanation of the state.
+    fn describe(&self) -> &'static str;
+    /// Terminal states have no way out.
+    fn terminal(&self) -> bool {
+        false
+    }
+    /// Whether moving to `next` is legal. Staying in the same state should be allowed
+    /// when the operation is idempotent.
+    fn permits(&self, next: Self) -> bool;
+    /// User/agent actions that make sense in this state.
+    fn actions(&self) -> Vec<&'static str>;
+
+    /// States reachable in one step (excluding staying put).
+    fn successors(&self) -> Vec<Self> {
+        Self::states().iter().copied().filter(|n| *n != *self && self.permits(*n)).collect()
+    }
+
+    /// Whether an action name is currently available.
+    fn allows_action(&self, action: &str) -> bool {
+        self.actions().iter().any(|a| a.eq_ignore_ascii_case(action))
+    }
+
+    /// Introspection metadata for this state.
+    fn meta(&self) -> StateMetadata {
+        StateMetadata {
+            state: self.name().to_string(),
+            description: self.describe().to_string(),
+            is_terminal: self.terminal(),
+            allowed_transitions: self.successors().iter().map(|s| s.name().to_string()).collect(),
+            available_actions: self.actions().into_iter().map(String::from).collect(),
+        }
+    }
+
+    /// Structured error describing why `attempted` is not possible from this state.
+    fn rejection(&self, entity_id: &str, attempted: &str) -> StateTransitionError {
+        StateTransitionError {
+            entity: Self::ENTITY.to_string(),
+            entity_id: entity_id.to_string(),
+            current_state: self.name().to_string(),
+            attempted_transition: attempted.to_string(),
+            allowed_transitions: self.successors().iter().map(|s| s.name().to_string()).collect(),
+            available_actions: self.actions().into_iter().map(String::from).collect(),
+            is_terminal: self.terminal(),
+        }
+    }
+
+    /// Guarded transition: `Ok(next)` if legal, otherwise a structured error that tells
+    /// the caller (UI or agent) what *is* possible.
+    #[allow(clippy::result_large_err)] // rich, rarely-constructed public error type by design
+    fn transition(&self, entity_id: &str, next: Self) -> Result<Self, StateTransitionError> {
+        if self.permits(next) {
+            Ok(next)
+        } else {
+            Err(self.rejection(entity_id, next.name()))
+        }
+    }
+
+    /// Registry definition, generated from the items above.
+    fn definition() -> StateMachineDef {
+        StateMachineDef {
+            machine_id: Self::MACHINE_ID.to_string(),
+            display_name: Self::DISPLAY_NAME.to_string(),
+            subsystem: Self::SUBSYSTEM.to_string(),
+            description: Self::DESCRIPTION.to_string(),
+            initial_state: Self::initial().name().to_string(),
+            states: Self::states().iter().map(|s| s.meta()).collect(),
+        }
+    }
+}
+
+/// Snapshot of one entity's lifecycle, suitable for embedding in API responses so
+/// clients render state and enable actions from the server instead of re-deriving them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LifecycleView {
+    pub machine_id: String,
+    pub state: String,
+    pub description: String,
+    pub is_terminal: bool,
+    pub allowed_transitions: Vec<String>,
+    pub available_actions: Vec<String>,
+}
+
+impl LifecycleView {
+    pub fn of<S: StateMachine>(state: S) -> Self {
+        let meta = state.meta();
+        Self {
+            machine_id: S::MACHINE_ID.to_string(),
+            state: meta.state,
+            description: meta.description,
+            is_terminal: meta.is_terminal,
+            allowed_transitions: meta.allowed_transitions,
+            available_actions: meta.available_actions,
+        }
+    }
+}
+
+/// Returned when an operation targets an entity that does not exist (maps to HTTP 404).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntityNotFound {
+    pub entity: String,
+    pub entity_id: String,
+}
+
+impl fmt::Display for EntityNotFound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} '{}' not found", self.entity, self.entity_id)
+    }
+}
+
+impl std::error::Error for EntityNotFound {}
+
+// =============================================================================
 // 2. CONFLICT LIFECYCLE STATE MACHINE
 // =============================================================================
 
@@ -492,7 +631,7 @@ impl DevicePairingState {
             Self::Pending => "Device pairing request is pending user or agent confirmation",
             Self::Paired => "Device is mutually paired and participating in the cluster",
             Self::Paused => "Device communication is temporarily paused",
-            Self::Rejected => "Device pairing request was rejected",
+            Self::Rejected => "Device pairing request was rejected; further requests from it are ignored until un-rejected",
         }
     }
 
@@ -502,6 +641,8 @@ impl DevicePairingState {
             (Self::Pending, Self::Rejected) => true,
             (Self::Paired, Self::Paused) => true,
             (Self::Paused, Self::Paired) => true,
+            // Un-reject: the device may ask to pair again
+            (Self::Rejected, Self::Pending) => true,
             (s1, s2) if *s1 == s2 => true,
             _ => false,
         }
@@ -520,7 +661,7 @@ impl DevicePairingState {
             Self::Pending => vec!["ACCEPT", "REJECT"],
             Self::Paired => vec!["PAUSE", "REMOVE", "SHARE_FOLDER", "UNSHARE_FOLDER"],
             Self::Paused => vec!["RESUME", "REMOVE"],
-            Self::Rejected => vec![],
+            Self::Rejected => vec!["UNREJECT"],
         }
     }
 
@@ -528,7 +669,7 @@ impl DevicePairingState {
         StateMetadata {
             state: self.as_str().to_string(),
             description: self.description().to_string(),
-            is_terminal: matches!(self, Self::Rejected),
+            is_terminal: false,
             allowed_transitions: self
                 .allowed_transitions()
                 .into_iter()
@@ -636,6 +777,296 @@ impl ConflictPipelineTier {
     }
 }
 
+
+// =============================================================================
+// 8b. StateMachine IMPLEMENTATIONS (existing enums keep their inherent API)
+// =============================================================================
+
+impl StateMachine for ConflictStatus {
+    const MACHINE_ID: &'static str = "conflict_lifecycle";
+    const DISPLAY_NAME: &'static str = "Quarantine Conflict Resolution State Machine";
+    const SUBSYSTEM: &'static str = "conflict";
+    const DESCRIPTION: &'static str = "Controls the staging, inspection, and 3-way resolution of divergent concurrent edits without filesystem pollution.";
+    const ENTITY: &'static str = "conflict";
+    fn states() -> &'static [Self] { &Self::ALL }
+    fn initial() -> Self { Self::Pending }
+    fn name(&self) -> &'static str { self.as_str() }
+    fn describe(&self) -> &'static str { self.description() }
+    fn terminal(&self) -> bool { self.is_terminal() }
+    fn permits(&self, next: Self) -> bool { self.can_transition_to(next) }
+    fn actions(&self) -> Vec<&'static str> { self.available_actions() }
+    fn successors(&self) -> Vec<Self> { self.allowed_transitions() }
+}
+
+impl StateMachine for FolderSyncState {
+    const MACHINE_ID: &'static str = "folder_sync_lifecycle";
+    const DISPLAY_NAME: &'static str = "Folder Synchronization Lifecycle State Machine";
+    const SUBSYSTEM: &'static str = "engine";
+    const DESCRIPTION: &'static str = "Monitors the continuous indexing, delta chunking, and block transfer phases for registered synchronization roots.";
+    const ENTITY: &'static str = "folder";
+    fn states() -> &'static [Self] { &Self::ALL }
+    fn initial() -> Self { Self::Idle }
+    fn name(&self) -> &'static str { self.as_str() }
+    fn describe(&self) -> &'static str { self.description() }
+    fn terminal(&self) -> bool { self.is_terminal() }
+    fn permits(&self, next: Self) -> bool { self.can_transition_to(next) }
+    fn actions(&self) -> Vec<&'static str> { self.available_actions() }
+    fn successors(&self) -> Vec<Self> { self.allowed_transitions() }
+}
+
+/// User/agent commands on a device. Each is only valid from specific states, so e.g.
+/// "accept" cannot be used to resume a paused device even though both end in `paired`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceAction {
+    Accept,
+    Reject,
+    Pause,
+    Resume,
+    Unreject,
+}
+
+impl DeviceAction {
+    /// Action name as listed in `available_actions`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Accept => "ACCEPT",
+            Self::Reject => "REJECT",
+            Self::Pause => "PAUSE",
+            Self::Resume => "RESUME",
+            Self::Unreject => "UNREJECT",
+        }
+    }
+
+    /// State the device ends up in.
+    pub fn target(&self) -> DevicePairingState {
+        match self {
+            Self::Accept | Self::Resume => DevicePairingState::Paired,
+            Self::Reject => DevicePairingState::Rejected,
+            Self::Pause => DevicePairingState::Paused,
+            Self::Unreject => DevicePairingState::Pending,
+        }
+    }
+
+    /// Validates the action from `current`. Repeating an action whose result already holds
+    /// (pausing a paused device, accepting a paired one) is an idempotent no-op.
+    #[allow(clippy::result_large_err)]
+    pub fn check(&self, device_id: &str, current: DevicePairingState) -> Result<DevicePairingState, StateTransitionError> {
+        let target = self.target();
+        if current == target {
+            return Ok(target);
+        }
+        if !current.allows_action(self.name()) {
+            return Err(current.rejection(device_id, target.name()));
+        }
+        current.transition(device_id, target)
+    }
+}
+
+impl StateMachine for DevicePairingState {
+    const MACHINE_ID: &'static str = "device_pairing_lifecycle";
+    const DISPLAY_NAME: &'static str = "Cluster Device Pairing State Machine";
+    const SUBSYSTEM: &'static str = "cluster";
+    const DESCRIPTION: &'static str = "Governs node discovery, mutual cryptographic handshake, trust verification, and cluster participation.";
+    const ENTITY: &'static str = "device";
+    fn states() -> &'static [Self] { &Self::ALL }
+    fn initial() -> Self { Self::Pending }
+    fn name(&self) -> &'static str { self.as_str() }
+    fn describe(&self) -> &'static str { self.description() }
+    fn permits(&self, next: Self) -> bool { self.can_transition_to(next) }
+    fn actions(&self) -> Vec<&'static str> { self.available_actions() }
+    fn successors(&self) -> Vec<Self> { self.allowed_transitions() }
+}
+
+// =============================================================================
+// 10. PEER CONNECTION STATE MACHINE
+// =============================================================================
+
+/// Live network presence of a paired device, derived from when it was last heard from.
+///
+/// Replaces the old implicit rule `is_connected = !is_paused`, which reported every
+/// unpaused device as connected even if it had never been seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PeerConnectionState {
+    /// Paired, but not heard from since this engine started.
+    #[default]
+    Unknown,
+    /// Heard from within the presence window.
+    Online,
+    /// Was online, but has not been heard from within the presence window.
+    Offline,
+    /// Communication with the device is paused by the user.
+    Paused,
+}
+
+impl PeerConnectionState {
+    pub const ALL: [PeerConnectionState; 4] = [Self::Unknown, Self::Online, Self::Offline, Self::Paused];
+
+    /// Derives the state from facts. `seen_secs_ago` is `None` if never seen.
+    pub fn derive(paused: bool, seen_secs_ago: Option<u64>, presence_window_secs: u64) -> Self {
+        if paused {
+            return Self::Paused;
+        }
+        match seen_secs_ago {
+            None => Self::Unknown,
+            Some(age) if age <= presence_window_secs => Self::Online,
+            Some(_) => Self::Offline,
+        }
+    }
+
+    pub fn is_connected(&self) -> bool {
+        matches!(self, Self::Online)
+    }
+}
+
+impl StateMachine for PeerConnectionState {
+    const MACHINE_ID: &'static str = "peer_connection_lifecycle";
+    const DISPLAY_NAME: &'static str = "Peer Connection Presence State Machine";
+    const SUBSYSTEM: &'static str = "p2p";
+    const DESCRIPTION: &'static str = "Tracks whether a paired device is currently reachable, based on discovery and protocol traffic within a presence window.";
+    const ENTITY: &'static str = "peer";
+    fn states() -> &'static [Self] { &Self::ALL }
+    fn initial() -> Self { Self::Unknown }
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Online => "online",
+            Self::Offline => "offline",
+            Self::Paused => "paused",
+        }
+    }
+    fn describe(&self) -> &'static str {
+        match self {
+            Self::Unknown => "Device is paired but has not been seen on the network since the engine started",
+            Self::Online => "Device was heard from within the presence window and is reachable",
+            Self::Offline => "Device was seen before but has not been heard from within the presence window",
+            Self::Paused => "Communication with this device is paused",
+        }
+    }
+    fn permits(&self, next: Self) -> bool {
+        use PeerConnectionState::*;
+        matches!(
+            (self, next),
+            (Unknown, Online) | (Unknown, Paused)
+                | (Online, Offline) | (Online, Paused)
+                | (Offline, Online) | (Offline, Paused)
+                | (Paused, Unknown) | (Paused, Online) | (Paused, Offline)
+        ) || *self == next
+    }
+    fn actions(&self) -> Vec<&'static str> {
+        match self {
+            Self::Paused => vec!["RESUME"],
+            _ => vec!["PAUSE"],
+        }
+    }
+}
+
+impl fmt::Display for PeerConnectionState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+// =============================================================================
+// 11. ENGINE LIFECYCLE STATE MACHINE
+// =============================================================================
+
+/// Lifecycle of the Synapse Core engine process / library instance.
+///
+/// Replaces the implicit `RUNNING: AtomicBool` and the no-op shutdown endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EngineLifecycleState {
+    /// Not running.
+    #[default]
+    Stopped,
+    /// Opening storage, loading identity, binding listeners.
+    Starting,
+    /// Serving the API and syncing.
+    Running,
+    /// Graceful shutdown requested; finishing in-flight work.
+    Stopping,
+    /// Startup or runtime failure; can be started again.
+    Failed,
+}
+
+impl EngineLifecycleState {
+    pub const ALL: [EngineLifecycleState; 5] =
+        [Self::Stopped, Self::Starting, Self::Running, Self::Stopping, Self::Failed];
+
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Self::Stopped => 0,
+            Self::Starting => 1,
+            Self::Running => 2,
+            Self::Stopping => 3,
+            Self::Failed => 4,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Starting,
+            2 => Self::Running,
+            3 => Self::Stopping,
+            4 => Self::Failed,
+            _ => Self::Stopped,
+        }
+    }
+}
+
+impl StateMachine for EngineLifecycleState {
+    const MACHINE_ID: &'static str = "engine_lifecycle";
+    const DISPLAY_NAME: &'static str = "Engine Process Lifecycle State Machine";
+    const SUBSYSTEM: &'static str = "engine";
+    const DESCRIPTION: &'static str = "Start-up, steady operation, and graceful shutdown of the Synapse Core engine (daemon or embedded library).";
+    const ENTITY: &'static str = "engine";
+    fn states() -> &'static [Self] { &Self::ALL }
+    fn initial() -> Self { Self::Stopped }
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Failed => "failed",
+        }
+    }
+    fn describe(&self) -> &'static str {
+        match self {
+            Self::Stopped => "Engine is not running",
+            Self::Starting => "Engine is opening storage, loading identity, and binding listeners",
+            Self::Running => "Engine is serving the control API and synchronizing folders",
+            Self::Stopping => "Graceful shutdown in progress; in-flight work is finishing",
+            Self::Failed => "Engine failed to start or stopped unexpectedly",
+        }
+    }
+    fn permits(&self, next: Self) -> bool {
+        use EngineLifecycleState::*;
+        matches!(
+            (self, next),
+            (Stopped, Starting)
+                | (Starting, Running) | (Starting, Failed) | (Starting, Stopping)
+                | (Running, Stopping) | (Running, Failed)
+                | (Stopping, Stopped)
+                | (Failed, Starting)
+        ) || *self == next
+    }
+    fn actions(&self) -> Vec<&'static str> {
+        match self {
+            Self::Stopped | Self::Failed => vec!["START"],
+            Self::Starting | Self::Running => vec!["SHUTDOWN"],
+            Self::Stopping => vec![],
+        }
+    }
+}
+
+impl fmt::Display for EngineLifecycleState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 // =============================================================================
 // 9. COMPLETE STATE MACHINE REGISTRY & INTROSPECTION
 // =============================================================================
@@ -645,30 +1076,9 @@ impl ConflictPipelineTier {
 /// Designed specifically for AI agent discovery (AX) and dynamic runtime verification.
 pub fn get_all_state_machines() -> Vec<StateMachineDef> {
     vec![
-        StateMachineDef {
-            machine_id: "conflict_lifecycle".to_string(),
-            display_name: "Quarantine Conflict Resolution State Machine".to_string(),
-            subsystem: "conflict".to_string(),
-            description: "Controls the staging, inspection, and 3-way resolution of divergent concurrent edits without filesystem pollution.".to_string(),
-            initial_state: ConflictStatus::Pending.as_str().to_string(),
-            states: ConflictStatus::ALL.iter().map(|s| s.metadata()).collect(),
-        },
-        StateMachineDef {
-            machine_id: "folder_sync_lifecycle".to_string(),
-            display_name: "Folder Synchronization Lifecycle State Machine".to_string(),
-            subsystem: "engine".to_string(),
-            description: "Monitors the continuous indexing, delta chunking, and block transfer phases for registered synchronization roots.".to_string(),
-            initial_state: FolderSyncState::Idle.as_str().to_string(),
-            states: FolderSyncState::ALL.iter().map(|s| s.metadata()).collect(),
-        },
-        StateMachineDef {
-            machine_id: "device_pairing_lifecycle".to_string(),
-            display_name: "Cluster Device Pairing State Machine".to_string(),
-            subsystem: "cluster".to_string(),
-            description: "Governs node discovery, mutual cryptographic handshake, trust verification, and cluster participation.".to_string(),
-            initial_state: DevicePairingState::Pending.as_str().to_string(),
-            states: DevicePairingState::ALL.iter().map(|s| s.metadata()).collect(),
-        },
+        ConflictStatus::definition(),
+        FolderSyncState::definition(),
+        DevicePairingState::definition(),
         StateMachineDef {
             machine_id: "relay_session_lifecycle".to_string(),
             display_name: "Encrypted Relay Fallback Session State Machine".to_string(),
@@ -757,6 +1167,8 @@ pub fn get_all_state_machines() -> Vec<StateMachineDef> {
                 },
             ],
         },
+        PeerConnectionState::definition(),
+        EngineLifecycleState::definition(),
     ]
 }
 
@@ -821,7 +1233,7 @@ mod tests {
     #[test]
     fn test_all_state_machines_registry_intact() {
         let registry = get_all_state_machines();
-        assert_eq!(registry.len(), 5);
+        assert_eq!(registry.len(), 7);
 
         let conflict_sm = registry.iter().find(|m| m.machine_id == "conflict_lifecycle").unwrap();
         assert_eq!(conflict_sm.initial_state, "PENDING");
@@ -830,5 +1242,128 @@ mod tests {
         let folder_sm = registry.iter().find(|m| m.machine_id == "folder_sync_lifecycle").unwrap();
         assert_eq!(folder_sm.initial_state, "idle");
         assert_eq!(folder_sm.states.len(), 5);
+    }
+
+    // ---------------------------------------------------------------------
+    // Shared StateMachine trait: invariants that every machine must satisfy
+    // ---------------------------------------------------------------------
+
+    fn check_machine<S: StateMachine>() {
+        let states = S::states();
+        assert!(states.contains(&S::initial()), "{}: initial state not in states()", S::MACHINE_ID);
+        let mut names: Vec<&str> = states.iter().map(|s| s.name()).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), states.len(), "{}: duplicate state names", S::MACHINE_ID);
+        for s in states {
+            assert!(s.permits(*s) || s.terminal(), "{}: '{}' should allow idempotent re-entry", S::MACHINE_ID, s.name());
+            for n in s.successors() {
+                assert!(s.permits(n), "{}: successor '{}' of '{}' not permitted", S::MACHINE_ID, n.name(), s.name());
+                assert!(s.transition("x", n).is_ok());
+            }
+            for n in states {
+                if !s.permits(*n) {
+                    let err = s.transition("id-1", *n).unwrap_err();
+                    assert_eq!(err.entity, S::ENTITY);
+                    assert_eq!(err.entity_id, "id-1");
+                    assert_eq!(err.current_state, s.name());
+                    assert_eq!(err.attempted_transition, n.name());
+                    assert_eq!(err.available_actions, s.meta().available_actions);
+                }
+            }
+            if s.terminal() {
+                assert!(s.successors().is_empty(), "{}: terminal '{}' has successors", S::MACHINE_ID, s.name());
+            }
+        }
+        let def = S::definition();
+        assert_eq!(def.machine_id, S::MACHINE_ID);
+        assert_eq!(def.states.len(), states.len());
+        assert!(
+            get_all_state_machines().iter().any(|m| *m == def),
+            "{}: registry entry differs from the generated definition",
+            S::MACHINE_ID
+        );
+    }
+
+    #[test]
+    fn test_every_state_machine_satisfies_trait_invariants() {
+        check_machine::<ConflictStatus>();
+        check_machine::<FolderSyncState>();
+        check_machine::<DevicePairingState>();
+        check_machine::<PeerConnectionState>();
+        check_machine::<EngineLifecycleState>();
+    }
+
+    #[test]
+    fn test_trait_metadata_matches_legacy_inherent_metadata() {
+        for s in ConflictStatus::ALL { assert_eq!(StateMachine::meta(&s), s.metadata()); }
+        for s in FolderSyncState::ALL { assert_eq!(StateMachine::meta(&s), s.metadata()); }
+        for s in DevicePairingState::ALL { assert_eq!(StateMachine::meta(&s), s.metadata()); }
+    }
+
+    #[test]
+    fn test_registry_ids_unique_and_complete() {
+        let reg = get_all_state_machines();
+        let mut ids: Vec<&str> = reg.iter().map(|m| m.machine_id.as_str()).collect();
+        ids.sort();
+        let before = ids.len();
+        ids.dedup();
+        assert_eq!(before, ids.len(), "duplicate machine ids");
+        for id in ["conflict_lifecycle", "folder_sync_lifecycle", "device_pairing_lifecycle",
+                   "relay_session_lifecycle", "swarm_chunk_lifecycle",
+                   "peer_connection_lifecycle", "engine_lifecycle"] {
+            assert!(ids.contains(&id), "missing {}", id);
+        }
+    }
+
+    #[test]
+    fn test_device_rejection_can_be_undone() {
+        let r = DevicePairingState::Rejected;
+        assert!(!StateMachine::terminal(&r));
+        assert!(r.successors().contains(&DevicePairingState::Pending));
+        assert!(!r.successors().contains(&DevicePairingState::Paired));
+        assert!(r.allows_action("unreject"));
+        assert!(r.transition("d", DevicePairingState::Paired).is_err());
+    }
+
+    #[test]
+    fn test_peer_connection_state_derivation() {
+        use PeerConnectionState::*;
+        assert_eq!(PeerConnectionState::derive(false, None, 30), Unknown);
+        assert_eq!(PeerConnectionState::derive(false, Some(0), 30), Online);
+        assert_eq!(PeerConnectionState::derive(false, Some(30), 30), Online);
+        assert_eq!(PeerConnectionState::derive(false, Some(31), 30), Offline);
+        assert_eq!(PeerConnectionState::derive(true, Some(0), 30), Paused);
+        assert_eq!(PeerConnectionState::derive(true, None, 30), Paused);
+        assert!(Online.is_connected());
+        assert!(!Unknown.is_connected() && !Offline.is_connected() && !Paused.is_connected());
+        assert_eq!(serde_json::to_string(&Offline).unwrap(), "\"offline\"");
+    }
+
+    #[test]
+    fn test_engine_lifecycle_transitions() {
+        use EngineLifecycleState::*;
+        assert!(Stopped.transition("e", Starting).is_ok());
+        assert!(Starting.transition("e", Running).is_ok());
+        assert!(Running.transition("e", Stopping).is_ok());
+        assert!(Stopping.transition("e", Stopped).is_ok());
+        assert!(Failed.transition("e", Starting).is_ok());
+        // Can't skip graceful shutdown or start twice
+        assert!(Running.transition("e", Stopped).is_err());
+        assert!(Running.transition("e", Starting).is_err());
+        assert!(Stopping.transition("e", Running).is_err());
+        for s in EngineLifecycleState::ALL {
+            assert_eq!(EngineLifecycleState::from_u8(s.as_u8()), s);
+        }
+    }
+
+    #[test]
+    fn test_lifecycle_view_serialization() {
+        let v = LifecycleView::of(FolderSyncState::Error);
+        assert_eq!(v.machine_id, "folder_sync_lifecycle");
+        assert_eq!(v.state, "error");
+        assert!(v.available_actions.contains(&"RESCAN".to_string()));
+        let json = serde_json::to_value(&v).unwrap();
+        assert_eq!(json["state"], "error");
     }
 }

@@ -1,0 +1,1641 @@
+--- a/synapse-core/src/api/mod.rs
++++ b/synapse-core/src/api/mod.rs
+@@ -21,9 +21,10 @@
+     extract::{
+         path::Path as AxumPath,
+         ws::{Message, WebSocket, WebSocketUpgrade},
+-        Query, State,
++        Query, Request, State,
+     },
+-    http::StatusCode,
++    http::{header, HeaderName, HeaderValue, Method, StatusCode},
++    middleware::{self, Next},
+     response::{IntoResponse, Response},
+     routing::{delete, get, patch, post},
+     Json, Router,
+@@ -31,7 +32,7 @@
+ use futures::StreamExt;
+ use serde::{Deserialize, Serialize};
+ use tokio::sync::broadcast;
+-use tower_http::cors::{Any, CorsLayer};
++use tower_http::cors::{AllowOrigin, CorsLayer};
+ use tracing::{info, warn};
+ 
+ use crate::conflict::diff3::{self, DiffHunk};
+@@ -46,9 +47,114 @@
+ pub struct AppState {
+     pub start_time: Instant,
+     pub sync_engine: SyncEngine,
++    /// API token every request must present. `None` (or empty) means the API
++    /// fails closed and rejects every request.
+     pub auth_token: Option<String>,
+     pub peer_count: Arc<std::sync::atomic::AtomicUsize>,
+     pub p2p_manager: Arc<crate::p2p::P2PManager>,
++    /// Browser origins allowed to call the API (e.g. `http://localhost:8080` for the
++    /// web UI). Empty = no cross-origin access at all.
++    pub allowed_origins: Vec<String>,
++}
++
++// =============================================================================
++// AUTHENTICATION & ORIGIN CHECKS
++// =============================================================================
++
++/// Header name accepted as an alternative to `Authorization: Bearer <token>`.
++pub const API_KEY_HEADER: &str = "x-api-key";
++
++/// Compares two byte strings without short-circuiting on the first mismatch.
++fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
++    if a.len() != b.len() {
++        return false;
++    }
++    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
++}
++
++/// Pulls the API token from `Authorization: Bearer`, `X-API-Key`, or — for the
++/// WebSocket event stream only, because browsers cannot set headers on upgrades —
++/// a `token` / `api_key` query parameter.
++fn extract_token(req: &Request) -> Option<String> {
++    let headers = req.headers();
++    if let Some(value) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
++        let value = value.trim();
++        if value.len() > 7 && value[..7].eq_ignore_ascii_case("bearer ") {
++            return Some(value[7..].trim().to_string());
++        }
++    }
++    if let Some(value) = headers.get(API_KEY_HEADER).and_then(|v| v.to_str().ok()) {
++        return Some(value.trim().to_string());
++    }
++    if req.uri().path().ends_with("/events") {
++        if let Some(query) = req.uri().query() {
++            for pair in query.split('&') {
++                if let Some((key, value)) = pair.split_once('=') {
++                    if key == "token" || key == "api_key" {
++                        return Some(value.to_string());
++                    }
++                }
++            }
++        }
++    }
++    None
++}
++
++/// Middleware: rejects requests from disallowed browser origins and requests
++/// without a valid API token.
++async fn require_api_token(State(state): State<AppState>, req: Request, next: Next) -> Response {
++    if let Some(origin) = req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
++        if !state.allowed_origins.iter().any(|o| o == origin) {
++            warn!("Rejected API request from disallowed origin {}", origin);
++            return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
++        }
++    }
++
++    let expected = match state.auth_token.as_deref() {
++        Some(t) if !t.is_empty() => t,
++        _ => {
++            warn!("API request rejected: no API token is configured (failing closed)");
++            return (StatusCode::UNAUTHORIZED, "API token not configured").into_response();
++        }
++    };
++
++    match extract_token(&req) {
++        Some(supplied) if constant_time_eq(supplied.as_bytes(), expected.as_bytes()) => next.run(req).await,
++        _ => (
++            StatusCode::UNAUTHORIZED,
++            [(header::WWW_AUTHENTICATE, "Bearer")],
++            "missing or invalid API token",
++        )
++            .into_response(),
++    }
++}
++
++/// Builds a CORS layer for the configured origins, or `None` when no browser
++/// origin is allowed.
++fn build_cors_layer(allowed_origins: &[String]) -> Option<CorsLayer> {
++    let origins: Vec<HeaderValue> = allowed_origins
++        .iter()
++        .filter_map(|o| match o.parse::<HeaderValue>() {
++            Ok(v) => Some(v),
++            Err(_) => {
++                warn!("Ignoring invalid allowed origin '{}'", o);
++                None
++            }
++        })
++        .collect();
++    if origins.is_empty() {
++        return None;
++    }
++    Some(
++        CorsLayer::new()
++            .allow_origin(AllowOrigin::list(origins))
++            .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE, Method::OPTIONS])
++            .allow_headers([
++                header::AUTHORIZATION,
++                header::CONTENT_TYPE,
++                HeaderName::from_static(API_KEY_HEADER),
++            ]),
++    )
+ }
+ 
+ #[derive(Debug, Serialize, Deserialize)]
+@@ -240,6 +346,7 @@
+         auth_token: Option<String>,
+         peer_count: Arc<std::sync::atomic::AtomicUsize>,
+         p2p_manager: Arc<crate::p2p::P2PManager>,
++        allowed_origins: Vec<String>,
+     ) -> Self {
+         Self {
+             state: AppState {
+@@ -248,19 +355,20 @@
+                 auth_token,
+                 peer_count,
+                 p2p_manager,
++                allowed_origins,
+             },
+             bind_addr,
+         }
+     }
+ 
+     /// Builds Axum router with security, CORS, and endpoint handlers.
++    ///
++    /// Every route — including the WebSocket event stream — requires the API token.
++    /// Cross-origin browser access is only granted to `state.allowed_origins`.
+     pub fn create_router(state: AppState) -> Router {
+-        let cors = CorsLayer::new()
+-            .allow_origin(Any)
+-            .allow_methods(Any)
+-            .allow_headers(Any);
++        let cors = build_cors_layer(&state.allowed_origins);
+ 
+-        Router::new()
++        let router = Router::new()
+             .route("/api/v1/system/status", get(get_system_status))
+             .route("/rest/system/status", get(get_system_status))
+             .route("/api/v1/system/version", get(get_system_version))
+@@ -331,8 +439,14 @@
+ 
+             .route("/api/v1/events", get(websocket_events_handler))
+             .route("/rest/events", get(websocket_events_handler))
+-            .layer(cors)
+-            .with_state(state)
++            .layer(middleware::from_fn_with_state(state.clone(), require_api_token));
++
++        // CORS is the outermost layer so browser preflights are answered before auth.
++        let router = match cors {
++            Some(cors) => router.layer(cors),
++            None => router,
++        };
++        router.with_state(state)
+     }
+ 
+     /// Runs the Axum server asynchronously.
+--- a/synapse-core/src/lib.rs
++++ b/synapse-core/src/lib.rs
+@@ -38,8 +38,12 @@
+     pub p2p_port: u16,
+     pub bep_port: u16,
+     pub discovery_port: u16,
++    /// API token. When `None`, a random token is loaded from (or created in)
++    /// `<home_dir>/api.token` at startup. The API never runs unauthenticated.
+     pub auth_token: Option<String>,
+     pub device_name: String,
++    /// Browser origins allowed to call the local API (empty = none).
++    pub allowed_origins: Vec<String>,
+ }
+ 
+ impl Default for SynapseConfig {
+@@ -58,6 +62,7 @@
+             discovery_port: 21027,
+             auth_token: None,
+             device_name: get_default_device_name(),
++            allowed_origins: Vec::new(),
+         }
+     }
+ }
+@@ -98,6 +103,53 @@
+     }
+ }
+ 
++/// File name (inside the Synapse home directory) holding the local API token.
++pub const API_TOKEN_FILE: &str = "api.token";
++
++/// Returns the path of the API token file for a given home directory.
++pub fn api_token_path(home_dir: &std::path::Path) -> PathBuf {
++    home_dir.join(API_TOKEN_FILE)
++}
++
++/// Loads the API token from `<home_dir>/api.token`, creating it with a fresh
++/// random 256-bit hex token (file mode 0600 on Unix) if it does not exist yet.
++pub fn load_or_create_api_token(home_dir: &std::path::Path) -> std::io::Result<String> {
++    use std::io::Write;
++
++    let path = api_token_path(home_dir);
++    if let Ok(existing) = std::fs::read_to_string(&path) {
++        let token = existing.trim().to_string();
++        if !token.is_empty() {
++            return Ok(token);
++        }
++    }
++
++    std::fs::create_dir_all(home_dir)?;
++    let mut bytes = [0u8; 32];
++    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
++    let token = hex::encode(bytes);
++
++    let mut options = std::fs::OpenOptions::new();
++    options.write(true).create(true).truncate(true);
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::OpenOptionsExt;
++        options.mode(0o600);
++    }
++    let mut file = options.open(&path)?;
++    file.write_all(token.as_bytes())?;
++    file.sync_all()?;
++    Ok(token)
++}
++
++/// Reads an existing API token without creating one (used by CLI clients).
++pub fn read_api_token(home_dir: &std::path::Path) -> Option<String> {
++    std::fs::read_to_string(api_token_path(home_dir))
++        .ok()
++        .map(|t| t.trim().to_string())
++        .filter(|t| !t.is_empty())
++}
++
+ /// Active instance of Synapse Core engine.
+ pub struct SynapseCore {
+     config: SynapseConfig,
+@@ -110,9 +162,23 @@
+ 
+ impl SynapseCore {
+     /// Initializes and prepares the Synapse Core environment.
+-    pub fn init(config: SynapseConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
++    pub fn init(mut config: SynapseConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+         std::fs::create_dir_all(&config.home_dir)?;
+ 
++        // The control API always requires a token. Use the one supplied, or load/create
++        // `<home>/api.token` so the UI (desktop or Android) can read it from disk.
++        match config.auth_token.as_deref().map(str::trim) {
++            Some(t) if !t.is_empty() => {
++                if t.len() < 16 {
++                    tracing::warn!("Configured API token is shorter than 16 characters; use a longer random token");
++                }
++            }
++            _ => {
++                config.auth_token = Some(load_or_create_api_token(&config.home_dir)?);
++                info!("API token file: {}", api_token_path(&config.home_dir).display());
++            }
++        }
++
+         let identity = NodeIdentity::load_or_generate(&config.home_dir)?;
+         info!("Synapse Core Device ID: {}", identity.device_id);
+ 
+@@ -194,6 +260,7 @@
+             self.config.auth_token.clone(),
+             self.peer_count.clone(),
+             self.p2p_manager.clone(),
++            self.config.allowed_origins.clone(),
+         );
+ 
+         api_server.run().await?;
+--- a/synapse-core/src/main.rs
++++ b/synapse-core/src/main.rs
+@@ -48,10 +48,14 @@
+     #[arg(long, default_value_t = 21027)]
+     discovery_port: u16,
+ 
+-    /// Security authentication token for API access
++    /// API token. If omitted, a random token is stored in <home>/api.token and used
+     #[arg(long, env = "SYNAPSE_TOKEN")]
+     token: Option<String>,
+ 
++    /// Browser origin allowed to call the API (repeatable), e.g. http://localhost:8080
++    #[arg(long = "allow-origin")]
++    allow_origin: Vec<String>,
++
+     /// Custom human-readable device name
+     #[arg(long)]
+     device_name: Option<String>,
+@@ -172,6 +176,7 @@
+     if let Some(tok) = cli.token {
+         config.auth_token = Some(tok);
+     }
++    config.allowed_origins = cli.allow_origin;
+     if let Some(dev) = cli.device_name {
+         config.device_name = dev;
+     }
+@@ -184,7 +189,11 @@
+         Some(Commands::Status { api }) => {
+             println!("Querying Synapse Core status at {}", api);
+             // Quick client query
+-            match reqwest_check(&api).await {
++            let token = config
++                .auth_token
++                .clone()
++                .or_else(|| synapse_core::read_api_token(&config.home_dir));
++            match reqwest_check(&api, token.as_deref()).await {
+                 Ok(resp) => println!("{}", resp),
+                 Err(e) => eprintln!("Unable to connect to daemon: {}", e),
+             }
+@@ -340,12 +349,12 @@
+     }
+ }
+ 
+-async fn reqwest_check(url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+-    let client = reqwest_minimal_get(format!("{}/api/v1/system/status", url)).await?;
++async fn reqwest_check(url: &str, token: Option<&str>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
++    let client = reqwest_minimal_get(format!("{}/api/v1/system/status", url), token).await?;
+     Ok(client)
+ }
+ 
+-async fn reqwest_minimal_get(url: String) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
++async fn reqwest_minimal_get(url: String, token: Option<&str>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+     let parsed = url.strip_prefix("http://").unwrap_or(&url);
+     let mut parts = parsed.split('/');
+     let host_port = parts.next().unwrap_or("127.0.0.1:9090");
+@@ -355,7 +364,13 @@
+     let (mut rd, mut wr) = tokio::io::split(stream);
+     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+ 
+-    let req = format!("GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", path, host_port);
++    let auth = token
++        .map(|t| format!("Authorization: Bearer {}\r\n", t))
++        .unwrap_or_default();
++    let req = format!(
++        "GET {} HTTP/1.1\r\nHost: {}\r\n{}Connection: close\r\n\r\n",
++        path, host_port, auth
++    );
+     wr.write_all(req.as_bytes()).await?;
+ 
+     let mut response = String::new();
+--- a/synapse-core/src/engine/versioning.rs
++++ b/synapse-core/src/engine/versioning.rs
+@@ -548,8 +548,76 @@
+     Ok(report)
+ }
+ 
+-/// Executes an external custom versioning script when a file is modified or deleted.
+-/// Substitutes `%FOLDER_PATH%`, `%FILE_PATH%`, and `%FULL_PATH%` placeholders.
++/// Splits a command template into program + arguments without invoking a shell.
++///
++/// Supports whitespace separation, single quotes (literal), double quotes, and
++/// (on Unix) backslash escapes. Returns `None` for unterminated quotes.
++pub fn split_command_template(template: &str) -> Option<Vec<String>> {
++    let mut args = Vec::new();
++    let mut current = String::new();
++    let mut in_token = false;
++    let mut chars = template.chars().peekable();
++
++    while let Some(c) = chars.next() {
++        match c {
++            '\'' => {
++                in_token = true;
++                loop {
++                    match chars.next() {
++                        Some('\'') => break,
++                        Some(ch) => current.push(ch),
++                        None => return None,
++                    }
++                }
++            }
++            '"' => {
++                in_token = true;
++                loop {
++                    match chars.next() {
++                        Some('"') => break,
++                        #[cfg(unix)]
++                        Some('\\') => current.push(chars.next()?),
++                        Some(ch) => current.push(ch),
++                        None => return None,
++                    }
++                }
++            }
++            #[cfg(unix)]
++            '\\' => {
++                in_token = true;
++                if let Some(ch) = chars.next() {
++                    current.push(ch);
++                }
++            }
++            c if c.is_whitespace() => {
++                if in_token {
++                    args.push(std::mem::take(&mut current));
++                    in_token = false;
++                }
++            }
++            c => {
++                in_token = true;
++                current.push(c);
++            }
++        }
++    }
++    if in_token {
++        args.push(current);
++    }
++    Some(args)
++}
++
++/// Executes an external custom versioning program when a file is modified or deleted.
++///
++/// The template is split into a program and arguments **before** placeholders are
++/// substituted, and the program is started directly — never through `sh -c` or
++/// `cmd /C`. A substituted path is always exactly one argument, so file names
++/// received from peers cannot inject commands. Supported placeholders:
++/// `%FOLDER_PATH%`, `%FILE_PATH%`, `%FULL_PATH%`. The same values are also exported
++/// as `STFOLDERPATH` / `STFILEPATH` environment variables.
++///
++/// To use shell features, invoke a shell explicitly and reference the environment
++/// variables, e.g. `sh -c 'cp "$STFOLDERPATH/$STFILEPATH" /backup/'`.
+ pub fn execute_external_versioning(
+     folder_root: &Path,
+     relative_path: &str,
+@@ -563,31 +631,31 @@
+     let file_str = relative_path.to_string();
+     let full_path = folder_root.join(relative_path).to_string_lossy().to_string();
+ 
+-    let cmd = command_template
+-        .replace("%FOLDER_PATH%", &folder_str)
+-        .replace("%FILE_PATH%", &file_str)
+-        .replace("%FULL_PATH%", &full_path);
+-
+-    tracing::info!("Executing external file versioning script: {}", cmd);
+-
+-    #[cfg(unix)]
+-    let mut child = std::process::Command::new("sh")
+-        .arg("-c")
+-        .arg(&cmd)
+-        .env("STFOLDERPATH", &folder_str)
+-        .env("STFILEPATH", &file_str)
+-        .spawn()?;
++    let tokens = split_command_template(command_template)
++        .ok_or("external versioning command has an unterminated quote")?;
++    let mut args = tokens.into_iter().map(|arg| {
++        arg.replace("%FOLDER_PATH%", &folder_str)
++            .replace("%FILE_PATH%", &file_str)
++            .replace("%FULL_PATH%", &full_path)
++    });
++    let program = args.next().ok_or("external versioning command is empty")?;
++    let args: Vec<String> = args.collect();
++
++    tracing::info!(
++        "Executing external file versioning program: {} (args: {:?})",
++        program,
++        args
++    );
+ 
+-    #[cfg(windows)]
+-    let mut child = std::process::Command::new("cmd")
+-        .args(["/C", &cmd])
++    let mut child = std::process::Command::new(&program)
++        .args(&args)
+         .env("STFOLDERPATH", &folder_str)
+         .env("STFILEPATH", &file_str)
+         .spawn()?;
+ 
+     let status = child.wait()?;
+     if !status.success() {
+-        tracing::warn!("External versioning script exited with non-zero status: {:?}", status.code());
++        tracing::warn!("External versioning program exited with non-zero status: {:?}", status.code());
+     }
+ 
+     Ok(())
+@@ -909,4 +977,47 @@
+ 
+         let _ = fs::remove_dir_all(&temp_dir);
+     }
++
++    #[test]
++    fn test_split_command_template_quoting() {
++        assert_eq!(
++            split_command_template("cp %FULL_PATH% '/backup dir/'").unwrap(),
++            vec!["cp", "%FULL_PATH%", "/backup dir/"]
++        );
++        assert_eq!(
++            split_command_template("  prog   \"a b\"  c ").unwrap(),
++            vec!["prog", "a b", "c"]
++        );
++        assert!(split_command_template("prog 'unterminated").is_none());
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn test_external_versioning_rejects_filename_injection() {
++        let temp_dir = std::env::temp_dir().join(format!("synapse_ext_inj_{}", uuid::Uuid::new_v4()));
++        fs::create_dir_all(&temp_dir).unwrap();
++
++        let canary = temp_dir.join("PWNED");
++        // Malicious file names a peer could send. Each would run `touch PWNED`
++        // if the path were interpolated into a shell string.
++        let evil_names = [
++            format!("a;touch {}", canary.display()),
++            format!("$(touch {})", canary.display()),
++            format!("`touch {}`", canary.display()),
++            format!("x && touch {}", canary.display()),
++        ];
++        for name in &evil_names {
++            // `true` ignores its arguments; only a shell would execute the payload.
++            let _ = execute_external_versioning(&temp_dir, name, "true %FILE_PATH% %FULL_PATH%");
++        }
++        assert!(!canary.exists(), "file name was executed as a shell command");
++
++        // The path arrives as one literal argument.
++        let out = temp_dir.join("argv.txt");
++        let cmd = format!("sh -c 'printf %s \"$1\" > {}' _ %FILE_PATH%", out.display());
++        execute_external_versioning(&temp_dir, "a;b $(c).txt", &cmd).unwrap();
++        assert_eq!(fs::read_to_string(&out).unwrap(), "a;b $(c).txt");
++
++        let _ = fs::remove_dir_all(&temp_dir);
++    }
+ }
+--- a/synapse-core/src/storage/mod.rs
++++ b/synapse-core/src/storage/mod.rs
+@@ -244,6 +244,11 @@
+     quarantine_dir: PathBuf,
+ }
+ 
++/// Returns `true` if `hash` is a 64-character lowercase hex string (a BLAKE3 digest).
++pub fn is_valid_chunk_hash(hash: &str) -> bool {
++    hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
++}
++
+ impl StorageEngine {
+     /// Initializes SQLite database and block storage directories inside the home folder.
+     pub fn new(home_dir: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+@@ -1293,18 +1298,24 @@
+     // CAS BLOCK STORAGE OPERATIONS
+     // =========================================================================
+ 
+-    fn get_chunk_file_path(&self, chunk_hash: &str) -> PathBuf {
+-        let prefix = if chunk_hash.len() >= 2 { &chunk_hash[0..2] } else { "xx" };
+-        let dir = self.blocks_dir.join(prefix);
+-        if !dir.exists() {
+-            let _ = fs::create_dir_all(&dir);
++    /// Maps a chunk hash to its CAS file path. Returns `None` for anything that is
++    /// not a 64-character lowercase hex BLAKE3 digest, so hashes received from
++    /// peers can never escape the blocks directory (e.g. `../../x`).
++    fn get_chunk_file_path(&self, chunk_hash: &str) -> Option<PathBuf> {
++        if !is_valid_chunk_hash(chunk_hash) {
++            return None;
+         }
+-        dir.join(format!("{}.chunk", chunk_hash))
++        Some(self.blocks_dir.join(&chunk_hash[0..2]).join(format!("{}.chunk", chunk_hash)))
+     }
+ 
+     /// Stores a chunk payload in the CAS store and updates the reference count in SQLite.
+     pub fn put_chunk(&self, chunk_hash: &str, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+-        let file_path = self.get_chunk_file_path(chunk_hash);
++        let file_path = self
++            .get_chunk_file_path(chunk_hash)
++            .ok_or_else(|| format!("invalid chunk hash: {:?}", chunk_hash))?;
++        if let Some(dir) = file_path.parent() {
++            fs::create_dir_all(dir)?;
++        }
+         let exists = file_path.exists();
+ 
+         if !exists {
+@@ -1326,7 +1337,10 @@
+ 
+     /// Reads chunk payload bytes from the CAS block store.
+     pub fn get_chunk(&self, chunk_hash: &str) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+-        let file_path = self.get_chunk_file_path(chunk_hash);
++        let file_path = match self.get_chunk_file_path(chunk_hash) {
++            Some(p) => p,
++            None => return Ok(None),
++        };
+         if !file_path.exists() {
+             return Ok(None);
+         }
+@@ -1356,7 +1370,7 @@
+ 
+     /// Checks if a chunk is locally available in CAS.
+     pub fn has_chunk(&self, chunk_hash: &str) -> bool {
+-        self.get_chunk_file_path(chunk_hash).exists()
++        self.get_chunk_file_path(chunk_hash).is_some_and(|p| p.exists())
+     }
+ 
+     /// Assembles an entire file from its ordered chunk list.
+@@ -1526,6 +1540,30 @@
+     use super::*;
+ 
+     #[test]
++    fn test_chunk_hash_path_traversal_rejected() {
++        let temp_dir = std::env::temp_dir().join(format!("synapse_chunk_trav_{}", uuid::Uuid::new_v4()));
++        let engine = StorageEngine::new(&temp_dir).unwrap();
++
++        let escape_target = temp_dir.join("escaped");
++        let evil = format!("../../{}", escape_target.display());
++        for bad in [evil.as_str(), "../x", "", "zz", "é€", &"A".repeat(64), &"g".repeat(64)] {
++            assert!(engine.put_chunk(bad, b"payload").is_err(), "accepted bad hash {:?}", bad);
++            assert!(engine.get_chunk(bad).unwrap().is_none());
++            assert!(!engine.has_chunk(bad));
++        }
++        assert!(!temp_dir.join("escaped.chunk").exists());
++
++        // A real BLAKE3 hash still round-trips.
++        let data = b"hello chunk";
++        let hash = blake3::hash(data).to_hex().to_string();
++        engine.put_chunk(&hash, data).unwrap();
++        assert!(engine.has_chunk(&hash));
++        assert_eq!(engine.get_chunk(&hash).unwrap().unwrap(), data);
++
++        let _ = fs::remove_dir_all(&temp_dir);
++    }
++
++    #[test]
+     fn test_storage_engine_crud() {
+         let temp_dir = std::env::temp_dir().join(format!("synapse_test_{}", uuid::Uuid::new_v4()));
+         let engine = StorageEngine::new(&temp_dir).unwrap();
+@@ -1560,8 +1598,9 @@
+         assert_eq!(shared_devs, vec![dev.device_id.clone()]);
+ 
+         // 2. Put chunk and check CAS
+-        let chunk_hash = "abc1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd";
+         let chunk_data = b"Synapse CAS test block payload";
++        let chunk_hash_owned = blake3::hash(chunk_data).to_hex().to_string();
++        let chunk_hash = chunk_hash_owned.as_str();
+         engine.put_chunk(chunk_hash, chunk_data).unwrap();
+         assert!(engine.has_chunk(chunk_hash));
+         let retrieved = engine.get_chunk(chunk_hash).unwrap().unwrap();
+--- a/synapse-core/src/p2p/mod.rs
++++ b/synapse-core/src/p2p/mod.rs
+@@ -469,6 +469,17 @@
+                 }
+             }
+             P2PMessage::ChunkResponse { chunk_hash, data } => {
++                // Content-addressed: the payload must hash to the claimed ID, otherwise a
++                // peer could poison the block store or write outside it.
++                if !crate::storage::is_valid_chunk_hash(&chunk_hash)
++                    || blake3::hash(&data).to_hex().as_str() != chunk_hash
++                {
++                    warn!(
++                        "Dropping chunk from {:?}: payload does not match hash {:?}",
++                        peer_addr, chunk_hash
++                    );
++                    return Ok(None);
++                }
+                 self.sync_engine.storage().put_chunk(&chunk_hash, &data)?;
+                 Ok(None)
+             }
+--- a/synapse-core/tests/integration_test.rs
++++ b/synapse-core/tests/integration_test.rs
+@@ -22,6 +22,9 @@
+ use tokio::io::{AsyncReadExt, AsyncWriteExt};
+ use tower::ServiceExt;
+ 
++/// API token used by the test harness; every request must present it.
++const TEST_TOKEN: &str = "test-token-0123456789abcdef0123456789abcdef";
++
+ use synapse_core::api::{
+     AcceptFolderPayload, ApiServer, AppState, DiffResponse, FolderDto, IgnoresRequest,
+     RegisterFolderRequest, RejectFolderPayload, SystemStatusResponse, SystemVersionResponse,
+@@ -80,9 +83,10 @@
+         let app_state = AppState {
+             start_time: std::time::Instant::now(),
+             sync_engine: sync_engine.clone(),
+-            auth_token: None,
++            auth_token: Some(TEST_TOKEN.into()),
+             peer_count: Arc::new(AtomicUsize::new(0)),
+             p2p_manager,
++            allowed_origins: Vec::new(),
+         };
+ 
+         Self {
+@@ -314,6 +318,7 @@
+ 
+     // 1. /rest/system/ping and /api/v1/system/ping
+     let req_ping_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/ping")
+         .method("GET")
+         .body(Body::empty())
+@@ -325,6 +330,7 @@
+     assert_eq!(json["ping"], "pong");
+ 
+     let req_ping_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/system/ping")
+         .method("GET")
+         .body(Body::empty())
+@@ -337,6 +343,7 @@
+ 
+     // 2. /rest/system/version and /api/v1/system/version
+     let req_ver_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/version")
+         .method("GET")
+         .body(Body::empty())
+@@ -351,6 +358,7 @@
+     assert!(!ver_rest.arch.is_empty());
+ 
+     let req_ver_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/system/version")
+         .method("GET")
+         .body(Body::empty())
+@@ -364,6 +372,7 @@
+ 
+     // 3. /rest/system/status and /api/v1/system/status
+     let req_status_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/status")
+         .method("GET")
+         .body(Body::empty())
+@@ -380,6 +389,7 @@
+     assert!(status_rest.memory_footprint_bytes > 0);
+ 
+     let req_status_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/system/status")
+         .method("GET")
+         .body(Body::empty())
+@@ -404,6 +414,7 @@
+     harness.storage.add_device(&dev).unwrap();
+ 
+     let req_conn_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/connections")
+         .method("GET")
+         .body(Body::empty())
+@@ -420,6 +431,7 @@
+     assert!(peer_metrics.is_connected);
+ 
+     let req_conn_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/connections")
+         .method("GET")
+         .body(Body::empty())
+@@ -429,6 +441,7 @@
+ 
+     // 5. /rest/system/shutdown and /api/v1/system/shutdown
+     let req_sd_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/shutdown")
+         .method("POST")
+         .body(Body::empty())
+@@ -437,6 +450,7 @@
+     assert_eq!(res_sd_rest.status(), StatusCode::OK);
+ 
+     let req_sd_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/system/shutdown")
+         .method("POST")
+         .body(Body::empty())
+@@ -446,6 +460,7 @@
+ 
+     // 6. /rest/system/restart and /api/v1/system/restart
+     let req_rs_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/restart")
+         .method("POST")
+         .body(Body::empty())
+@@ -455,6 +470,7 @@
+ 
+     // 7. /rest/system/config Syncthing full config format
+     let req_cfg_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/config")
+         .method("GET")
+         .body(Body::empty())
+@@ -468,6 +484,7 @@
+ 
+     // 8. /rest/system/pause and /rest/system/resume query parameter compatibility
+     let req_pause_dev = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/pause?device=DEV_PEER_01")
+         .method("POST")
+         .body(Body::empty())
+@@ -477,6 +494,7 @@
+     assert!(harness.storage.get_device("DEV_PEER_01").unwrap().unwrap().is_paused);
+ 
+     let req_resume_dev = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/resume?device=DEV_PEER_01")
+         .method("POST")
+         .body(Body::empty())
+@@ -486,6 +504,7 @@
+     assert!(!harness.storage.get_device("DEV_PEER_01").unwrap().unwrap().is_paused);
+ 
+     let req_rs_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/system/restart")
+         .method("POST")
+         .body(Body::empty())
+@@ -513,6 +532,7 @@
+     harness.storage.add_pending_device(&pending_dev1).unwrap();
+ 
+     let req_p1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/cluster/pending/devices")
+         .method("GET")
+         .body(Body::empty())
+@@ -525,6 +545,7 @@
+     assert_eq!(list[0].device_id, pending_dev1.device_id);
+ 
+     let req_p2 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/cluster/pending/devices")
+         .method("GET")
+         .body(Body::empty())
+@@ -535,6 +556,7 @@
+     // 2. Accept Pending Device via /api/v1/cluster/pending/devices/:id/accept
+     let accept_uri = format!("/api/v1/cluster/pending/devices/{}/accept", pending_dev1.device_id);
+     let req_accept = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(&accept_uri)
+         .method("POST")
+         .body(Body::empty())
+@@ -544,6 +566,7 @@
+ 
+     // Verify moved to paired devices
+     let req_devs = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/devices")
+         .method("GET")
+         .body(Body::empty())
+@@ -570,6 +593,7 @@
+ 
+     let reject_uri = format!("/rest/cluster/pending/devices/{}/reject", pending_dev2.device_id);
+     let req_rej = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(&reject_uri)
+         .method("POST")
+         .body(Body::empty())
+@@ -593,6 +617,7 @@
+     };
+     let dev_alpha_json = serde_json::to_string(&dev_alpha).unwrap();
+     let req_add_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/devices")
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -613,6 +638,7 @@
+     };
+     let dev_beta_json = serde_json::to_string(&dev_beta).unwrap();
+     let req_add_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/devices")
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -623,6 +649,7 @@
+ 
+     // Verify GET /api/v1/devices/:id
+     let req_get_dev = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/devices/ALPHA-DEV-001")
+         .method("GET")
+         .body(Body::empty())
+@@ -635,6 +662,7 @@
+ 
+     // Non-existent device returns 404
+     let req_get_404 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/devices/DOES-NOT-EXIST")
+         .method("GET")
+         .body(Body::empty())
+@@ -644,6 +672,7 @@
+ 
+     // Pause & Resume Device
+     let req_pause = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/devices/ALPHA-DEV-001/pause")
+         .method("POST")
+         .body(Body::empty())
+@@ -654,6 +683,7 @@
+     assert!(d.is_paused);
+ 
+     let req_resume = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/devices/ALPHA-DEV-001/resume")
+         .method("POST")
+         .body(Body::empty())
+@@ -665,6 +695,7 @@
+ 
+     // Delete Device
+     let req_del = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/devices/ALPHA-DEV-001")
+         .method("DELETE")
+         .body(Body::empty())
+@@ -683,6 +714,7 @@
+     harness.storage.add_pending_folder(&p_folder).unwrap();
+ 
+     let req_pf_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/cluster/pending/folders")
+         .method("GET")
+         .body(Body::empty())
+@@ -695,6 +727,7 @@
+     assert_eq!(p_folders[0].folder_id, "shared_team_folder");
+ 
+     let req_pf_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/cluster/pending/folders")
+         .method("GET")
+         .body(Body::empty())
+@@ -711,6 +744,7 @@
+     }).unwrap();
+ 
+     let req_af = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/cluster/pending/folders/shared_team_folder/accept")
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -736,6 +770,7 @@
+         device_id: "BETA-DEV-002".into(),
+     }).unwrap();
+     let req_rf = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/cluster/pending/folders/junk_folder/reject")
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -771,6 +806,7 @@
+         versioning_command: None,
+     };
+     let req_reg_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders")
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -793,6 +829,7 @@
+         versioning_command: None,
+     };
+     let req_reg_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/folders")
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -803,6 +840,7 @@
+ 
+     // List folders via GET /api/v1/folders and /rest/system/folders
+     let req_list_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders")
+         .method("GET")
+         .body(Body::empty())
+@@ -814,6 +852,7 @@
+     assert_eq!(dtos.len(), 2);
+ 
+     let req_list_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/folders")
+         .method("GET")
+         .body(Body::empty())
+@@ -829,6 +868,7 @@
+     harness.sync_engine.index_single_file("vault_v1", "file1.txt").unwrap();
+ 
+     let req_st_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/db/status?folder=vault_v1")
+         .method("GET")
+         .body(Body::empty())
+@@ -844,6 +884,7 @@
+ 
+     // Missing folder query parameter returns 400 Bad Request
+     let req_st_bad = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/db/status")
+         .method("GET")
+         .body(Body::empty())
+@@ -852,6 +893,7 @@
+     assert_eq!(res_st_bad.status(), StatusCode::BAD_REQUEST);
+ 
+     let req_st_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/status")
+         .method("GET")
+         .body(Body::empty())
+@@ -864,6 +906,7 @@
+ 
+     // 3. Folder Completion: /rest/db/completion?folder=vault_v1 and /api/v1/folders/:id/completion
+     let req_comp_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/db/completion?folder=vault_v1")
+         .method("GET")
+         .body(Body::empty())
+@@ -876,6 +919,7 @@
+     assert_eq!(comp_rest.completion_pct, 100.0);
+ 
+     let req_comp_bad = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/db/completion")
+         .method("GET")
+         .body(Body::empty())
+@@ -884,6 +928,7 @@
+     assert_eq!(res_comp_bad.status(), StatusCode::BAD_REQUEST);
+ 
+     let req_comp_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/completion")
+         .method("GET")
+         .body(Body::empty())
+@@ -893,6 +938,7 @@
+ 
+     // 4. Folder Rescan: /rest/db/scan?folder=vault_v1 and /api/v1/folders/:id/rescan
+     let req_scan_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/db/scan?folder=vault_v1")
+         .method("POST")
+         .body(Body::empty())
+@@ -901,6 +947,7 @@
+     assert_eq!(res_scan_rest.status(), StatusCode::OK);
+ 
+     let req_scan_bad = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/db/scan")
+         .method("POST")
+         .body(Body::empty())
+@@ -909,6 +956,7 @@
+     assert_eq!(res_scan_bad.status(), StatusCode::BAD_REQUEST);
+ 
+     let req_scan_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/rescan")
+         .method("POST")
+         .body(Body::empty())
+@@ -921,6 +969,7 @@
+         ignore: vec!["*.tmp".into(), ".git/".into()],
+     }).unwrap();
+     let req_ig_v1_set = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/ignores")
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -930,6 +979,7 @@
+     assert_eq!(res_ig_v1_set.status(), StatusCode::OK);
+ 
+     let req_ig_v1_get = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/ignores")
+         .method("GET")
+         .body(Body::empty())
+@@ -945,6 +995,7 @@
+         ignore: vec!["node_modules/".into(), "*.log".into(), "(?d).DS_Store".into()],
+     }).unwrap();
+     let req_ig_rest_set = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/db/ignores?folder=vault_v1")
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -954,6 +1005,7 @@
+     assert_eq!(res_ig_rest_set.status(), StatusCode::OK);
+ 
+     let req_ig_rest_get = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/db/ignores?folder=vault_v1")
+         .method("GET")
+         .body(Body::empty())
+@@ -966,6 +1018,7 @@
+ 
+     // Negative query test
+     let req_ig_bad = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/db/ignores")
+         .method("GET")
+         .body(Body::empty())
+@@ -975,6 +1028,7 @@
+ 
+     // 6. Folder Device Sharing: /api/v1/folders/:id/devices and /api/v1/folders/:id/devices/:device_id
+     let req_devs_init = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/devices")
+         .method("GET")
+         .body(Body::empty())
+@@ -987,6 +1041,7 @@
+ 
+     // Share with remote device
+     let req_share = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/devices/REMOTE_PEER_42")
+         .method("POST")
+         .body(Body::empty())
+@@ -995,6 +1050,7 @@
+     assert_eq!(res_share.status(), StatusCode::OK);
+ 
+     let req_devs_after = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/devices")
+         .method("GET")
+         .body(Body::empty())
+@@ -1006,6 +1062,7 @@
+ 
+     // Unshare
+     let req_unshare = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/devices/REMOTE_PEER_42")
+         .method("DELETE")
+         .body(Body::empty())
+@@ -1014,6 +1071,7 @@
+     assert_eq!(res_unshare.status(), StatusCode::OK);
+ 
+     let req_devs_final = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/devices")
+         .method("GET")
+         .body(Body::empty())
+@@ -1025,6 +1083,7 @@
+ 
+     // 7. Folder Pause, Resume, and Delete
+     let req_pause = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/pause")
+         .method("POST")
+         .body(Body::empty())
+@@ -1035,6 +1094,7 @@
+     assert!(f.is_paused);
+ 
+     let req_resume = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1/resume")
+         .method("POST")
+         .body(Body::empty())
+@@ -1045,6 +1105,7 @@
+     assert!(!f.is_paused);
+ 
+     let req_del = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/folders/vault_v1")
+         .method("DELETE")
+         .body(Body::empty())
+@@ -1090,6 +1151,7 @@
+ 
+     // GET /api/v1/conflicts
+     let req = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/conflicts")
+         .method("GET")
+         .body(Body::empty())
+@@ -1103,6 +1165,7 @@
+ 
+     // GET /api/v1/conflicts/:id
+     let req = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}", cnf_id_1))
+         .method("GET")
+         .body(Body::empty())
+@@ -1112,6 +1175,7 @@
+ 
+     // GET /api/v1/conflicts/:id/base
+     let req = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/base", cnf_id_1))
+         .method("GET")
+         .body(Body::empty())
+@@ -1123,6 +1187,7 @@
+ 
+     // GET /api/v1/conflicts/:id/local
+     let req = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/local", cnf_id_1))
+         .method("GET")
+         .body(Body::empty())
+@@ -1134,6 +1199,7 @@
+ 
+     // GET /api/v1/conflicts/:id/remote
+     let req = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/remote", cnf_id_1))
+         .method("GET")
+         .body(Body::empty())
+@@ -1145,6 +1211,7 @@
+ 
+     // GET /api/v1/conflicts/:id/diff (3-Way Diff Generation)
+     let req = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/diff", cnf_id_1))
+         .method("GET")
+         .body(Body::empty())
+@@ -1165,6 +1232,7 @@
+         merged_content: None,
+     };
+     let req_res_local = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id_1))
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -1202,6 +1270,7 @@
+         merged_content: None,
+     };
+     let req_res_remote = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id_2))
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -1237,6 +1306,7 @@
+         merged_content: Some(custom_solution.to_string()),
+     };
+     let req_res_custom = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id_3))
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -1277,6 +1347,7 @@
+         merged_content: None,
+     };
+     let req_res_both = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id_4))
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -1312,6 +1383,7 @@
+     let router = ApiServer::create_router(harness.app_state.clone());
+ 
+     let req_ws_v1 = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/events")
+         .header("connection", "upgrade")
+         .header("upgrade", "websocket")
+@@ -1323,6 +1395,7 @@
+     assert_eq!(res_ws_v1.status(), StatusCode::UPGRADE_REQUIRED);
+ 
+     let req_ws_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/events")
+         .header("connection", "upgrade")
+         .header("upgrade", "websocket")
+@@ -1352,13 +1425,13 @@
+         Err(e) => panic!("Failed to connect to test server: {}", e),
+     };
+     let handshake = format!(
+-        "GET /api/v1/events HTTP/1.1\r\n\
++        "GET /api/v1/events?token={} HTTP/1.1\r\n\
+          Host: {}\r\n\
+          Upgrade: websocket\r\n\
+          Connection: Upgrade\r\n\
+          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+          Sec-WebSocket-Version: 13\r\n\r\n",
+-        addr
++        TEST_TOKEN, addr
+     );
+     stream.write_all(handshake.as_bytes()).await.unwrap();
+ 
+@@ -1420,12 +1493,13 @@
+     let mut stream_rest = tokio::net::TcpStream::connect(addr).await.unwrap();
+     let handshake_rest = format!(
+         "GET /rest/events HTTP/1.1\r\n\
++         X-API-Key: {}\r\n\
+          Host: {}\r\n\
+          Upgrade: websocket\r\n\
+          Connection: Upgrade\r\n\
+          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+          Sec-WebSocket-Version: 13\r\n\r\n",
+-        addr
++        TEST_TOKEN, addr
+     );
+     stream_rest.write_all(handshake_rest.as_bytes()).await.unwrap();
+ 
+@@ -1454,6 +1528,7 @@
+     // 1. AX Introspection Endpoint (/api/v1/system/statemachines & /rest/*)
+     // -------------------------------------------------------------------------
+     let req = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/system/statemachines")
+         .method("GET")
+         .body(Body::empty())
+@@ -1472,6 +1547,7 @@
+ 
+     // Verify alias route /rest/system/statemachines
+     let req_rest = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/rest/system/statemachines")
+         .method("GET")
+         .body(Body::empty())
+@@ -1498,6 +1574,7 @@
+ 
+     // Inspect conflict details - verify affordances (AX)
+     let req_det = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}", cnf_id))
+         .method("GET")
+         .body(Body::empty())
+@@ -1518,6 +1595,7 @@
+         merged_content: None,
+     };
+     let req_res = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id))
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -1528,6 +1606,7 @@
+ 
+     // Verify conflict is now in terminal RESOLVED state
+     let req_det_after = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}", cnf_id))
+         .method("GET")
+         .body(Body::empty())
+@@ -1542,6 +1621,7 @@
+ 
+     // Second resolution attempt: must be REJECTED by transition guard (UX & DX Safety)
+     let req_double_res = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id))
+         .method("POST")
+         .header("Content-Type", "application/json")
+@@ -1568,6 +1648,7 @@
+ 
+     // Ignore conflict
+     let req_ignore = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/ignore", cnf_id_2))
+         .method("POST")
+         .body(Body::empty())
+@@ -1581,6 +1662,7 @@
+ 
+     // Reopen conflict back to PENDING
+     let req_reopen = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/conflicts/{}/reopen", cnf_id_2))
+         .method("POST")
+         .body(Body::empty())
+@@ -1596,6 +1678,7 @@
+     // 4. Dynamic Folder & System Sync State
+     // -------------------------------------------------------------------------
+     let req_status = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/folders/{}/status", folder_id))
+         .method("GET")
+         .body(Body::empty())
+@@ -1609,6 +1692,7 @@
+     // Manually set folder to scanning
+     harness.sync_engine.set_folder_state(folder_id, synapse_core::state::FolderSyncState::Scanning);
+     let req_scanning = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(format!("/api/v1/folders/{}/status", folder_id))
+         .method("GET")
+         .body(Body::empty())
+@@ -1620,6 +1704,7 @@
+ 
+     // System status dynamically reflects scanning state
+     let req_sys = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/system/status")
+         .method("GET")
+         .body(Body::empty())
+@@ -1729,6 +1814,7 @@
+ 
+     // 3. Verify pending device is visible via GET /api/v1/cluster/pending/devices
+     let req_pending = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri("/api/v1/cluster/pending/devices")
+         .method("GET")
+         .body(Body::empty())
+@@ -1743,6 +1829,7 @@
+     // 4. Accept pending mobile device via POST /api/v1/cluster/pending/devices/:id/accept
+     let accept_uri = format!("/api/v1/cluster/pending/devices/{}/accept", mobile_id);
+     let req_accept = Request::builder()
++        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+         .uri(&accept_uri)
+         .method("POST")
+         .body(Body::empty())
+@@ -1767,3 +1854,177 @@
+     assert_eq!(devices[0].name, mobile_name);
+     assert!(harness.storage.list_pending_devices().unwrap().is_empty());
+ }
++
++// =============================================================================
++// SECURITY REGRESSION TESTS (control API auth, CORS, chunk integrity)
++// =============================================================================
++
++fn plain_get(uri: &str) -> axum::http::request::Builder {
++    Request::builder().method("GET").uri(uri)
++}
++
++#[tokio::test]
++async fn test_security_api_requires_token() {
++    let harness = TestHarness::new();
++    let router = ApiServer::create_router(harness.app_state.clone());
++
++    // No token -> 401
++    let res = router.clone().oneshot(plain_get("/api/v1/system/status").body(Body::empty()).unwrap()).await.unwrap();
++    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
++
++    // Wrong token -> 401
++    let res = router.clone().oneshot(
++        plain_get("/api/v1/system/status").header("Authorization", "Bearer wrong-token").body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
++
++    // Token as query parameter is only honoured on the WebSocket event stream
++    let res = router.clone().oneshot(
++        plain_get(&format!("/api/v1/system/status?token={}", TEST_TOKEN)).body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
++
++    // Bearer token -> 200
++    let res = router.clone().oneshot(
++        plain_get("/api/v1/system/status").header("Authorization", format!("Bearer {}", TEST_TOKEN)).body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    assert_eq!(res.status(), StatusCode::OK);
++
++    // X-API-Key -> 200 (Syncthing-style clients)
++    let res = router.clone().oneshot(
++        plain_get("/rest/system/status").header("X-API-Key", TEST_TOKEN).body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    assert_eq!(res.status(), StatusCode::OK);
++
++    // WebSocket event stream without token -> 401
++    let res = router.clone().oneshot(
++        plain_get("/api/v1/events")
++            .header("connection", "upgrade")
++            .header("upgrade", "websocket")
++            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
++            .header("sec-websocket-version", "13")
++            .body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
++}
++
++#[tokio::test]
++async fn test_security_api_fails_closed_without_configured_token() {
++    let harness = TestHarness::new();
++    let mut state = harness.app_state.clone();
++    state.auth_token = None;
++    let router = ApiServer::create_router(state);
++
++    let res = router.oneshot(
++        plain_get("/api/v1/system/ping").header("Authorization", "Bearer anything").body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
++}
++
++/// Replays the drive-by attack from the audit: a web page registers a folder,
++/// adds an attacker device and shares the folder — all without a token.
++#[tokio::test]
++async fn test_security_drive_by_folder_exfiltration_blocked() {
++    let harness = TestHarness::new();
++    let router = ApiServer::create_router(harness.app_state.clone());
++    let attacker = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
++
++    let reqs = vec![
++        Request::builder().method("POST").uri("/api/v1/folders")
++            .header("Origin", "https://evil.example").header("Content-Type", "application/json")
++            .body(Body::from(r#"{"folder_id":"loot","local_path":"/tmp/victim"}"#)).unwrap(),
++        Request::builder().method("POST").uri("/api/v1/devices")
++            .header("Origin", "https://evil.example").header("Content-Type", "application/json")
++            .body(Body::from(format!(r#"{{"device_id":"{}","name":"attacker","addresses":["tcp://203.0.113.5:22000"],"is_trusted":true,"introducer":true}}"#, attacker))).unwrap(),
++        Request::builder().method("POST").uri(format!("/api/v1/folders/loot/devices/{}", attacker))
++            .header("Origin", "https://evil.example").body(Body::empty()).unwrap(),
++        Request::builder().method("POST").uri("/api/v1/system/shutdown")
++            .header("Origin", "https://evil.example").body(Body::empty()).unwrap(),
++    ];
++    for req in reqs {
++        let res = router.clone().oneshot(req).await.unwrap();
++        assert!(
++            res.status() == StatusCode::FORBIDDEN || res.status() == StatusCode::UNAUTHORIZED,
++            "attack request was not rejected: {}", res.status()
++        );
++    }
++
++    assert!(harness.storage.list_folders().unwrap().iter().all(|f| f.folder_id != "loot"));
++    assert!(harness.storage.get_device(attacker).unwrap().is_none());
++}
++
++#[tokio::test]
++async fn test_security_cors_and_origin_allowlist() {
++    let harness = TestHarness::new();
++
++    // Default: no browser origin is allowed, even with a valid token.
++    let router = ApiServer::create_router(harness.app_state.clone());
++    let res = router.clone().oneshot(
++        plain_get("/api/v1/system/status")
++            .header("Origin", "https://evil.example")
++            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
++            .body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    assert_eq!(res.status(), StatusCode::FORBIDDEN);
++    assert!(res.headers().get("access-control-allow-origin").is_none());
++
++    // Preflight from a foreign origin gets no CORS approval.
++    let res = router.clone().oneshot(
++        Request::builder().method("OPTIONS").uri("/api/v1/devices")
++            .header("Origin", "https://evil.example")
++            .header("Access-Control-Request-Method", "POST")
++            .body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    assert!(res.headers().get("access-control-allow-origin").is_none());
++
++    // An explicitly allowed origin (e.g. the web UI) works.
++    let mut state = harness.app_state.clone();
++    state.allowed_origins = vec!["http://localhost:8080".into()];
++    let router = ApiServer::create_router(state);
++    let res = router.clone().oneshot(
++        plain_get("/api/v1/system/status")
++            .header("Origin", "http://localhost:8080")
++            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
++            .body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    assert_eq!(res.status(), StatusCode::OK);
++    assert_eq!(res.headers().get("access-control-allow-origin").unwrap(), "http://localhost:8080");
++
++    // ...but other origins are still refused.
++    let res = router.oneshot(
++        plain_get("/api/v1/system/status")
++            .header("Origin", "https://evil.example")
++            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
++            .body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    assert_eq!(res.status(), StatusCode::FORBIDDEN);
++}
++
++#[tokio::test]
++async fn test_security_p2p_rejects_poisoned_or_traversal_chunks() {
++    use synapse_core::p2p::P2PMessage;
++    let harness = TestHarness::new();
++    let p2p = harness.app_state.p2p_manager.clone();
++    let peer = Some("192.0.2.10:9190".parse().unwrap());
++
++    // Payload that doesn't match its claimed hash is dropped.
++    let honest = b"real chunk bytes".to_vec();
++    let claimed = blake3::hash(&honest).to_hex().to_string();
++    p2p.handle_p2p_message(P2PMessage::ChunkResponse { chunk_hash: claimed.clone(), data: b"poison".to_vec() }, peer)
++        .await.unwrap();
++    assert!(!harness.storage.has_chunk(&claimed));
++
++    // Path traversal in the chunk ID is dropped and nothing is written.
++    let escape = harness.temp_dir.join("escaped");
++    let evil = format!("../../../{}", escape.display());
++    p2p.handle_p2p_message(P2PMessage::ChunkResponse { chunk_hash: evil.clone(), data: b"x".to_vec() }, peer)
++        .await.unwrap();
++    assert!(!harness.temp_dir.join("escaped.chunk").exists());
++    let reply = p2p.handle_p2p_message(P2PMessage::ChunkRequest { chunk_hash: evil }, peer).await.unwrap();
++    assert!(reply.is_none());
++
++    // A matching payload is stored.
++    p2p.handle_p2p_message(P2PMessage::ChunkResponse { chunk_hash: claimed.clone(), data: honest.clone() }, peer)
++        .await.unwrap();
++    assert_eq!(harness.storage.get_chunk(&claimed).unwrap().unwrap(), honest);
++}
+--- a/synapse-core/README.md
++++ b/synapse-core/README.md
+@@ -94,17 +94,18 @@
+ 
+ ## Local Control Plane: REST & WebSocket API Documentation
+ 
+-The Synapse Core daemon exposes an internal HTTP and WebSocket API on `127.0.0.1:9090` (configurable via `--addr` and `--port`). All endpoints are CORS-enabled for web and desktop UI integration.
++The Synapse Core daemon exposes an internal HTTP and WebSocket API on `127.0.0.1:9090` (configurable via `--addr` and `--port`). Every endpoint requires the API token; browser (CORS) access is off unless enabled with `--allow-origin`.
+ 
+ ### Base URL & Headers
+ ```http
+ http://127.0.0.1:9090/api/v1
+ Content-Type: application/json
+ ```
+-If started with `--token <token>`, include the authorization header:
++Include the API token on every request (`X-API-Key: <token>` also works):
+ ```http
+ Authorization: Bearer <token>
+ ```
++The token is whatever you pass with `--token` / `SYNAPSE_TOKEN`; otherwise the daemon generates one on first start and stores it in `<SYNAPSE_HOME>/api.token` (mode `0600`). Requests without it get `401`; requests from browser origins not allowed via `--allow-origin` get `403`.
+ 
+ ---
+ 
+@@ -418,7 +419,8 @@
+   -p, --port <PORT>          Control plane HTTP & WS port [default: 9090]
+       --p2p-port <PORT>      P2P QUIC transport listening port [default: 9190]
+       --discovery-port <P>   Local UDP discovery broadcast port [default: 21027]
+-      --token <TOKEN>        Security authentication token [env: SYNAPSE_TOKEN=]
++      --token <TOKEN>        API token; default: generated into <home>/api.token [env: SYNAPSE_TOKEN=]
++      --allow-origin <ORIGIN>  Browser origin allowed to call the API (repeatable)
+       --device-name <NAME>   Custom human-readable device name
+   -h, --help                 Print help
+   -V, --version              Print version
+--- a/docs/api-endpoints.md
++++ b/docs/api-endpoints.md
+@@ -3,7 +3,7 @@
+ **Version:** 1.0.0  
+ **Engine:** Synapse Core (Native Rust Daemon)  
+ **Default Bind Address:** `http://127.0.0.1:9090` (Configurable via `-a` / `-p`)  
+-**Authentication:** Optional Bearer Token (`--token <token>` or `env: SYNAPSE_TOKEN`)
++**Authentication:** Required API token (`--token <token>` / `env: SYNAPSE_TOKEN`, or auto-generated in `<SYNAPSE_HOME>/api.token`)
+ 
+ ---
+ 
+@@ -19,14 +19,18 @@
+ 
+ ## 2. Global Headers & Authentication
+ 
+-When the daemon is started with a security token, all incoming HTTP requests must include the Bearer token authorization header:
++Every request — REST and WebSocket — must carry the API token. Requests without it get `401 Unauthorized`.
+ 
+ ```http
+ Authorization: Bearer <token>
+ Content-Type: application/json
+ ```
+ 
+-All endpoints support Cross-Origin Resource Sharing (`CORS`) with wildcard origins to facilitate web management dashboards.
++`X-API-Key: <token>` is also accepted (Syncthing-style clients). Because browsers cannot set headers on a WebSocket upgrade, the event stream (`/api/v1/events`, `/rest/events`) additionally accepts `?token=<token>`. No other route accepts the token in the URL.
++
++**Where the token comes from:** pass `--token <token>` (or `SYNAPSE_TOKEN`). If none is given, the daemon creates a random 256-bit hex token on first start and stores it in `<SYNAPSE_HOME>/api.token` (file mode `0600` on Unix). UI clients and the CLI read it from there. The API never runs without a token.
++
++**Cross-origin (browser) access** is disabled by default: any request carrying an `Origin` header that is not explicitly allowed gets `403 Forbidden`. To use a browser-based UI, start the daemon with `--allow-origin <origin>` (repeatable), e.g. `--allow-origin http://localhost:8080`.
+ 
+ ---
+ 
+@@ -469,6 +473,7 @@
+ | `201 Created` | Resource registered or created |
+ | `204 No Content` | Resource deleted successfully |
+ | `400 Bad Request` | Invalid JSON syntax or missing query parameters |
+-| `401 Unauthorized` | Missing or invalid Bearer security token |
++| `401 Unauthorized` | Missing or invalid API token |
++| `403 Forbidden` | Request came from a browser origin not listed with `--allow-origin` |
+ | `404 Not Found` | Requested folder, device, or conflict not found |
+ | `500 Internal Error` | Database failure, I/O lock, or engine error |

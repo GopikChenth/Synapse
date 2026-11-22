@@ -16,7 +16,7 @@ use synapse_core::{SynapseConfig, SynapseCore};
 #[command(
     name = "synapse-core",
     author = "Synapse Team",
-    version = "1.0.0",
+    version, // from Cargo.toml
     about = "Decentralized File Synchronization & 3-Way Conflict Resolution Engine"
 )]
 struct Cli {
@@ -48,9 +48,13 @@ struct Cli {
     #[arg(long, default_value_t = 21027)]
     discovery_port: u16,
 
-    /// Security authentication token for API access
+    /// API token. If omitted, a random token is stored in <home>/api.token and used
     #[arg(long, env = "SYNAPSE_TOKEN")]
     token: Option<String>,
+
+    /// Browser origin allowed to call the API (repeatable), e.g. http://localhost:8080
+    #[arg(long = "allow-origin")]
+    allow_origin: Vec<String>,
 
     /// Custom human-readable device name
     #[arg(long)]
@@ -172,6 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(tok) = cli.token {
         config.auth_token = Some(tok);
     }
+    config.allowed_origins = cli.allow_origin;
     if let Some(dev) = cli.device_name {
         config.device_name = dev;
     }
@@ -184,7 +189,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Some(Commands::Status { api }) => {
             println!("Querying Synapse Core status at {}", api);
             // Quick client query
-            match reqwest_check(&api).await {
+            let token = config
+                .auth_token
+                .clone()
+                .or_else(|| synapse_core::read_api_token(&config.home_dir));
+            match reqwest_check(&api, token.as_deref()).await {
                 Ok(resp) => println!("{}", resp),
                 Err(e) => eprintln!("Unable to connect to daemon: {}", e),
             }
@@ -315,7 +324,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Ok(())
         }
         Some(Commands::Run) | None => {
-            info!("Synapse Core v1.0.0 starting...");
+            info!("Synapse Core v{} starting...", env!("CARGO_PKG_VERSION"));
             info!("Home Directory: {}", config.home_dir.display());
             info!("API Address:    http://{}", config.api_addr);
             info!("P2P Port (QUIC):{}", config.p2p_port);
@@ -323,16 +332,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             info!("Discovery Port: {}", config.discovery_port);
 
             let core = SynapseCore::init(config)?;
+            let run = core.run();
+            tokio::pin!(run);
 
             tokio::select! {
-                res = core.run() => {
+                res = &mut run => {
                     if let Err(e) = res {
                         error!("Synapse Core exited with error: {}", e);
                     }
+                    return Ok(());
                 }
-                _ = tokio::signal::ctrl_c() => {
+                _ = termination_signal() => {
                     info!("Received shutdown signal. Stopping Synapse Core gracefully...");
                 }
+                _ = synapse_core::engine_control().shutdown_requested() => {
+                    info!("Shutdown requested via API. Stopping Synapse Core gracefully...");
+                }
+            }
+
+            // Let the engine finish in-flight work (engine_lifecycle: stopping -> stopped).
+            synapse_core::engine_control().request_shutdown();
+            match tokio::time::timeout(std::time::Duration::from_secs(10), &mut run).await {
+                Ok(Err(e)) => error!("Synapse Core exited with error: {}", e),
+                Err(_) => error!("Graceful shutdown timed out after 10s; exiting"),
+                Ok(Ok(())) => {}
             }
 
             Ok(())
@@ -340,12 +363,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 }
 
-async fn reqwest_check(url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let client = reqwest_minimal_get(format!("{}/api/v1/system/status", url)).await?;
+/// Resolves on Ctrl-C, or on SIGTERM on Unix (systemd, `kill`, desktop app shutdown).
+async fn termination_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+async fn reqwest_check(url: &str, token: Option<&str>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let client = reqwest_minimal_get(format!("{}/api/v1/system/status", url), token).await?;
     Ok(client)
 }
 
-async fn reqwest_minimal_get(url: String) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+async fn reqwest_minimal_get(url: String, token: Option<&str>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let parsed = url.strip_prefix("http://").unwrap_or(&url);
     let mut parts = parsed.split('/');
     let host_port = parts.next().unwrap_or("127.0.0.1:9090");
@@ -355,7 +401,13 @@ async fn reqwest_minimal_get(url: String) -> Result<String, Box<dyn std::error::
     let (mut rd, mut wr) = tokio::io::split(stream);
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let req = format!("GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", path, host_port);
+    let auth = token
+        .map(|t| format!("Authorization: Bearer {}\r\n", t))
+        .unwrap_or_default();
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\n{}Connection: close\r\n\r\n",
+        path, host_port, auth
+    );
     wr.write_all(req.as_bytes()).await?;
 
     let mut response = String::new();

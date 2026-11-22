@@ -22,6 +22,9 @@ use axum::http::{Request, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
+/// API token used by the test harness; every request must present it.
+const TEST_TOKEN: &str = "test-token-0123456789abcdef0123456789abcdef";
+
 use synapse_core::api::{
     AcceptFolderPayload, ApiServer, AppState, DiffResponse, FolderDto, IgnoresRequest,
     RegisterFolderRequest, RejectFolderPayload, SystemStatusResponse, SystemVersionResponse,
@@ -80,9 +83,15 @@ impl TestHarness {
         let app_state = AppState {
             start_time: std::time::Instant::now(),
             sync_engine: sync_engine.clone(),
-            auth_token: None,
+            auth_token: Some(TEST_TOKEN.into()),
             peer_count: Arc::new(AtomicUsize::new(0)),
             p2p_manager,
+            allowed_origins: Vec::new(),
+            event_log: {
+                let log = synapse_core::api::EventLog::new();
+                log.spawn_recorder(sync_engine.event_sender());
+                log
+            },
         };
 
         Self {
@@ -314,6 +323,7 @@ async fn test_system_endpoints_all() {
 
     // 1. /rest/system/ping and /api/v1/system/ping
     let req_ping_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/ping")
         .method("GET")
         .body(Body::empty())
@@ -325,6 +335,7 @@ async fn test_system_endpoints_all() {
     assert_eq!(json["ping"], "pong");
 
     let req_ping_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/system/ping")
         .method("GET")
         .body(Body::empty())
@@ -337,6 +348,7 @@ async fn test_system_endpoints_all() {
 
     // 2. /rest/system/version and /api/v1/system/version
     let req_ver_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/version")
         .method("GET")
         .body(Body::empty())
@@ -351,6 +363,7 @@ async fn test_system_endpoints_all() {
     assert!(!ver_rest.arch.is_empty());
 
     let req_ver_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/system/version")
         .method("GET")
         .body(Body::empty())
@@ -364,6 +377,7 @@ async fn test_system_endpoints_all() {
 
     // 3. /rest/system/status and /api/v1/system/status
     let req_status_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/status")
         .method("GET")
         .body(Body::empty())
@@ -380,6 +394,7 @@ async fn test_system_endpoints_all() {
     assert!(status_rest.memory_footprint_bytes > 0);
 
     let req_status_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/system/status")
         .method("GET")
         .body(Body::empty())
@@ -404,6 +419,7 @@ async fn test_system_endpoints_all() {
     harness.storage.add_device(&dev).unwrap();
 
     let req_conn_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/connections")
         .method("GET")
         .body(Body::empty())
@@ -417,9 +433,33 @@ async fn test_system_endpoints_all() {
     let peer_metrics = &conn_map["DEV_PEER_01"];
     assert_eq!(peer_metrics.device_id, "DEV_PEER_01");
     assert_eq!(peer_metrics.address, "10.0.0.12:9190");
-    assert!(peer_metrics.is_connected);
+    // Truthful presence (peer_connection_lifecycle): a paired device that has never been
+    // heard from is NOT connected. (Previously this reported `!is_paused`, i.e. true.)
+    assert!(!peer_metrics.is_connected);
+    let raw: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(raw["DEV_PEER_01"]["connection_state"], "unknown");
+    assert!(raw["DEV_PEER_01"]["last_seen_secs_ago"].is_null());
+
+    // Once the peer is heard from, it is online and reports its live address.
+    harness.app_state.p2p_manager.register_peer(synapse_core::p2p::PeerInfo {
+        device_id: "DEV_PEER_01".into(),
+        device_name: "Remote Workstation".into(),
+        addr: "10.0.0.12:9190".parse().unwrap(),
+        last_seen: std::time::Instant::now(),
+        client_type: "synapse-quic (FastCDC)".into(),
+    }).await;
+    let res = router.clone().oneshot(
+        Request::builder().header("Authorization", format!("Bearer {}", TEST_TOKEN))
+            .uri("/rest/system/connections").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    let raw: serde_json::Value =
+        serde_json::from_slice(&axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(raw["DEV_PEER_01"]["is_connected"], true);
+    assert_eq!(raw["DEV_PEER_01"]["connection_state"], "online");
+    assert_eq!(raw["DEV_PEER_01"]["lifecycle"]["machine_id"], "peer_connection_lifecycle");
 
     let req_conn_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/connections")
         .method("GET")
         .body(Body::empty())
@@ -429,6 +469,7 @@ async fn test_system_endpoints_all() {
 
     // 5. /rest/system/shutdown and /api/v1/system/shutdown
     let req_sd_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/shutdown")
         .method("POST")
         .body(Body::empty())
@@ -437,6 +478,7 @@ async fn test_system_endpoints_all() {
     assert_eq!(res_sd_rest.status(), StatusCode::OK);
 
     let req_sd_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/system/shutdown")
         .method("POST")
         .body(Body::empty())
@@ -446,6 +488,7 @@ async fn test_system_endpoints_all() {
 
     // 6. /rest/system/restart and /api/v1/system/restart
     let req_rs_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/restart")
         .method("POST")
         .body(Body::empty())
@@ -455,6 +498,7 @@ async fn test_system_endpoints_all() {
 
     // 7. /rest/system/config Syncthing full config format
     let req_cfg_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/config")
         .method("GET")
         .body(Body::empty())
@@ -468,6 +512,7 @@ async fn test_system_endpoints_all() {
 
     // 8. /rest/system/pause and /rest/system/resume query parameter compatibility
     let req_pause_dev = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/pause?device=DEV_PEER_01")
         .method("POST")
         .body(Body::empty())
@@ -477,6 +522,7 @@ async fn test_system_endpoints_all() {
     assert!(harness.storage.get_device("DEV_PEER_01").unwrap().unwrap().is_paused);
 
     let req_resume_dev = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/resume?device=DEV_PEER_01")
         .method("POST")
         .body(Body::empty())
@@ -486,6 +532,7 @@ async fn test_system_endpoints_all() {
     assert!(!harness.storage.get_device("DEV_PEER_01").unwrap().unwrap().is_paused);
 
     let req_rs_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/system/restart")
         .method("POST")
         .body(Body::empty())
@@ -513,6 +560,7 @@ async fn test_cluster_pairing_and_devices_all() {
     harness.storage.add_pending_device(&pending_dev1).unwrap();
 
     let req_p1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/cluster/pending/devices")
         .method("GET")
         .body(Body::empty())
@@ -525,6 +573,7 @@ async fn test_cluster_pairing_and_devices_all() {
     assert_eq!(list[0].device_id, pending_dev1.device_id);
 
     let req_p2 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/cluster/pending/devices")
         .method("GET")
         .body(Body::empty())
@@ -535,6 +584,7 @@ async fn test_cluster_pairing_and_devices_all() {
     // 2. Accept Pending Device via /api/v1/cluster/pending/devices/:id/accept
     let accept_uri = format!("/api/v1/cluster/pending/devices/{}/accept", pending_dev1.device_id);
     let req_accept = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(&accept_uri)
         .method("POST")
         .body(Body::empty())
@@ -544,6 +594,7 @@ async fn test_cluster_pairing_and_devices_all() {
 
     // Verify moved to paired devices
     let req_devs = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/devices")
         .method("GET")
         .body(Body::empty())
@@ -570,6 +621,7 @@ async fn test_cluster_pairing_and_devices_all() {
 
     let reject_uri = format!("/rest/cluster/pending/devices/{}/reject", pending_dev2.device_id);
     let req_rej = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(&reject_uri)
         .method("POST")
         .body(Body::empty())
@@ -593,6 +645,7 @@ async fn test_cluster_pairing_and_devices_all() {
     };
     let dev_alpha_json = serde_json::to_string(&dev_alpha).unwrap();
     let req_add_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/devices")
         .method("POST")
         .header("Content-Type", "application/json")
@@ -613,6 +666,7 @@ async fn test_cluster_pairing_and_devices_all() {
     };
     let dev_beta_json = serde_json::to_string(&dev_beta).unwrap();
     let req_add_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/devices")
         .method("POST")
         .header("Content-Type", "application/json")
@@ -623,6 +677,7 @@ async fn test_cluster_pairing_and_devices_all() {
 
     // Verify GET /api/v1/devices/:id
     let req_get_dev = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/devices/ALPHA-DEV-001")
         .method("GET")
         .body(Body::empty())
@@ -635,6 +690,7 @@ async fn test_cluster_pairing_and_devices_all() {
 
     // Non-existent device returns 404
     let req_get_404 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/devices/DOES-NOT-EXIST")
         .method("GET")
         .body(Body::empty())
@@ -644,6 +700,7 @@ async fn test_cluster_pairing_and_devices_all() {
 
     // Pause & Resume Device
     let req_pause = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/devices/ALPHA-DEV-001/pause")
         .method("POST")
         .body(Body::empty())
@@ -654,6 +711,7 @@ async fn test_cluster_pairing_and_devices_all() {
     assert!(d.is_paused);
 
     let req_resume = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/devices/ALPHA-DEV-001/resume")
         .method("POST")
         .body(Body::empty())
@@ -665,6 +723,7 @@ async fn test_cluster_pairing_and_devices_all() {
 
     // Delete Device
     let req_del = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/devices/ALPHA-DEV-001")
         .method("DELETE")
         .body(Body::empty())
@@ -683,6 +742,7 @@ async fn test_cluster_pairing_and_devices_all() {
     harness.storage.add_pending_folder(&p_folder).unwrap();
 
     let req_pf_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/cluster/pending/folders")
         .method("GET")
         .body(Body::empty())
@@ -695,6 +755,7 @@ async fn test_cluster_pairing_and_devices_all() {
     assert_eq!(p_folders[0].folder_id, "shared_team_folder");
 
     let req_pf_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/cluster/pending/folders")
         .method("GET")
         .body(Body::empty())
@@ -711,6 +772,7 @@ async fn test_cluster_pairing_and_devices_all() {
     }).unwrap();
 
     let req_af = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/cluster/pending/folders/shared_team_folder/accept")
         .method("POST")
         .header("Content-Type", "application/json")
@@ -736,6 +798,7 @@ async fn test_cluster_pairing_and_devices_all() {
         device_id: "BETA-DEV-002".into(),
     }).unwrap();
     let req_rf = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/cluster/pending/folders/junk_folder/reject")
         .method("POST")
         .header("Content-Type", "application/json")
@@ -771,6 +834,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
         versioning_command: None,
     };
     let req_reg_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders")
         .method("POST")
         .header("Content-Type", "application/json")
@@ -793,6 +857,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
         versioning_command: None,
     };
     let req_reg_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/folders")
         .method("POST")
         .header("Content-Type", "application/json")
@@ -803,6 +868,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
 
     // List folders via GET /api/v1/folders and /rest/system/folders
     let req_list_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders")
         .method("GET")
         .body(Body::empty())
@@ -814,6 +880,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert_eq!(dtos.len(), 2);
 
     let req_list_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/folders")
         .method("GET")
         .body(Body::empty())
@@ -829,6 +896,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     harness.sync_engine.index_single_file("vault_v1", "file1.txt").unwrap();
 
     let req_st_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/db/status?folder=vault_v1")
         .method("GET")
         .body(Body::empty())
@@ -844,6 +912,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
 
     // Missing folder query parameter returns 400 Bad Request
     let req_st_bad = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/db/status")
         .method("GET")
         .body(Body::empty())
@@ -852,6 +921,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert_eq!(res_st_bad.status(), StatusCode::BAD_REQUEST);
 
     let req_st_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/status")
         .method("GET")
         .body(Body::empty())
@@ -864,6 +934,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
 
     // 3. Folder Completion: /rest/db/completion?folder=vault_v1 and /api/v1/folders/:id/completion
     let req_comp_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/db/completion?folder=vault_v1")
         .method("GET")
         .body(Body::empty())
@@ -876,6 +947,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert_eq!(comp_rest.completion_pct, 100.0);
 
     let req_comp_bad = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/db/completion")
         .method("GET")
         .body(Body::empty())
@@ -884,6 +956,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert_eq!(res_comp_bad.status(), StatusCode::BAD_REQUEST);
 
     let req_comp_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/completion")
         .method("GET")
         .body(Body::empty())
@@ -893,6 +966,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
 
     // 4. Folder Rescan: /rest/db/scan?folder=vault_v1 and /api/v1/folders/:id/rescan
     let req_scan_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/db/scan?folder=vault_v1")
         .method("POST")
         .body(Body::empty())
@@ -901,6 +975,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert_eq!(res_scan_rest.status(), StatusCode::OK);
 
     let req_scan_bad = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/db/scan")
         .method("POST")
         .body(Body::empty())
@@ -909,6 +984,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert_eq!(res_scan_bad.status(), StatusCode::BAD_REQUEST);
 
     let req_scan_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/rescan")
         .method("POST")
         .body(Body::empty())
@@ -921,6 +997,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
         ignore: vec!["*.tmp".into(), ".git/".into()],
     }).unwrap();
     let req_ig_v1_set = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/ignores")
         .method("POST")
         .header("Content-Type", "application/json")
@@ -930,6 +1007,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert_eq!(res_ig_v1_set.status(), StatusCode::OK);
 
     let req_ig_v1_get = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/ignores")
         .method("GET")
         .body(Body::empty())
@@ -945,6 +1023,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
         ignore: vec!["node_modules/".into(), "*.log".into(), "(?d).DS_Store".into()],
     }).unwrap();
     let req_ig_rest_set = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/db/ignores?folder=vault_v1")
         .method("POST")
         .header("Content-Type", "application/json")
@@ -954,6 +1033,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert_eq!(res_ig_rest_set.status(), StatusCode::OK);
 
     let req_ig_rest_get = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/db/ignores?folder=vault_v1")
         .method("GET")
         .body(Body::empty())
@@ -966,6 +1046,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
 
     // Negative query test
     let req_ig_bad = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/db/ignores")
         .method("GET")
         .body(Body::empty())
@@ -975,6 +1056,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
 
     // 6. Folder Device Sharing: /api/v1/folders/:id/devices and /api/v1/folders/:id/devices/:device_id
     let req_devs_init = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/devices")
         .method("GET")
         .body(Body::empty())
@@ -987,6 +1069,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
 
     // Share with remote device
     let req_share = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/devices/REMOTE_PEER_42")
         .method("POST")
         .body(Body::empty())
@@ -995,6 +1078,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert_eq!(res_share.status(), StatusCode::OK);
 
     let req_devs_after = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/devices")
         .method("GET")
         .body(Body::empty())
@@ -1006,6 +1090,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
 
     // Unshare
     let req_unshare = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/devices/REMOTE_PEER_42")
         .method("DELETE")
         .body(Body::empty())
@@ -1014,6 +1099,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert_eq!(res_unshare.status(), StatusCode::OK);
 
     let req_devs_final = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/devices")
         .method("GET")
         .body(Body::empty())
@@ -1025,6 +1111,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
 
     // 7. Folder Pause, Resume, and Delete
     let req_pause = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/pause")
         .method("POST")
         .body(Body::empty())
@@ -1035,6 +1122,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert!(f.is_paused);
 
     let req_resume = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1/resume")
         .method("POST")
         .body(Body::empty())
@@ -1045,6 +1133,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     assert!(!f.is_paused);
 
     let req_del = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/folders/vault_v1")
         .method("DELETE")
         .body(Body::empty())
@@ -1090,6 +1179,7 @@ async fn test_conflict_endpoints_diff_and_resolution_actions() {
 
     // GET /api/v1/conflicts
     let req = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/conflicts")
         .method("GET")
         .body(Body::empty())
@@ -1103,6 +1193,7 @@ async fn test_conflict_endpoints_diff_and_resolution_actions() {
 
     // GET /api/v1/conflicts/:id
     let req = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}", cnf_id_1))
         .method("GET")
         .body(Body::empty())
@@ -1112,6 +1203,7 @@ async fn test_conflict_endpoints_diff_and_resolution_actions() {
 
     // GET /api/v1/conflicts/:id/base
     let req = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/base", cnf_id_1))
         .method("GET")
         .body(Body::empty())
@@ -1123,6 +1215,7 @@ async fn test_conflict_endpoints_diff_and_resolution_actions() {
 
     // GET /api/v1/conflicts/:id/local
     let req = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/local", cnf_id_1))
         .method("GET")
         .body(Body::empty())
@@ -1134,6 +1227,7 @@ async fn test_conflict_endpoints_diff_and_resolution_actions() {
 
     // GET /api/v1/conflicts/:id/remote
     let req = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/remote", cnf_id_1))
         .method("GET")
         .body(Body::empty())
@@ -1145,6 +1239,7 @@ async fn test_conflict_endpoints_diff_and_resolution_actions() {
 
     // GET /api/v1/conflicts/:id/diff (3-Way Diff Generation)
     let req = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/diff", cnf_id_1))
         .method("GET")
         .body(Body::empty())
@@ -1165,6 +1260,7 @@ async fn test_conflict_endpoints_diff_and_resolution_actions() {
         merged_content: None,
     };
     let req_res_local = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id_1))
         .method("POST")
         .header("Content-Type", "application/json")
@@ -1202,6 +1298,7 @@ async fn test_conflict_endpoints_diff_and_resolution_actions() {
         merged_content: None,
     };
     let req_res_remote = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id_2))
         .method("POST")
         .header("Content-Type", "application/json")
@@ -1237,6 +1334,7 @@ async fn test_conflict_endpoints_diff_and_resolution_actions() {
         merged_content: Some(custom_solution.to_string()),
     };
     let req_res_custom = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id_3))
         .method("POST")
         .header("Content-Type", "application/json")
@@ -1277,6 +1375,7 @@ async fn test_conflict_endpoints_diff_and_resolution_actions() {
         merged_content: None,
     };
     let req_res_both = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id_4))
         .method("POST")
         .header("Content-Type", "application/json")
@@ -1312,6 +1411,7 @@ async fn test_websocket_realtime_event_streaming() {
     let router = ApiServer::create_router(harness.app_state.clone());
 
     let req_ws_v1 = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/events")
         .header("connection", "upgrade")
         .header("upgrade", "websocket")
@@ -1323,6 +1423,7 @@ async fn test_websocket_realtime_event_streaming() {
     assert_eq!(res_ws_v1.status(), StatusCode::UPGRADE_REQUIRED);
 
     let req_ws_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/events")
         .header("connection", "upgrade")
         .header("upgrade", "websocket")
@@ -1352,13 +1453,13 @@ async fn test_websocket_realtime_event_streaming() {
         Err(e) => panic!("Failed to connect to test server: {}", e),
     };
     let handshake = format!(
-        "GET /api/v1/events HTTP/1.1\r\n\
+        "GET /api/v1/events?token={} HTTP/1.1\r\n\
          Host: {}\r\n\
          Upgrade: websocket\r\n\
          Connection: Upgrade\r\n\
          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
          Sec-WebSocket-Version: 13\r\n\r\n",
-        addr
+        TEST_TOKEN, addr
     );
     stream.write_all(handshake.as_bytes()).await.unwrap();
 
@@ -1420,12 +1521,13 @@ async fn test_websocket_realtime_event_streaming() {
     let mut stream_rest = tokio::net::TcpStream::connect(addr).await.unwrap();
     let handshake_rest = format!(
         "GET /rest/events HTTP/1.1\r\n\
+         X-API-Key: {}\r\n\
          Host: {}\r\n\
          Upgrade: websocket\r\n\
          Connection: Upgrade\r\n\
          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
          Sec-WebSocket-Version: 13\r\n\r\n",
-        addr
+        TEST_TOKEN, addr
     );
     stream_rest.write_all(handshake_rest.as_bytes()).await.unwrap();
 
@@ -1454,6 +1556,7 @@ async fn test_state_machine_architecture_ux_dx_ax() {
     // 1. AX Introspection Endpoint (/api/v1/system/statemachines & /rest/*)
     // -------------------------------------------------------------------------
     let req = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/system/statemachines")
         .method("GET")
         .body(Body::empty())
@@ -1472,6 +1575,7 @@ async fn test_state_machine_architecture_ux_dx_ax() {
 
     // Verify alias route /rest/system/statemachines
     let req_rest = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/statemachines")
         .method("GET")
         .body(Body::empty())
@@ -1498,6 +1602,7 @@ async fn test_state_machine_architecture_ux_dx_ax() {
 
     // Inspect conflict details - verify affordances (AX)
     let req_det = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}", cnf_id))
         .method("GET")
         .body(Body::empty())
@@ -1518,6 +1623,7 @@ async fn test_state_machine_architecture_ux_dx_ax() {
         merged_content: None,
     };
     let req_res = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id))
         .method("POST")
         .header("Content-Type", "application/json")
@@ -1528,6 +1634,7 @@ async fn test_state_machine_architecture_ux_dx_ax() {
 
     // Verify conflict is now in terminal RESOLVED state
     let req_det_after = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}", cnf_id))
         .method("GET")
         .body(Body::empty())
@@ -1542,6 +1649,7 @@ async fn test_state_machine_architecture_ux_dx_ax() {
 
     // Second resolution attempt: must be REJECTED by transition guard (UX & DX Safety)
     let req_double_res = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/resolve", cnf_id))
         .method("POST")
         .header("Content-Type", "application/json")
@@ -1568,6 +1676,7 @@ async fn test_state_machine_architecture_ux_dx_ax() {
 
     // Ignore conflict
     let req_ignore = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/ignore", cnf_id_2))
         .method("POST")
         .body(Body::empty())
@@ -1581,6 +1690,7 @@ async fn test_state_machine_architecture_ux_dx_ax() {
 
     // Reopen conflict back to PENDING
     let req_reopen = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/conflicts/{}/reopen", cnf_id_2))
         .method("POST")
         .body(Body::empty())
@@ -1596,6 +1706,7 @@ async fn test_state_machine_architecture_ux_dx_ax() {
     // 4. Dynamic Folder & System Sync State
     // -------------------------------------------------------------------------
     let req_status = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/folders/{}/status", folder_id))
         .method("GET")
         .body(Body::empty())
@@ -1609,6 +1720,7 @@ async fn test_state_machine_architecture_ux_dx_ax() {
     // Manually set folder to scanning
     harness.sync_engine.set_folder_state(folder_id, synapse_core::state::FolderSyncState::Scanning);
     let req_scanning = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(format!("/api/v1/folders/{}/status", folder_id))
         .method("GET")
         .body(Body::empty())
@@ -1620,6 +1732,7 @@ async fn test_state_machine_architecture_ux_dx_ax() {
 
     // System status dynamically reflects scanning state
     let req_sys = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/system/status")
         .method("GET")
         .body(Body::empty())
@@ -1729,6 +1842,7 @@ async fn test_mobile_pairing_event_and_acceptance_workflow() {
 
     // 3. Verify pending device is visible via GET /api/v1/cluster/pending/devices
     let req_pending = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/api/v1/cluster/pending/devices")
         .method("GET")
         .body(Body::empty())
@@ -1743,6 +1857,7 @@ async fn test_mobile_pairing_event_and_acceptance_workflow() {
     // 4. Accept pending mobile device via POST /api/v1/cluster/pending/devices/:id/accept
     let accept_uri = format!("/api/v1/cluster/pending/devices/{}/accept", mobile_id);
     let req_accept = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri(&accept_uri)
         .method("POST")
         .body(Body::empty())
@@ -1766,4 +1881,569 @@ async fn test_mobile_pairing_event_and_acceptance_workflow() {
     assert_eq!(devices[0].device_id, mobile_id);
     assert_eq!(devices[0].name, mobile_name);
     assert!(harness.storage.list_pending_devices().unwrap().is_empty());
+}
+
+// =============================================================================
+// SECURITY REGRESSION TESTS (control API auth, CORS, chunk integrity)
+// =============================================================================
+
+fn plain_get(uri: &str) -> axum::http::request::Builder {
+    Request::builder().method("GET").uri(uri)
+}
+
+#[tokio::test]
+async fn test_security_api_requires_token() {
+    let harness = TestHarness::new();
+    let router = ApiServer::create_router(harness.app_state.clone());
+
+    // No token -> 401
+    let res = router.clone().oneshot(plain_get("/api/v1/system/status").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Wrong token -> 401
+    let res = router.clone().oneshot(
+        plain_get("/api/v1/system/status").header("Authorization", "Bearer wrong-token").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Token as query parameter is only honoured on the WebSocket event stream
+    let res = router.clone().oneshot(
+        plain_get(&format!("/api/v1/system/status?token={}", TEST_TOKEN)).body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Bearer token -> 200
+    let res = router.clone().oneshot(
+        plain_get("/api/v1/system/status").header("Authorization", format!("Bearer {}", TEST_TOKEN)).body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // X-API-Key -> 200 (Syncthing-style clients)
+    let res = router.clone().oneshot(
+        plain_get("/rest/system/status").header("X-API-Key", TEST_TOKEN).body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // WebSocket event stream without token -> 401
+    let res = router.clone().oneshot(
+        plain_get("/api/v1/events")
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("sec-websocket-version", "13")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_security_api_fails_closed_without_configured_token() {
+    let harness = TestHarness::new();
+    let mut state = harness.app_state.clone();
+    state.auth_token = None;
+    let router = ApiServer::create_router(state);
+
+    let res = router.oneshot(
+        plain_get("/api/v1/system/ping").header("Authorization", "Bearer anything").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Replays the drive-by attack from the audit: a web page registers a folder,
+/// adds an attacker device and shares the folder — all without a token.
+#[tokio::test]
+async fn test_security_drive_by_folder_exfiltration_blocked() {
+    let harness = TestHarness::new();
+    let router = ApiServer::create_router(harness.app_state.clone());
+    let attacker = "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA";
+
+    let reqs = vec![
+        Request::builder().method("POST").uri("/api/v1/folders")
+            .header("Origin", "https://evil.example").header("Content-Type", "application/json")
+            .body(Body::from(r#"{"folder_id":"loot","local_path":"/tmp/victim"}"#)).unwrap(),
+        Request::builder().method("POST").uri("/api/v1/devices")
+            .header("Origin", "https://evil.example").header("Content-Type", "application/json")
+            .body(Body::from(format!(r#"{{"device_id":"{}","name":"attacker","addresses":["tcp://203.0.113.5:22000"],"is_trusted":true,"introducer":true}}"#, attacker))).unwrap(),
+        Request::builder().method("POST").uri(format!("/api/v1/folders/loot/devices/{}", attacker))
+            .header("Origin", "https://evil.example").body(Body::empty()).unwrap(),
+        Request::builder().method("POST").uri("/api/v1/system/shutdown")
+            .header("Origin", "https://evil.example").body(Body::empty()).unwrap(),
+    ];
+    for req in reqs {
+        let res = router.clone().oneshot(req).await.unwrap();
+        assert!(
+            res.status() == StatusCode::FORBIDDEN || res.status() == StatusCode::UNAUTHORIZED,
+            "attack request was not rejected: {}", res.status()
+        );
+    }
+
+    assert!(harness.storage.list_folders().unwrap().iter().all(|f| f.folder_id != "loot"));
+    assert!(harness.storage.get_device(attacker).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn test_security_cors_and_origin_allowlist() {
+    let harness = TestHarness::new();
+
+    // Default: no browser origin is allowed, even with a valid token.
+    let router = ApiServer::create_router(harness.app_state.clone());
+    let res = router.clone().oneshot(
+        plain_get("/api/v1/system/status")
+            .header("Origin", "https://evil.example")
+            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(res.headers().get("access-control-allow-origin").is_none());
+
+    // Preflight from a foreign origin gets no CORS approval.
+    let res = router.clone().oneshot(
+        Request::builder().method("OPTIONS").uri("/api/v1/devices")
+            .header("Origin", "https://evil.example")
+            .header("Access-Control-Request-Method", "POST")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert!(res.headers().get("access-control-allow-origin").is_none());
+
+    // An explicitly allowed origin (e.g. the web UI) works.
+    let mut state = harness.app_state.clone();
+    state.allowed_origins = vec!["http://localhost:8080".into()];
+    let router = ApiServer::create_router(state);
+    let res = router.clone().oneshot(
+        plain_get("/api/v1/system/status")
+            .header("Origin", "http://localhost:8080")
+            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers().get("access-control-allow-origin").unwrap(), "http://localhost:8080");
+
+    // ...but other origins are still refused.
+    let res = router.oneshot(
+        plain_get("/api/v1/system/status")
+            .header("Origin", "https://evil.example")
+            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_security_p2p_rejects_poisoned_or_traversal_chunks() {
+    use synapse_core::p2p::P2PMessage;
+    let harness = TestHarness::new();
+    let p2p = harness.app_state.p2p_manager.clone();
+    let addr = Some("192.0.2.10:9190".parse().unwrap());
+
+    // A real indexed file in a folder shared with PEER-SHARED only
+    let dir = harness.temp_dir.join("shared");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("doc.txt"), b"shared content").unwrap();
+    harness.storage.add_folder(&FolderRecord::new("shared", dir.to_string_lossy())).unwrap();
+    harness.sync_engine.index_folder("shared").unwrap();
+    let file = harness.storage.get_file("shared", "doc.txt").unwrap().unwrap();
+    let chunk = harness.storage.get_revision_chunks(&file.current_revision).unwrap()[0].clone();
+    for id in ["PEER-SHARED", "PEER-OTHER"] {
+        harness.storage.add_device(&DeviceRecord {
+            device_id: id.into(), name: id.into(), addresses: vec![], is_paused: false,
+            is_trusted: true, introducer: false, cert_name: None, created_at: 0,
+        }).unwrap();
+    }
+    harness.storage.share_folder_with_device("shared", "PEER-SHARED").unwrap();
+
+    // Unsolicited chunk responses are never stored — not from strangers, not from paired peers
+    let honest = b"real chunk bytes".to_vec();
+    let claimed = blake3::hash(&honest).to_hex().to_string();
+    for peer in ["STRANGER", "PEER-SHARED"] {
+        let r = p2p.handle_peer_message(peer, addr,
+            P2PMessage::ChunkResponse { chunk_hash: claimed.clone(), data: honest.clone() }).await.unwrap();
+        assert!(r.is_none());
+    }
+    assert!(!harness.storage.has_chunk(&claimed));
+
+    // Path traversal in a chunk id is rejected without touching the filesystem
+    let evil = format!("../../../{}", harness.temp_dir.join("escaped").display());
+    let r = p2p.handle_peer_message("PEER-SHARED", addr, P2PMessage::ChunkRequest { chunk_hash: evil }).await.unwrap();
+    assert!(r.is_none());
+    assert!(!harness.temp_dir.join("escaped.chunk").exists());
+
+    // Chunks are only served to paired peers the folder is shared with
+    let ask = || P2PMessage::ChunkRequest { chunk_hash: chunk.clone() };
+    assert!(p2p.handle_peer_message("STRANGER", addr, ask()).await.unwrap().is_none());
+    assert!(p2p.handle_peer_message("PEER-OTHER", addr, ask()).await.unwrap().is_none());
+    match p2p.handle_peer_message("PEER-SHARED", addr, ask()).await.unwrap() {
+        Some(P2PMessage::ChunkResponse { chunk_hash, data }) => {
+            assert_eq!(chunk_hash, chunk);
+            assert_eq!(data, b"shared content");
+        }
+        other => panic!("expected chunk, got {:?}", other),
+    }
+
+    // Index and file requests follow the same sharing rules
+    let idx = |id: &str| (id.to_string(), P2PMessage::IndexRequest { folder_id: "shared".into() });
+    for (id, msg) in [idx("STRANGER"), idx("PEER-OTHER")] {
+        assert!(p2p.handle_peer_message(&id, addr, msg).await.unwrap().is_none());
+    }
+    let (id, msg) = idx("PEER-SHARED");
+    assert!(matches!(p2p.handle_peer_message(&id, addr, msg).await.unwrap(),
+        Some(P2PMessage::IndexResponse { ref files, .. }) if files.len() == 1));
+
+    // A paused peer gets nothing either
+    harness.storage.set_device_paused("PEER-SHARED", true).unwrap();
+    assert!(p2p.handle_peer_message("PEER-SHARED", addr, ask()).await.unwrap().is_none());
+}
+
+// =============================================================================
+// SYNCTHING-COMPATIBLE EVENT LONG-POLL (GET /rest/events)
+// =============================================================================
+
+async fn get_events(router: &axum::Router, uri: &str) -> (StatusCode, Vec<serde_json::Value>) {
+    let res = router.clone().oneshot(
+        Request::builder().uri(uri)
+            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    let status = res.status();
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or_default())
+}
+
+#[tokio::test]
+async fn test_rest_events_long_poll_syncthing_format() {
+    let harness = TestHarness::new();
+    let router = ApiServer::create_router(harness.app_state.clone());
+
+    // First load with no events: returns an empty list immediately (no 400, no hang).
+    let (status, events) = get_events(&router, "/rest/events?since=0&limit=1000").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(events.is_empty());
+
+    // Publish engine events.
+    let tx = harness.sync_engine.event_sender().clone();
+    tx.send(CoreEvent::ItemFinished {
+        folder_id: "docs".into(), relative_path: "a.md".into(), action: "update".into(), error: None,
+    }).unwrap();
+    tx.send(CoreEvent::FileChanged {
+        folder_id: "docs".into(), relative_path: "b.md".into(), revision: "r1".into(),
+    }).unwrap();
+    tx.send(CoreEvent::PeerDisconnected { peer_id: "P1".into() }).unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let (status, events) = get_events(&router, "/rest/events?since=0&limit=1000").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0]["type"], "ItemFinished");
+    assert_eq!(events[0]["data"]["folder"], "docs");
+    assert_eq!(events[0]["data"]["item"], "a.md");
+    assert_eq!(events[0]["data"]["action"], "update");
+    assert_eq!(events[1]["type"], "LocalChangeDetected");
+    assert_eq!(events[1]["data"]["path"], "b.md");
+    assert_eq!(events[2]["type"], "PEER_DISCONNECTED");
+    assert!(events[2]["data"].is_object());
+    for e in &events {
+        assert!(e["id"].as_u64().unwrap() > 0);
+        assert_eq!(e["id"], e["globalID"]);
+        assert!(e["time"].is_string());
+    }
+
+    // `since` and `limit`
+    let first_id = events[0]["id"].as_u64().unwrap();
+    let (_, after) = get_events(&router, &format!("/rest/events?since={}", first_id)).await;
+    assert_eq!(after.len(), 2);
+    let (_, last_one) = get_events(&router, "/rest/events?since=0&limit=1").await;
+    assert_eq!(last_one.len(), 1);
+    assert_eq!(last_one[0]["type"], "PEER_DISCONNECTED");
+
+    // `events` type filter
+    let (_, only_items) = get_events(&router, "/api/v1/events?since=0&events=ItemFinished").await;
+    assert_eq!(only_items.len(), 1);
+
+    // Long-poll: waits for the next event instead of returning empty.
+    let last_id = events[2]["id"].as_u64().unwrap();
+    let router2 = router.clone();
+    let waiter = tokio::spawn(async move {
+        get_events(&router2, &format!("/rest/events?since={}&timeout=5", last_id)).await
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    tx.send(CoreEvent::ItemFinished {
+        folder_id: "docs".into(), relative_path: "c.md".into(), action: "update".into(), error: None,
+    }).unwrap();
+    let (_, new_events) = tokio::time::timeout(Duration::from_secs(3), waiter).await.unwrap().unwrap();
+    assert_eq!(new_events.len(), 1);
+    assert_eq!(new_events[0]["data"]["item"], "c.md");
+
+    // Long-poll times out with an empty list.
+    let (status, none) = get_events(&router, &format!("/rest/events?since={}&timeout=1", last_id + 1)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(none.is_empty());
+}
+
+// =============================================================================
+// LIFECYCLE STATE MACHINES: folder, device pairing, peer presence
+// =============================================================================
+
+async fn api_json(router: &axum::Router, method: &str, uri: &str) -> (StatusCode, serde_json::Value) {
+    let res = router.clone().oneshot(
+        Request::builder().method(method).uri(uri)
+            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    let status = res.status();
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null))
+}
+
+fn drain_folder_events(rx: &mut tokio::sync::broadcast::Receiver<CoreEvent>, folder: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    while let Ok(evt) = rx.try_recv() {
+        if let CoreEvent::FolderStateChanged { folder_id, from, to, .. } = evt {
+            if folder_id == folder { out.push((from, to)); }
+        }
+    }
+    out
+}
+
+/// Regression: an error part-way through a scan used to leave the folder stuck in
+/// "scanning" forever with no reason. Now it lands in "error" with a reason, and a
+/// successful rescan recovers it.
+#[tokio::test]
+async fn test_folder_lifecycle_never_sticks_and_reports_errors() {
+    use synapse_core::state::FolderSyncState;
+    let harness = TestHarness::new();
+    let router = ApiServer::create_router(harness.app_state.clone());
+    let mut rx = harness.sync_engine.event_sender().subscribe();
+
+    // A folder whose path is a *file*: the mount-safety marker cannot be created.
+    let bad_path = harness.temp_dir.join("not_a_dir");
+    fs::write(&bad_path, b"x").unwrap();
+    harness.storage.add_folder(&FolderRecord::new("broken", bad_path.to_string_lossy())).unwrap();
+
+    assert!(harness.sync_engine.index_folder("broken").is_err());
+    assert_eq!(harness.sync_engine.get_folder_state("broken"), FolderSyncState::Error);
+    let err = harness.sync_engine.folder_error("broken").expect("error reason recorded");
+    assert!(err.message.starts_with("Scan failed:"), "{}", err.message);
+    assert_eq!(
+        drain_folder_events(&mut rx, "broken"),
+        vec![("idle".into(), "scanning".into()), ("scanning".into(), "error".into())]
+    );
+
+    // API exposes state, reason, and what to do next
+    let (status, folders) = api_json(&router, "GET", "/api/v1/folders").await;
+    assert_eq!(status, StatusCode::OK);
+    let f = folders.as_array().unwrap().iter().find(|f| f["folder_id"] == "broken").unwrap();
+    assert_eq!(f["state"], "error");
+    assert!(f["error"]["message"].as_str().unwrap().contains("Scan failed"));
+    assert_eq!(f["lifecycle"]["machine_id"], "folder_sync_lifecycle");
+    assert!(f["lifecycle"]["available_actions"].as_array().unwrap().iter().any(|a| a == "RESCAN"));
+    let (_, st) = api_json(&router, "GET", "/api/v1/folders/broken/status").await;
+    assert_eq!(st["state"], "error");
+    assert!(st["error"]["message"].is_string());
+
+    // Fix the problem and rescan: back to idle, error cleared
+    fs::remove_file(&bad_path).unwrap();
+    fs::create_dir_all(&bad_path).unwrap();
+    harness.sync_engine.index_folder("broken").unwrap();
+    assert_eq!(harness.sync_engine.get_folder_state("broken"), FolderSyncState::Idle);
+    assert!(harness.sync_engine.folder_error("broken").is_none());
+    assert_eq!(
+        drain_folder_events(&mut rx, "broken"),
+        vec![("error".into(), "scanning".into()), ("scanning".into(), "idle".into())]
+    );
+}
+
+#[tokio::test]
+async fn test_folder_lifecycle_skips_duplicate_scans_and_survives_panics() {
+    use synapse_core::engine::FolderWork;
+    use synapse_core::state::FolderSyncState;
+    let harness = TestHarness::new();
+    let dir = harness.temp_dir.join("docs");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("a.txt"), b"hello").unwrap();
+    harness.storage.add_folder(&FolderRecord::new("docs", dir.to_string_lossy())).unwrap();
+
+    // While a scan is running, a second scan is skipped instead of racing.
+    let guard = harness.sync_engine.begin_work("docs", FolderWork::Scan).unwrap();
+    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Scanning);
+    assert!(harness.sync_engine.begin_work("docs", FolderWork::Scan).is_none());
+    assert_eq!(harness.sync_engine.index_folder("docs").unwrap(), 0);
+    drop(guard);
+    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Idle);
+    assert_eq!(harness.sync_engine.index_folder("docs").unwrap(), 1);
+
+    // A panic during work still releases the folder.
+    let engine = harness.sync_engine.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _g = engine.begin_work("docs", FolderWork::Sync).unwrap();
+        assert_eq!(engine.get_folder_state("docs"), FolderSyncState::Syncing);
+        panic!("simulated failure mid-sync");
+    }));
+    assert!(result.is_err());
+    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Idle);
+
+    // Pause/resume go through the lifecycle; resume clears a recorded error.
+    harness.sync_engine.record_folder_outcome("docs", Err("disk full".into()));
+    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Error);
+    harness.sync_engine.set_folder_paused("docs", true).unwrap();
+    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Paused);
+    harness.sync_engine.set_folder_paused("docs", false).unwrap();
+    assert_eq!(harness.sync_engine.get_folder_state("docs"), FolderSyncState::Idle);
+}
+
+/// Regression: rejecting a device used to delete the request, so it re-appeared on the
+/// next announcement forever. Now the rejection is remembered, can be undone, and every
+/// illegal move returns a structured error.
+#[tokio::test]
+async fn test_device_pairing_lifecycle_end_to_end() {
+    let harness = TestHarness::new();
+    let router = ApiServer::create_router(harness.app_state.clone());
+    let id = "PAIR-TEST-0001";
+    let pending = PendingDeviceRecord {
+        device_id: id.into(), name: "Tablet".into(), address: "192.0.2.5:22000".into(), received_at: 1,
+    };
+    harness.storage.add_pending_device(&pending).unwrap();
+
+    let (_, list) = api_json(&router, "GET", "/api/v1/cluster/pending/devices").await;
+    assert_eq!(list[0]["pairing_state"], "pending");
+    assert_eq!(list[0]["lifecycle"]["available_actions"], serde_json::json!(["ACCEPT", "REJECT"]));
+
+    // Reject -> remembered
+    let (status, _) = api_json(&router, "POST", &format!("/api/v1/cluster/pending/devices/{}/reject", id)).await;
+    assert_eq!(status, StatusCode::OK);
+    harness.storage.add_pending_device(&pending).unwrap(); // device announces itself again
+    let (_, list) = api_json(&router, "GET", "/api/v1/cluster/pending/devices").await;
+    assert!(list.as_array().unwrap().is_empty(), "rejected device re-appeared as pending");
+    let (_, rejected) = api_json(&router, "GET", "/api/v1/cluster/rejected/devices").await;
+    assert_eq!(rejected[0]["device_id"], id);
+    assert_eq!(rejected[0]["lifecycle"]["available_actions"], serde_json::json!(["UNREJECT"]));
+
+    // Illegal move: accept a rejected device -> structured error telling you what to do
+    let (status, err) = api_json(&router, "POST", &format!("/api/v1/cluster/pending/devices/{}/accept", id)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(err["error"], "invalid_transition");
+    assert_eq!(err["entity"], "device");
+    assert_eq!(err["current_state"], "rejected");
+    assert_eq!(err["attempted_transition"], "paired");
+    assert_eq!(err["available_actions"], serde_json::json!(["UNREJECT"]));
+    assert!(err["message"].as_str().unwrap().contains("Invalid state transition"));
+
+    // Un-reject -> pending -> accept -> paired
+    let (status, _) = api_json(&router, "POST", &format!("/api/v1/cluster/rejected/devices/{}/unreject", id)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = api_json(&router, "POST", &format!("/api/v1/cluster/pending/devices/{}/accept", id)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, dev) = api_json(&router, "GET", &format!("/api/v1/devices/{}", id)).await;
+    assert_eq!(dev["pairing_state"], "paired");
+    assert_eq!(dev["connection_state"], "unknown");
+    assert!(dev["lifecycle"]["available_actions"].as_array().unwrap().iter().any(|a| a == "PAUSE"));
+
+    // Paired devices never become pending again
+    harness.storage.add_pending_device(&pending).unwrap();
+    assert!(harness.storage.get_pending_device(id).unwrap().is_none());
+
+    // Pause is idempotent; accepting a paired device is illegal; unknown devices are 404
+    assert_eq!(api_json(&router, "POST", &format!("/api/v1/devices/{}/pause", id)).await.0, StatusCode::OK);
+    assert_eq!(api_json(&router, "POST", &format!("/api/v1/devices/{}/pause", id)).await.0, StatusCode::OK);
+    let (_, dev) = api_json(&router, "GET", &format!("/api/v1/devices/{}", id)).await;
+    assert_eq!(dev["pairing_state"], "paused");
+    assert_eq!(dev["connection_state"], "paused");
+    let (status, err) = api_json(&router, "POST", &format!("/api/v1/cluster/pending/devices/{}/accept", id)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(err["current_state"], "paused");
+    assert_eq!(api_json(&router, "POST", "/api/v1/devices/NO-SUCH-DEVICE/pause").await.0, StatusCode::NOT_FOUND);
+
+    // Regression: a *paused* paired device saying Hello must not become a pairing request.
+    harness.app_state.p2p_manager.handle_peer_message(
+        id,
+        Some("192.0.2.5:9190".parse().unwrap()),
+        synapse_core::p2p::P2PMessage::Hello {
+            device_id: id.into(), device_name: "Tablet".into(), folders: vec![], cluster_devices: vec![],
+        },
+    ).await.unwrap();
+    assert!(harness.storage.get_pending_device(id).unwrap().is_none());
+    assert_eq!(api_json(&router, "POST", &format!("/api/v1/devices/{}/resume", id)).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_peer_presence_goes_offline_and_emits_disconnect_once() {
+    let harness = TestHarness::new();
+    let router = ApiServer::create_router(harness.app_state.clone());
+    let p2p = harness.app_state.p2p_manager.clone();
+    harness.storage.add_device(&DeviceRecord {
+        device_id: "PRESENCE-1".into(), name: "Laptop".into(), addresses: vec!["dynamic".into()],
+        is_paused: false, is_trusted: true, introducer: false, cert_name: None, created_at: 0,
+    }).unwrap();
+    let mut rx = harness.sync_engine.event_sender().subscribe();
+
+    let seen = |secs_ago: u64| synapse_core::p2p::PeerInfo {
+        device_id: "PRESENCE-1".into(), device_name: "Laptop".into(),
+        addr: "192.0.2.9:9190".parse().unwrap(),
+        last_seen: std::time::Instant::now().checked_sub(Duration::from_secs(secs_ago)).unwrap(),
+        client_type: "synapse-quic (FastCDC)".into(),
+    };
+
+    p2p.register_peer(seen(0)).await;
+    p2p.sweep_presence().await;
+    let (_, conns) = api_json(&router, "GET", "/api/v1/connections").await;
+    assert_eq!(conns["PRESENCE-1"]["connection_state"], "online");
+    assert_eq!(conns["PRESENCE-1"]["is_connected"], true);
+
+    // Quiet for longer than the presence window -> offline, one disconnect event
+    p2p.register_peer(seen(synapse_core::p2p::PEER_PRESENCE_WINDOW.as_secs() + 5)).await;
+    p2p.sweep_presence().await;
+    p2p.sweep_presence().await;
+    let (_, conns) = api_json(&router, "GET", "/api/v1/connections").await;
+    assert_eq!(conns["PRESENCE-1"]["connection_state"], "offline");
+    assert_eq!(conns["PRESENCE-1"]["is_connected"], false);
+    let mut disconnects = 0;
+    while let Ok(evt) = rx.try_recv() {
+        if matches!(evt, CoreEvent::PeerDisconnected { ref peer_id } if peer_id == "PRESENCE-1") { disconnects += 1; }
+    }
+    assert_eq!(disconnects, 1);
+    assert_eq!(harness.app_state.peer_count.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+/// Regression: folders added at runtime were never watched until the engine restarted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_folder_watching_follows_folder_lifecycle() {
+    let harness = TestHarness::new();
+    let router = ApiServer::create_router(harness.app_state.clone());
+    let dir = harness.temp_dir.join("live");
+    fs::create_dir_all(&dir).unwrap();
+
+    let res = router.clone().oneshot(
+        Request::builder().method("POST").uri("/api/v1/folders")
+            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+            .header("Content-Type", "application/json")
+            .body(Body::from(format!(r#"{{"folder_id":"live","local_path":"{}"}}"#, dir.display()))).unwrap(),
+    ).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    let engine = harness.sync_engine.clone();
+    let wait = |cond: Box<dyn Fn() -> bool>, what: &'static str| async move {
+        let start = std::time::Instant::now();
+        while !cond() {
+            assert!(start.elapsed() < Duration::from_secs(10), "timed out: {}", what);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    let e = engine.clone();
+    wait(Box::new(move || e.is_watching("live")), "watcher started for new folder").await;
+
+    // A file written after registration is picked up by the watcher, no rescan needed
+    fs::write(dir.join("new.txt"), b"picked up live").unwrap();
+    let st = harness.storage.clone();
+    wait(Box::new(move || st.get_file("live", "new.txt").unwrap().is_some()), "live change indexed").await;
+
+    // Pause stops watching; resume starts it again; delete stops it
+    assert_eq!(api_json(&router, "POST", "/api/v1/folders/live/pause").await.0, StatusCode::OK);
+    assert!(!engine.is_watching("live"));
+    assert_eq!(api_json(&router, "POST", "/api/v1/folders/live/resume").await.0, StatusCode::OK);
+    assert!(engine.is_watching("live"));
+    let res = router.clone().oneshot(
+        Request::builder().method("DELETE").uri("/api/v1/folders/live")
+            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert!(res.status().is_success());
+    assert!(!engine.is_watching("live"));
 }

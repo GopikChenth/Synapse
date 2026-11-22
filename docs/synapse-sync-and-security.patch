@@ -1,0 +1,2832 @@
+--- a/synapse-core/Cargo.toml
++++ b/synapse-core/Cargo.toml
+@@ -16,7 +16,7 @@
+ 
+ [dependencies]
+ # Async Runtime
+-tokio = { version = "1.40", features = ["full", "test-util"] }
++tokio = { version = "1.40", features = ["full"] }
+ futures = "0.3"
+ futures-util = "0.3"
+ 
+@@ -26,7 +26,7 @@
+ tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+ 
+ # Storage & Database (bundled SQLite for 100% self-contained cross-platform binary)
+-rusqlite = { version = "0.32", features = ["bundled"] }
++rusqlite = { version = "0.43", features = ["bundled"] }
+ 
+ # Hashing & Chunking
+ blake3 = "1.5"
+@@ -63,3 +63,6 @@
+ tracing = "0.1"
+ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ chrono = { version = "0.4", features = ["serde"] }
++
++[dev-dependencies]
++tokio = { version = "1.40", features = ["full", "test-util"] }
+--- a/synapse-core/Cargo.lock
++++ b/synapse-core/Cargo.lock
+@@ -3,18 +3,6 @@
+ version = 4
+ 
+ [[package]]
+-name = "ahash"
+-version = "0.8.12"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+-dependencies = [
+- "cfg-if",
+- "once_cell",
+- "version_check",
+- "zerocopy",
+-]
+-
+-[[package]]
+ name = "aho-corasick"
+ version = "1.1.5"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -716,18 +704,18 @@
+ 
+ [[package]]
+ name = "hashbrown"
+-version = "0.14.5"
++version = "0.17.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
++checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+ dependencies = [
+- "ahash",
++ "foldhash",
+ ]
+ 
+ [[package]]
+ name = "hashlink"
+-version = "0.9.1"
++version = "0.12.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "6ba4ff7128dee98c7dc9794b6a411377e1404dba1c97deb8d1a55297bd25d8af"
++checksum = "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb"
+ dependencies = [
+  "hashbrown",
+ ]
+@@ -985,9 +973,9 @@
+ 
+ [[package]]
+ name = "libsqlite3-sys"
+-version = "0.30.1"
++version = "0.40.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149"
++checksum = "b06e69070b7e12262b0cd90832f0a7396f142a2b330181255562decf9f0c6215"
+ dependencies = [
+  "cc",
+  "pkg-config",
+@@ -1410,10 +1398,19 @@
+ ]
+ 
+ [[package]]
++name = "rsqlite-vfs"
++version = "0.2.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "353b74f9810d5b085b6c42c9d86a5f0fdb795553235cdd48753b32e3809d18a7"
++dependencies = [
++ "thiserror 2.0.21",
++]
++
++[[package]]
+ name = "rusqlite"
+-version = "0.32.1"
++version = "0.43.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "7753b721174eb8ff87a9a0e799e2d7bc3749323e773db92e0984debb00019d6e"
++checksum = "f172c4812a19b26d1c23cdb0070e69db335503dfa378b910eb857386e5b8beba"
+ dependencies = [
+  "bitflags 2.13.2",
+  "fallible-iterator",
+@@ -1421,6 +1418,7 @@
+  "hashlink",
+  "libsqlite3-sys",
+  "smallvec",
++ "sqlite-wasm-rs",
+ ]
+ 
+ [[package]]
+@@ -1760,6 +1758,16 @@
+ ]
+ 
+ [[package]]
++name = "sqlite-wasm-rs"
++version = "0.6.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a6cd504cecbfe7eef649988840f9a6cb768d11085efec138f8e99f160632d867"
++dependencies = [
++ "cc",
++ "rsqlite-vfs",
++]
++
++[[package]]
+ name = "strsim"
+ version = "0.11.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+--- a/synapse-core/src/lib.rs
++++ b/synapse-core/src/lib.rs
+@@ -360,18 +360,15 @@
+         // 1. Start P2P local discovery
+         self.p2p_manager.start_discovery(self.config.discovery_port);
+ 
+-        // 2. Spawn watchers for existing folders. Each watcher thread lives until shutdown
+-        //    (previously it parked forever, which also blocked runtime shutdown).
++        // 2. Scan and watch existing folders. Watchers live in the engine's registry (started,
++        //    stopped on pause/delete, cleared on shutdown); no threads are parked.
+         if let Ok(folders) = self.storage.list_folders() {
+             for f in folders {
+                 if !f.is_paused {
+                     let engine = self.sync_engine.clone();
+                     tokio::task::spawn_blocking(move || {
+                         let _ = engine.index_folder(&f.folder_id);
+-                        let _watcher = engine.spawn_watcher(f.folder_id, f.local_path);
+-                        while !engine_control().is_shutdown_requested() {
+-                            std::thread::park_timeout(std::time::Duration::from_millis(500));
+-                        }
++                        engine.start_watching(&f.folder_id);
+                     });
+                 }
+             }
+@@ -400,6 +397,7 @@
+                 let _ = engine_control().transition(state::EngineLifecycleState::Running);
+             })
+             .await?;
++        self.sync_engine.stop_all_watchers();
+         info!("Synapse Core stopped");
+         Ok(())
+     }
+--- a/synapse-core/src/main.rs
++++ b/synapse-core/src/main.rs
+@@ -16,7 +16,7 @@
+ #[command(
+     name = "synapse-core",
+     author = "Synapse Team",
+-    version = "1.0.0",
++    version, // from Cargo.toml
+     about = "Decentralized File Synchronization & 3-Way Conflict Resolution Engine"
+ )]
+ struct Cli {
+@@ -324,7 +324,7 @@
+             Ok(())
+         }
+         Some(Commands::Run) | None => {
+-            info!("Synapse Core v1.0.0 starting...");
++            info!("Synapse Core v{} starting...", env!("CARGO_PKG_VERSION"));
+             info!("Home Directory: {}", config.home_dir.display());
+             info!("API Address:    http://{}", config.api_addr);
+             info!("P2P Port (QUIC):{}", config.p2p_port);
+--- a/synapse-core/src/api/mod.rs
++++ b/synapse-core/src/api/mod.rs
+@@ -996,10 +996,13 @@
+     }
+ 
+     // Trigger initial index scan
++    // Initial scan, then watch for changes (previously new folders were only watched
++    // after an engine restart).
+     let engine = state.sync_engine.clone();
+     let fid = payload.folder_id;
+     tokio::task::spawn_blocking(move || {
+         let _ = engine.index_folder(&fid);
++        engine.start_watching(&fid);
+     });
+ 
+     (StatusCode::CREATED, Json(folder)).into_response()
+@@ -1009,6 +1012,7 @@
+     AxumPath(id): AxumPath<String>,
+     State(state): State<AppState>,
+ ) -> impl IntoResponse {
++    state.sync_engine.stop_watching(&id);
+     match state.sync_engine.storage().delete_folder(&id) {
+         Ok(_) => StatusCode::NO_CONTENT.into_response(),
+         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+--- a/synapse-core/src/engine/mod.rs
++++ b/synapse-core/src/engine/mod.rs
+@@ -77,6 +77,8 @@
+     /// Manual state overrides (tools/tests). The engine itself never writes here.
+     folder_states: Arc<RwLock<HashMap<String, FolderSyncState>>>,
+     folder_activity: Arc<std::sync::Mutex<HashMap<String, FolderActivity>>>,
++    /// Live filesystem watchers per folder. Dropping a watcher stops it.
++    watchers: Arc<std::sync::Mutex<HashMap<String, RecommendedWatcher>>>,
+ }
+ 
+ impl SyncEngine {
+@@ -94,6 +96,7 @@
+             device_id,
+             folder_states: Arc::new(RwLock::new(HashMap::new())),
+             folder_activity: Arc::new(std::sync::Mutex::new(HashMap::new())),
++            watchers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+         }
+     }
+ 
+@@ -214,7 +217,10 @@
+     pub fn set_folder_paused(&self, folder_id: &str, paused: bool) -> rusqlite::Result<()> {
+         let before = self.get_folder_state(folder_id);
+         self.storage.set_folder_paused(folder_id, paused)?;
+-        if !paused {
++        if paused {
++            self.stop_watching(folder_id);
++        } else {
++            self.start_watching(folder_id);
+             if let Some(a) = self.folder_activity.lock().unwrap_or_else(|e| e.into_inner()).get_mut(folder_id) {
+                 a.last_error = None;
+             }
+@@ -437,6 +443,24 @@
+         let data = fs::read(&full_path)?;
+         let (chunks, manifest_hash) = self.chunker.chunk_slice(&data);
+ 
++        // Content unchanged (only timestamps differ, e.g. after receiving the file from a peer
++        // on a filesystem with coarser mtime precision): refresh metadata, keep the revision.
++        // Creating a new revision here would bounce the file between devices forever.
++        if let Some(record) = &existing {
++            if !record.is_deleted && record.permissions == file_permissions {
++                if let Some(current) = self.storage.get_revision(&record.current_revision)? {
++                    if current.manifest_hash == manifest_hash {
++                        self.storage.upsert_file(&FileRecord {
++                            size: file_size,
++                            mtime_nanos,
++                            ..record.clone()
++                        })?;
++                        return Ok(false);
++                    }
++                }
++            }
++        }
++
+         // Store new chunks in CAS
+         for (info, chunk_data) in &chunks {
+             self.storage.put_chunk(&info.chunk_hash, chunk_data)?;
+@@ -665,8 +689,51 @@
+         Ok(())
+     }
+ 
++    /// Starts watching a folder for local changes (no-op if already watching or paused).
++    /// Returns `true` if a watcher was started.
++    pub fn start_watching(&self, folder_id: &str) -> bool {
++        let Ok(Some(folder)) = self.storage.get_folder(folder_id) else { return false };
++        if folder.is_paused {
++            return false;
++        }
++        let mut map = self.watchers.lock().unwrap_or_else(|e| e.into_inner());
++        if map.contains_key(folder_id) {
++            return false;
++        }
++        match self.try_spawn_watcher(folder_id.to_string(), folder.local_path) {
++            Ok(w) => {
++                map.insert(folder_id.to_string(), w);
++                true
++            }
++            Err(e) => {
++                warn!("Could not watch folder {}: {}", folder_id, e);
++                false
++            }
++        }
++    }
++
++    /// Stops watching a folder (on pause or delete).
++    pub fn stop_watching(&self, folder_id: &str) {
++        self.watchers.lock().unwrap_or_else(|e| e.into_inner()).remove(folder_id);
++    }
++
++    /// Whether a folder currently has a live watcher.
++    pub fn is_watching(&self, folder_id: &str) -> bool {
++        self.watchers.lock().unwrap_or_else(|e| e.into_inner()).contains_key(folder_id)
++    }
++
++    /// Stops every watcher (engine shutdown).
++    pub fn stop_all_watchers(&self) {
++        self.watchers.lock().unwrap_or_else(|e| e.into_inner()).clear();
++    }
++
+     /// Spawns a background filesystem watcher for a monitored folder.
+     pub fn spawn_watcher(&self, folder_id: String, local_path: String) -> RecommendedWatcher {
++        self.try_spawn_watcher(folder_id, local_path)
++            .expect("Failed to initialize notify watcher")
++    }
++
++    fn try_spawn_watcher(&self, folder_id: String, local_path: String) -> notify::Result<RecommendedWatcher> {
+         let engine = self.clone();
+         let fid = folder_id.clone();
+         let root_path = PathBuf::from(&local_path);
+@@ -691,10 +758,9 @@
+                     _ => {}
+                 }
+             }
+-        })
+-        .expect("Failed to initialize notify watcher");
++        })?;
+ 
+-        let _ = watcher.watch(Path::new(&local_path), RecursiveMode::Recursive);
+-        watcher
++        watcher.watch(Path::new(&local_path), RecursiveMode::Recursive)?;
++        Ok(watcher)
+     }
+ }
+--- a/synapse-core/src/p2p/mod.rs
++++ b/synapse-core/src/p2p/mod.rs
+@@ -11,6 +11,7 @@
+ pub mod identity;
+ pub mod nat;
+ pub mod relay;
++pub mod secure;
+ pub mod swarm;
+ pub mod throttle;
+ 
+@@ -25,8 +26,7 @@
+ use std::sync::Arc;
+ use std::time::Duration;
+ 
+-use quinn::{Endpoint, ServerConfig};
+-use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
++use quinn::Endpoint;
+ use serde::{Deserialize, Serialize};
+ use tokio::net::UdpSocket;
+ use tokio::sync::{broadcast, Mutex};
+@@ -68,11 +68,21 @@
+         chunk_hash: String,
+         data: Vec<u8>,
+     },
++    /// A file's current revision. Sent unprompted when a file changes locally (push), or in
++    /// reply to `FileRequest` (pull). `ancestry` carries the revision's DAG ancestors so the
++    /// receiver can find the common ancestor and fast-forward or merge correctly.
+     FileNotice {
+         folder_id: String,
+         relative_path: String,
+         revision: RevisionNode,
+         chunk_hashes: Vec<String>,
++        #[serde(default)]
++        ancestry: Vec<RevisionRecord>,
++    },
++    /// Asks for the `FileNotice` of one file (pull).
++    FileRequest {
++        folder_id: String,
++        relative_path: String,
+     },
+     /// Cluster device announcement sent by an introducer node
+     ClusterDevicesAnnouncement {
+@@ -131,6 +141,12 @@
+     peers: Arc<Mutex<HashMap<String, PeerInfo>>>,
+     /// Peers last reported online by the presence sweep (to emit one PEER_DISCONNECTED each).
+     online_peers: Arc<Mutex<HashSet<String>>>,
++    /// TLS identity derived from the node key (mutual TLS); `None` disables QUIC.
++    tls: Option<Arc<secure::TlsIdentity>>,
++    /// Shared QUIC endpoint (server + client) once `run_server` has bound it.
++    endpoint: Arc<Mutex<Option<Endpoint>>>,
++    /// Authenticated live connections, keyed by the device ID as stored in `devices`.
++    connections: Arc<Mutex<HashMap<String, quinn::Connection>>>,
+     peer_count: Arc<AtomicUsize>,
+     event_sender: broadcast::Sender<CoreEvent>,
+ }
+@@ -159,6 +175,13 @@
+         peer_count: Arc<AtomicUsize>,
+         event_sender: broadcast::Sender<CoreEvent>,
+     ) -> Self {
++        let tls = match secure::TlsIdentity::from_identity(&identity) {
++            Ok(t) => Some(Arc::new(t)),
++            Err(e) => {
++                warn!("Could not derive TLS identity; QUIC transport disabled: {}", e);
++                None
++            }
++        };
+         Self {
+             identity,
+             device_name,
+@@ -167,6 +190,9 @@
+             sync_engine,
+             peers: Arc::new(Mutex::new(HashMap::new())),
+             online_peers: Arc::new(Mutex::new(HashSet::new())),
++            tls,
++            endpoint: Arc::new(Mutex::new(None)),
++            connections: Arc::new(Mutex::new(HashMap::new())),
+             peer_count,
+             event_sender,
+         }
+@@ -215,6 +241,18 @@
+     /// Re-evaluates presence: peers that went quiet get exactly one `PEER_DISCONNECTED`, and
+     /// `peer_count` is refreshed. Runs every few seconds from `start_discovery`.
+     pub async fn sweep_presence(&self) {
++        // A live authenticated connection keeps its peer present between messages.
++        let live: Vec<String> = self
++            .connections
++            .lock()
++            .await
++            .iter()
++            .filter(|(_, c)| c.close_reason().is_none())
++            .map(|(id, _)| id.clone())
++            .collect();
++        for id in live {
++            self.touch_presence(&id).await;
++        }
+         let (fresh, stale): (HashSet<String>, HashSet<String>) = {
+             let map = self.peers.lock().await;
+             self.peer_count.store(fresh_peer_count(&map), Ordering::Relaxed);
+@@ -241,22 +279,27 @@
+ 
+     /// Spawns UDP broadcast discovery listener and periodic announcer.
+     pub fn start_discovery(&self, discovery_port: u16) {
+-        // 0. Presence sweep (online → offline transitions)
++        // 0. Presence sweep (online → offline transitions) and, every 30 s, dialing paired
++        //    devices that have a configured address (works across subnets/VPNs where UDP
++        //    broadcast discovery does not reach).
+         let sweeper = self.clone();
+         tokio::spawn(async move {
++            let mut tick: u64 = 0;
+             loop {
+                 tokio::time::sleep(Duration::from_secs(5)).await;
+                 sweeper.sweep_presence().await;
++                if tick.is_multiple_of(6) {
++                    sweeper.dial_configured_peers().await;
++                }
++                tick += 1;
+             }
+         });
+ 
+         let device_id = self.identity.device_id.clone();
+         let p2p_port = self.p2p_port;
+-        let peers = self.peers.clone();
+-        let peer_count = self.peer_count.clone();
++        let dialer = self.clone();
+         let event_sender = self.event_sender.clone();
+         let storage_listener = self.sync_engine.storage().clone();
+-        let storage_announcer = self.sync_engine.storage().clone();
+ 
+         // 1. Discovery listener task
+         tokio::spawn(async move {
+@@ -276,90 +319,48 @@
+                             let mut peer_addr = src_addr;
+                             peer_addr.set_port(peer.p2p_port);
+ 
+-                            // Check cluster pairing status in SQLite
+-                            let is_paired = match storage_listener.get_device(&peer.device_id) {
+-                                Ok(Some(dev)) => {
+-                                    if dev.is_paused {
+-                                        continue;
+-                                    }
+-                                    true
+-                                }
+-                                Ok(None) => {
+-                                    // Unknown peer: record in pending pairing requests (no-op for
+-                                    // rejected devices; only brand-new requests raise an event).
+-                                    let is_new_pending = matches!(
+-                                        storage_listener.device_pairing_state(&peer.device_id),
+-                                        Ok(None)
+-                                    );
++                            // UDP announcements are unauthenticated: they only (a) start pairing
++                            // for unknown devices and (b) tell us where to dial paired devices.
++                            // Presence and introducer data come from authenticated QUIC sessions.
++                            let (stored_id, pairing) = resolve_device(&storage_listener, &peer.device_id);
++                            match pairing {
++                                None => {
+                                     let _ = storage_listener.add_pending_device(&PendingDeviceRecord {
+                                         device_id: peer.device_id.clone(),
+                                         name: peer.device_name.clone(),
+                                         address: peer_addr.to_string(),
+                                         received_at: chrono::Utc::now().timestamp_millis(),
+                                     });
+-                                    if is_new_pending {
+-                                        info!(
+-                                            "New incoming pairing request discovered from {} ({}) at {}",
+-                                            peer.device_name, peer.device_id, peer_addr
+-                                        );
+-                                        let _ = event_sender.send(CoreEvent::DevicePending {
+-                                            device_id: peer.device_id.clone(),
+-                                            name: peer.device_name.clone(),
+-                                            address: peer_addr.to_string(),
+-                                        });
+-                                    }
+-                                    false
++                                    info!(
++                                        "New incoming pairing request discovered from {} ({}) at {}",
++                                        peer.device_name, peer.device_id, peer_addr
++                                    );
++                                    let _ = event_sender.send(CoreEvent::DevicePending {
++                                        device_id: peer.device_id.clone(),
++                                        name: peer.device_name.clone(),
++                                        address: peer_addr.to_string(),
++                                    });
+                                 }
+-                                Err(_) => false,
+-                            };
+-
+-                            let mut map = peers.lock().await;
+-                            let is_new = !map.contains_key(&peer.device_id);
+-                            map.insert(
+-                                peer.device_id.clone(),
+-                                PeerInfo {
+-                                    device_id: peer.device_id.clone(),
+-                                    device_name: peer.device_name.clone(),
+-                                    addr: peer_addr,
+-                                    last_seen: std::time::Instant::now(),
+-                                    client_type: "synapse-quic (FastCDC)".into(),
+-                                },
+-                            );
+-                            peer_count.store(fresh_peer_count(&map), Ordering::Relaxed);
+-
+-                            // Introducer propagation via UDP broadcast discovery:
+-                            // If discovered peer is marked as an introducer (introducer = 1) in SQLite
+-                            // and announced introduced cluster peers, automatically propagate them
+-                            if storage_listener.is_device_introducer(&peer.device_id).unwrap_or(false)
+-                                && !peer.introduced_devices.is_empty()
+-                            {
+-                                let report = storage_listener.propagate_introducer_devices(
+-                                    &peer.device_id,
+-                                    &peer.introduced_devices,
+-                                    false,
+-                                );
+-                                if let Ok(r) = report {
+-                                    if !r.added_pending.is_empty() || !r.added_trusted.is_empty() {
+-                                        info!(
+-                                            "Introducer {} announced {} new devices via discovery ({} pending, {} trusted)",
+-                                            peer.device_id,
+-                                            r.added_pending.len() + r.added_trusted.len(),
+-                                            r.added_pending.len(),
+-                                            r.added_trusted.len(),
+-                                        );
+-                                    }
++                                Some(crate::state::DevicePairingState::Pending) => {
++                                    // Refresh name/address of the existing request
++                                    let _ = storage_listener.add_pending_device(&PendingDeviceRecord {
++                                        device_id: stored_id.clone(),
++                                        name: peer.device_name.clone(),
++                                        address: peer_addr.to_string(),
++                                        received_at: chrono::Utc::now().timestamp_millis(),
++                                    });
+                                 }
+-                            }
+-
+-                            if is_new && is_paired {
+-                                info!(
+-                                    "Discovered paired peer {} ({}) at {}",
+-                                    peer.device_name, peer.device_id, peer_addr
+-                                );
+-                                let _ = event_sender.send(CoreEvent::PeerConnected {
+-                                    peer_id: peer.device_id,
+-                                    addr: peer_addr.to_string(),
+-                                });
++                                Some(crate::state::DevicePairingState::Paired) => {
++                                    let dialer = dialer.clone();
++                                    let hex_id = peer.device_id.clone();
++                                    tokio::spawn(async move {
++                                        if let Err(e) = dialer.ensure_connected(&hex_id, peer_addr).await {
++                                            warn!("Could not connect to paired peer {} at {}: {}", hex_id, peer_addr, e);
++                                        }
++                                    });
++                                }
++                                // Paused or rejected: ignore
++                                Some(_) => {}
+                             }
+                         }
+                     }
+@@ -383,24 +384,10 @@
+             let target_addr = SocketAddr::from(([255, 255, 255, 255], discovery_port));
+ 
+             loop {
+-                let folders = storage_announcer
+-                    .list_folders()
+-                    .map(|list| list.into_iter().map(|f| f.folder_id).collect())
+-                    .unwrap_or_default();
+-
+-                let introduced_devices = if storage_announcer.is_device_introducer(&dev_id).unwrap_or(false) {
+-                    storage_announcer.list_devices()
+-                        .map(|list| list.into_iter().map(|d| IntroducedDevice {
+-                            device_id: d.device_id,
+-                            name: d.name,
+-                            addresses: d.addresses,
+-                            is_trusted: d.is_trusted,
+-                            cert_name: d.cert_name,
+-                        }).collect())
+-                        .unwrap_or_default()
+-                } else {
+-                    Vec::new()
+-                };
++                // Folder IDs and device lists are no longer broadcast to the whole LAN;
++                // paired peers exchange them over authenticated sessions.
++                let folders: Vec<String> = Vec::new();
++                let introduced_devices: Vec<IntroducedDevice> = Vec::new();
+ 
+                 let announcement = DiscoveredPeer {
+                     device_id: dev_id.clone(),
+@@ -443,150 +430,604 @@
+         Ok(report)
+     }
+ 
+-    /// Handles incoming P2P messages over QUIC or tests.
+-    pub async fn handle_p2p_message(
++    // =====================================================================
++    // AUTHENTICATED PEER PROTOCOL
++    // =====================================================================
++
++    /// Our Hello for a given peer. The cluster device list is only shared with paired peers.
++    fn hello_for(&self, pairing: Option<crate::state::DevicePairingState>) -> P2PMessage {
++        let cluster_devices = if pairing == Some(crate::state::DevicePairingState::Paired) {
++            self.sync_engine
++                .storage()
++                .list_devices()
++                .map(|list| {
++                    list.into_iter()
++                        .map(|d| IntroducedDevice {
++                            device_id: d.device_id,
++                            name: d.name,
++                            addresses: d.addresses,
++                            is_trusted: d.is_trusted,
++                            cert_name: d.cert_name,
++                        })
++                        .collect()
++                })
++                .unwrap_or_default()
++        } else {
++            Vec::new()
++        };
++        P2PMessage::Hello {
++            device_id: self.identity.device_id.clone(),
++            device_name: self.device_name.clone(),
++            folders: Vec::new(),
++            cluster_devices,
++        }
++    }
++
++    /// Handles one message from a peer whose device ID (`peer_hex`) was proven by mutual TLS.
++    ///
++    /// Rules: `Hello` is accepted from anyone (it starts pairing); every other message requires
++    /// the peer to be **paired** (not paused, pending, or rejected); folder data is only served
++    /// for folders shared with that peer; responses (`*Response`) are only accepted as replies
++    /// to our own requests, never unsolicited; introducer announcements are attributed to the
++    /// authenticated sender, never to a claimed id.
++    pub async fn handle_peer_message(
+         &self,
+-        msg: P2PMessage,
++        peer_hex: &str,
+         peer_addr: Option<SocketAddr>,
++        msg: P2PMessage,
+     ) -> Result<Option<P2PMessage>, Box<dyn std::error::Error + Send + Sync>> {
++        use crate::state::DevicePairingState as Pairing;
++        let storage = self.sync_engine.storage().clone();
++        let (stored_id, pairing) = resolve_device(&storage, peer_hex);
++
++        if let P2PMessage::Hello { device_id, device_name, folders: _, cluster_devices } = msg {
++            if !same_device(&device_id, peer_hex) {
++                warn!("Hello from {} claims to be {}; ignoring", peer_hex, device_id);
++                return Ok(None);
++            }
++            match pairing {
++                None => {
++                    let address = peer_addr.map(|a| a.to_string()).unwrap_or_else(|| "dynamic".into());
++                    let _ = storage.add_pending_device(&PendingDeviceRecord {
++                        device_id: peer_hex.to_string(),
++                        name: device_name.clone(),
++                        address: address.clone(),
++                        received_at: chrono::Utc::now().timestamp_millis(),
++                    });
++                    info!("Incoming pairing request from {} ({}) at {}", device_name, peer_hex, address);
++                    let _ = self.event_sender.send(CoreEvent::DevicePending {
++                        device_id: peer_hex.to_string(),
++                        name: device_name,
++                        address,
++                    });
++                }
++                Some(Pairing::Pending) => {
++                    let _ = storage.add_pending_device(&PendingDeviceRecord {
++                        device_id: stored_id.clone(),
++                        name: device_name,
++                        address: peer_addr.map(|a| a.to_string()).unwrap_or_else(|| "dynamic".into()),
++                        received_at: chrono::Utc::now().timestamp_millis(),
++                    });
++                }
++                Some(Pairing::Paired) => {
++                    if let Some(addr) = peer_addr {
++                        self.mark_present(&stored_id, &device_name, addr).await;
++                    }
++                    if !cluster_devices.is_empty() && storage.is_device_introducer(&stored_id).unwrap_or(false) {
++                        // Only from peers the user marked as introducers, attributed to the
++                        // *authenticated* sender.
++                        let _ = self.handle_cluster_announcement(&stored_id, &cluster_devices, false);
++                    }
++                }
++                Some(_) => {} // paused or rejected: no state changes
++            }
++            return Ok(Some(self.hello_for(pairing)));
++        }
++
++        if pairing != Some(Pairing::Paired) {
++            warn!("Ignoring message from unpaired/paused peer {}", peer_hex);
++            return Ok(None);
++        }
++        self.touch_presence(&stored_id).await;
++
+         match msg {
+-            P2PMessage::ClusterDevicesAnnouncement {
+-                introducer_id,
+-                devices,
+-                auto_trust,
+-            } => {
+-                let report = self.handle_cluster_announcement(&introducer_id, &devices, auto_trust)?;
++            P2PMessage::ClusterDevicesAnnouncement { introducer_id: _, devices, auto_trust } => {
++                let report = self.handle_cluster_announcement(&stored_id, &devices, auto_trust)?;
+                 info!(
+-                    "Introducer {} announced {} cluster devices: added {} trusted, {} pending",
+-                    introducer_id,
++                    "Introducer {} announced {} devices: {} trusted, {} pending",
++                    stored_id,
+                     devices.len(),
+                     report.added_trusted.len(),
+-                    report.added_pending.len(),
++                    report.added_pending.len()
+                 );
+                 Ok(None)
+             }
+-            P2PMessage::Hello {
+-                device_id,
+-                device_name,
+-                folders: _,
+-                cluster_devices,
+-            } => {
+-                if !cluster_devices.is_empty() {
+-                    let _ = self.handle_cluster_announcement(&device_id, &cluster_devices, false);
+-                }
+-                let storage = self.sync_engine.storage();
+-                // Pairing lifecycle decides what a Hello means: paired → peer, paused → known
+-                // but silent, pending → refresh, rejected → ignored, unknown → new request.
+-                let pairing = storage.device_pairing_state(&device_id).ok().flatten();
+-                let is_paired = matches!(pairing, Some(crate::state::DevicePairingState::Paired));
+-
+-                if matches!(pairing, None | Some(crate::state::DevicePairingState::Pending)) {
+-                    let peer_addr_str = peer_addr.map(|a| a.to_string()).unwrap_or_else(|| "dynamic".into());
+-                    let is_new_pending = pairing.is_none();
++            P2PMessage::IndexRequest { folder_id } => {
++                if !folder_shared_with(&storage, &folder_id, &stored_id) {
++                    return Ok(None);
++                }
++                let files = storage.list_files_in_folder(&folder_id)?;
++                Ok(Some(P2PMessage::IndexResponse { folder_id, files, revisions: Vec::new() }))
++            }
++            P2PMessage::FileRequest { folder_id, relative_path } => {
++                if !folder_shared_with(&storage, &folder_id, &stored_id) {
++                    return Ok(None);
++                }
++                self.build_file_notice(&folder_id, &relative_path)
++            }
++            P2PMessage::FileNotice { folder_id, relative_path, revision, chunk_hashes, ancestry } => {
++                // Applied in the background: we fetch missing chunks back from the sender.
++                let me = self.clone();
++                tokio::spawn(async move {
++                    if let Err(e) = me
++                        .apply_file_notice(&stored_id, &folder_id, &relative_path, revision, chunk_hashes, ancestry)
++                        .await
++                    {
++                        warn!("Could not apply {}/{} from {}: {}", folder_id, relative_path, stored_id, e);
++                    }
++                });
++                Ok(None)
++            }
++            P2PMessage::ChunkRequest { chunk_hash } => {
++                if !storage.chunk_visible_to_device(&chunk_hash, &stored_id)? {
++                    return Ok(None);
++                }
++                Ok(storage.get_chunk(&chunk_hash)?.map(|data| P2PMessage::ChunkResponse { chunk_hash, data }))
++            }
++            P2PMessage::EncryptedChunkRequest { chunk_hash } => {
++                if !storage.chunk_visible_to_device(&chunk_hash, &stored_id)? {
++                    return Ok(None);
++                }
++                Ok(storage
++                    .get_encrypted_chunk(&chunk_hash)?
++                    .map(|envelope| P2PMessage::EncryptedChunkResponse { chunk_hash, envelope }))
++            }
++            // Responses are only meaningful as replies to our own requests.
++            P2PMessage::Hello { .. }
++            | P2PMessage::IndexResponse { .. }
++            | P2PMessage::ChunkResponse { .. }
++            | P2PMessage::EncryptedChunkResponse { .. } => Ok(None),
++        }
++    }
+ 
+-                    let _ = storage.add_pending_device(&PendingDeviceRecord {
+-                        device_id: device_id.clone(),
+-                        name: device_name.clone(),
+-                        address: peer_addr_str.clone(),
+-                        received_at: chrono::Utc::now().timestamp_millis(),
+-                    });
++    // =====================================================================
++    // PRESENCE
++    // =====================================================================
++
++    async fn mark_present(&self, stored_id: &str, name: &str, addr: SocketAddr) {
++        self.register_peer(PeerInfo {
++            device_id: stored_id.to_string(),
++            device_name: name.to_string(),
++            addr,
++            last_seen: std::time::Instant::now(),
++            client_type: "synapse-quic (mTLS)".into(),
++        })
++        .await;
++    }
+ 
+-                    if is_new_pending {
+-                        info!(
+-                            "Incoming QUIC Hello from unknown peer: staging pending pairing for {} ({}) at {}",
+-                            device_name, device_id, peer_addr_str
+-                        );
+-                        let _ = self.event_sender.send(CoreEvent::DevicePending {
+-                            device_id: device_id.clone(),
+-                            name: device_name.clone(),
+-                            address: peer_addr_str,
+-                        });
+-                    }
++    async fn touch_presence(&self, stored_id: &str) {
++        if let Some(p) = self.peers.lock().await.get_mut(stored_id) {
++            p.last_seen = std::time::Instant::now();
++        }
++    }
++
++    async fn mark_absent(&self, stored_id: &str) {
++        let mut map = self.peers.lock().await;
++        if let Some(p) = map.get_mut(stored_id) {
++            if let Some(past) = std::time::Instant::now().checked_sub(PEER_PRESENCE_WINDOW + Duration::from_secs(1)) {
++                p.last_seen = past;
++            }
++        }
++        self.peer_count.store(fresh_peer_count(&map), Ordering::Relaxed);
++    }
++
++    // =====================================================================
++    // QUIC TRANSPORT (mutual TLS)
++    // =====================================================================
++
++    /// Address the QUIC endpoint is bound to (useful when bound to port 0).
++    pub async fn local_quic_addr(&self) -> Option<SocketAddr> {
++        self.endpoint.lock().await.as_ref().and_then(|e| e.local_addr().ok())
++    }
++
++    /// Whether an authenticated connection to the device is open.
++    pub async fn is_connected_to(&self, stored_id: &str) -> bool {
++        self.connections
++            .lock()
++            .await
++            .get(stored_id)
++            .map(|c| c.close_reason().is_none())
++            .unwrap_or(false)
++    }
++
++    /// Connects (if not already connected) to the paired device `device_hex` at `addr`,
++    /// proving both identities with mutual TLS, then exchanges Hello and pulls every folder
++    /// shared with it.
++    pub async fn ensure_connected(
++        &self,
++        device_hex: &str,
++        addr: SocketAddr,
++    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
++        let storage = self.sync_engine.storage().clone();
++        let (stored_id, pairing) = resolve_device(&storage, device_hex);
++        if pairing != Some(crate::state::DevicePairingState::Paired) {
++            return Err(format!("device {} is not paired", device_hex).into());
++        }
++        if self.is_connected_to(&stored_id).await {
++            return Ok(());
++        }
++        let expected = normalize_hex(device_hex).ok_or("device id is not a public-key id")?;
++        let tls = self.tls.clone().ok_or("QUIC transport disabled")?;
++        let endpoint = self.endpoint.lock().await.clone().ok_or("QUIC endpoint is not running")?;
++        let conn = endpoint
++            .connect_with(tls.client_config(&expected)?, addr, secure::SERVER_NAME)?
++            .await?;
++        let proven = secure::peer_device_id(&conn).ok_or("peer presented no identity")?;
++        if proven != expected {
++            conn.close(1u32.into(), b"identity mismatch");
++            return Err("peer identity mismatch".into());
++        }
++        self.adopt_connection(stored_id.clone(), proven, conn, addr).await;
++
++        if let Some(P2PMessage::Hello { device_name, .. }) =
++            self.request(&stored_id, self.hello_for(pairing)).await?
++        {
++            self.mark_present(&stored_id, &device_name, addr).await;
++        }
++        self.sync_all_folders_with(&stored_id).await;
++        Ok(())
++    }
++
++    /// Dials every paired, unpaused device that is not connected and has a configured
++    /// address (`ip:port`, `quic://host:port`, or `host:port`).
++    pub async fn dial_configured_peers(&self) {
++        let devices = self.sync_engine.storage().list_devices().unwrap_or_default();
++        for dev in devices {
++            if dev.is_paused || self.is_connected_to(&dev.device_id).await {
++                continue;
++            }
++            let Some(hex) = normalize_hex(&dev.device_id) else { continue };
++            for addr in dev.addresses.iter().filter_map(|a| parse_peer_address(a)) {
++                if self.ensure_connected(&hex, addr).await.is_ok() {
++                    break;
+                 }
++            }
++        }
++    }
++
++    /// Registers an authenticated connection and starts serving the peer's requests on it.
++    async fn adopt_connection(&self, stored_id: String, peer_hex: String, conn: quinn::Connection, addr: SocketAddr) {
++        self.connections.lock().await.insert(stored_id.clone(), conn.clone());
++        let (_, pairing) = resolve_device(self.sync_engine.storage(), &peer_hex);
++        if pairing == Some(crate::state::DevicePairingState::Paired) {
++            self.mark_present(&stored_id, &stored_id, addr).await;
++            info!("Authenticated connection with {} at {}", stored_id, addr);
++            let _ = self.event_sender.send(CoreEvent::PeerConnected {
++                peer_id: stored_id.clone(),
++                addr: addr.to_string(),
++            });
++        }
++        let me = self.clone();
++        tokio::spawn(async move {
++            me.serve_connection(conn, stored_id, peer_hex, addr).await;
++        });
++    }
+ 
+-                if let Some(addr) = peer_addr {
+-                    let mut map = self.peers.lock().await;
+-                    let is_new = !map.contains_key(&device_id);
+-                    map.insert(
+-                        device_id.clone(),
+-                        PeerInfo {
+-                            device_id: device_id.clone(),
+-                            device_name: device_name.clone(),
+-                            addr,
+-                            last_seen: std::time::Instant::now(),
+-                            client_type: "synapse-quic (FastCDC)".into(),
+-                        },
+-                    );
+-                    self.peer_count.store(fresh_peer_count(&map), Ordering::Relaxed);
+-
+-                    if is_new && is_paired {
+-                        let _ = self.event_sender.send(CoreEvent::PeerConnected {
+-                            peer_id: device_id,
+-                            addr: addr.to_string(),
+-                        });
++    /// Serves request streams opened by the peer until the connection closes.
++    async fn serve_connection(&self, conn: quinn::Connection, stored_id: String, peer_hex: String, addr: SocketAddr) {
++        while let Ok((mut send, mut recv)) = conn.accept_bi().await {
++            let me = self.clone();
++            let peer_hex = peer_hex.clone();
++            tokio::spawn(async move {
++                if let Ok(buf) = recv.read_to_end(MAX_REQUEST_BYTES).await {
++                    if let Ok(msg) = serde_json::from_slice::<P2PMessage>(&buf) {
++                        match me.handle_peer_message(&peer_hex, Some(addr), msg).await {
++                            Ok(Some(reply)) => {
++                                if let Ok(bytes) = serde_json::to_vec(&reply) {
++                                    let _ = send.write_all(&bytes).await;
++                                }
++                            }
++                            Ok(None) => {}
++                            Err(e) => warn!("Error handling message from {}: {}", peer_hex, e),
++                        }
+                     }
+                 }
+-                Ok(None)
++                // Always finish so the requester's read completes (empty reply = no answer).
++                let _ = send.finish();
++            });
++        }
++        // Connection ended: forget it (unless replaced by a newer one) and mark the peer offline.
++        let mut map = self.connections.lock().await;
++        if map.get(&stored_id).map(|c| c.stable_id()) == Some(conn.stable_id()) {
++            map.remove(&stored_id);
++            drop(map);
++            self.mark_absent(&stored_id).await;
++        }
++    }
++
++    /// Sends a request to a connected peer and waits for its reply (`None` = no answer).
++    pub async fn request(
++        &self,
++        stored_id: &str,
++        msg: P2PMessage,
++    ) -> Result<Option<P2PMessage>, Box<dyn std::error::Error + Send + Sync>> {
++        let conn = self
++            .connections
++            .lock()
++            .await
++            .get(stored_id)
++            .cloned()
++            .ok_or_else(|| format!("not connected to {}", stored_id))?;
++        let (mut send, mut recv) = conn.open_bi().await?;
++        send.write_all(&serde_json::to_vec(&msg)?).await?;
++        send.finish()?;
++        let buf = recv.read_to_end(MAX_RESPONSE_BYTES).await?;
++        if buf.is_empty() {
++            return Ok(None);
++        }
++        Ok(Some(serde_json::from_slice(&buf)?))
++    }
++
++    // =====================================================================
++    // SYNC: pull (index exchange), push (file notices), apply
++    // =====================================================================
++
++    /// Builds the `FileNotice` for a local file's current revision, including DAG ancestry.
++    pub fn build_file_notice(
++        &self,
++        folder_id: &str,
++        relative_path: &str,
++    ) -> Result<Option<P2PMessage>, Box<dyn std::error::Error + Send + Sync>> {
++        let storage = self.sync_engine.storage();
++        let Some(file) = storage.get_file(folder_id, relative_path)? else {
++            return Ok(None);
++        };
++        if file.is_deleted {
++            return Ok(None);
++        }
++        let Some(rev) = storage.get_revision(&file.current_revision)? else {
++            return Ok(None);
++        };
++        let chunk_hashes = storage.get_revision_chunks(&rev.revision_hash)?;
++
++        let mut ancestry = Vec::new();
++        let mut seen = HashSet::new();
++        let mut queue: std::collections::VecDeque<String> =
++            rev.parent_1.iter().chain(rev.parent_2.iter()).cloned().collect();
++        while let Some(hash) = queue.pop_front() {
++            if ancestry.len() >= MAX_ANCESTRY || !seen.insert(hash.clone()) {
++                continue;
+             }
+-            P2PMessage::ChunkRequest { chunk_hash } => {
+-                if let Some(data) = self.sync_engine.storage().get_chunk(&chunk_hash)? {
+-                    Ok(Some(P2PMessage::ChunkResponse { chunk_hash, data }))
+-                } else {
+-                    Ok(None)
+-                }
++            if let Some(r) = storage.get_revision(&hash)? {
++                queue.extend(r.parent_1.iter().chain(r.parent_2.iter()).cloned());
++                ancestry.push(r);
++            }
++        }
++
++        let revision = RevisionNode {
++            revision_hash: rev.revision_hash.clone(),
++            parent_hashes: rev.parent_1.iter().chain(rev.parent_2.iter()).cloned().collect(),
++            manifest_hash: rev.manifest_hash.clone(),
++            author_device_id: rev.author_device.clone(),
++            sequence_number: 0,
++            mtime_nanos: file.mtime_nanos,
++            file_size: file.size,
++        };
++        Ok(Some(P2PMessage::FileNotice {
++            folder_id: folder_id.to_string(),
++            relative_path: relative_path.to_string(),
++            revision,
++            chunk_hashes,
++            ancestry,
++        }))
++    }
++
++    /// Verifies and applies a remote file revision from `peer` (stored id): checks the
++    /// manifest against the chunk list, fetches missing chunks from the peer (each verified by
++    /// BLAKE3), then hands it to the engine, which fast-forwards, merges, or quarantines.
++    pub async fn apply_file_notice(
++        &self,
++        peer: &str,
++        folder_id: &str,
++        relative_path: &str,
++        revision: RevisionNode,
++        chunk_hashes: Vec<String>,
++        ancestry: Vec<RevisionRecord>,
++    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
++        let storage = self.sync_engine.storage().clone();
++        let folder = storage
++            .get_folder(folder_id)?
++            .ok_or_else(|| format!("folder {} does not exist here", folder_id))?;
++        if !folder_shared_with(&storage, folder_id, peer) {
++            return Err(format!("folder {} is not shared with {}", folder_id, peer).into());
++        }
++        if folder.is_paused || !folder.parsed_sync_mode().can_receive() {
++            return Ok(());
++        }
++        if chunk_hashes.iter().any(|h| !crate::storage::is_valid_chunk_hash(h)) {
++            return Err("notice contains an invalid chunk hash".into());
++        }
++        if crate::chunker::Chunker::compute_manifest_hash(&chunk_hashes) != revision.manifest_hash {
++            return Err("notice manifest does not match its chunk list".into());
++        }
++
++        let rel = crate::engine::fs_utils::sanitize_relative_path(relative_path);
++        let local = storage.get_file(folder_id, &rel)?;
++        if let Some(l) = &local {
++            if l.current_revision == revision.revision_hash {
++                return Ok(()); // already up to date
++            }
++        }
++        for r in ancestry.iter().take(MAX_ANCESTRY) {
++            storage.insert_revision(r, &[])?;
++        }
++        if let Some(l) = &local {
++            if storage.get_revision(&revision.revision_hash)?.is_some()
++                && crate::dag::MerkleDag::new(&storage).find_lca(&l.current_revision, &revision.revision_hash)
++                    == crate::dag::LcaResult::FastForwardLocal
++            {
++                return Ok(()); // we already have newer content
+             }
+-            P2PMessage::ChunkResponse { chunk_hash, data } => {
+-                // Content-addressed: the payload must hash to the claimed ID, otherwise a
+-                // peer could poison the block store or write outside it.
+-                if !crate::storage::is_valid_chunk_hash(&chunk_hash)
+-                    || blake3::hash(&data).to_hex().as_str() != chunk_hash
++        }
++
++        let mut cache: HashMap<String, Vec<u8>> = HashMap::new();
++        let mut payload = Vec::new();
++        for h in &chunk_hashes {
++            if !cache.contains_key(h) {
++                let data = match storage.get_chunk(h)? {
++                    Some(d) => d,
++                    None => {
++                        // Verified by fetch_chunk; stored now so the revision's chunk list
++                        // (file_chunks → chunks foreign key) can be recorded.
++                        let d = self.fetch_chunk(peer, h).await?;
++                        storage.put_chunk(h, &d)?;
++                        d
++                    }
++                };
++                cache.insert(h.clone(), data);
++            }
++            payload.extend_from_slice(&cache[h]);
++        }
++        if payload.len() as u64 != revision.file_size {
++            return Err("assembled file size does not match the notice".into());
++        }
++
++        let engine = self.sync_engine.clone();
++        let folder_id = folder_id.to_string();
++        tokio::task::spawn_blocking(move || {
++            engine.reconcile_remote_revision(&folder_id, &rel, &revision, &chunk_hashes, &payload)
++        })
++        .await??;
++        Ok(())
++    }
++
++    /// Fetches one chunk from a peer and verifies it hashes to `chunk_hash`.
++    async fn fetch_chunk(&self, peer: &str, chunk_hash: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
++        match self.request(peer, P2PMessage::ChunkRequest { chunk_hash: chunk_hash.to_string() }).await? {
++            Some(P2PMessage::ChunkResponse { chunk_hash: h, data })
++                if h == chunk_hash && blake3::hash(&data).to_hex().as_str() == chunk_hash =>
++            {
++                Ok(data)
++            }
++            Some(_) => Err(format!("peer {} sent a corrupt chunk {}", peer, chunk_hash).into()),
++            None => Err(format!("peer {} does not have chunk {}", peer, chunk_hash).into()),
++        }
++    }
++
++    /// Pulls one folder from a connected peer: compares indexes and applies every file whose
++    /// remote revision we don't already have. Returns how many files were requested.
++    pub async fn sync_folder_from(
++        &self,
++        peer: &str,
++        folder_id: &str,
++    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
++        let storage = self.sync_engine.storage().clone();
++        let files = match self.request(peer, P2PMessage::IndexRequest { folder_id: folder_id.to_string() }).await? {
++            Some(P2PMessage::IndexResponse { files, .. }) => files,
++            _ => return Ok(0),
++        };
++        let mut requested = 0;
++        for remote in files.into_iter().filter(|f| !f.is_deleted) {
++            if let Some(local) = storage.get_file(folder_id, &remote.relative_path)? {
++                if local.current_revision == remote.current_revision {
++                    continue;
++                }
++                if storage.get_revision(&remote.current_revision)?.is_some()
++                    && crate::dag::MerkleDag::new(&storage).find_lca(&local.current_revision, &remote.current_revision)
++                        == crate::dag::LcaResult::FastForwardLocal
+                 {
+-                    warn!(
+-                        "Dropping chunk from {:?}: payload does not match hash {:?}",
+-                        peer_addr, chunk_hash
+-                    );
+-                    return Ok(None);
++                    continue;
+                 }
+-                self.sync_engine.storage().put_chunk(&chunk_hash, &data)?;
+-                Ok(None)
+             }
+-            P2PMessage::EncryptedChunkRequest { chunk_hash } => {
+-                if let Some(envelope) = self.sync_engine.storage().get_encrypted_chunk(&chunk_hash)? {
+-                    Ok(Some(P2PMessage::EncryptedChunkResponse { chunk_hash, envelope }))
+-                } else {
+-                    Ok(None)
++            requested += 1;
++            let request = P2PMessage::FileRequest {
++                folder_id: folder_id.to_string(),
++                relative_path: remote.relative_path.clone(),
++            };
++            if let Some(P2PMessage::FileNotice { relative_path, revision, chunk_hashes, ancestry, .. }) =
++                self.request(peer, request).await?
++            {
++                if let Err(e) = self
++                    .apply_file_notice(peer, folder_id, &relative_path, revision, chunk_hashes, ancestry)
++                    .await
++                {
++                    warn!("Could not sync {}/{} from {}: {}", folder_id, relative_path, peer, e);
+                 }
+             }
+-            P2PMessage::EncryptedChunkResponse { chunk_hash: _, envelope } => {
+-                self.sync_engine.storage().put_encrypted_chunk(&envelope)?;
+-                Ok(None)
++        }
++        Ok(requested)
++    }
++
++    /// Pulls every unpaused folder shared with the peer.
++    pub async fn sync_all_folders_with(&self, peer: &str) {
++        let storage = self.sync_engine.storage().clone();
++        for folder in storage.list_folders().unwrap_or_default() {
++            if folder.is_paused || !folder_shared_with(&storage, &folder.folder_id, peer) {
++                continue;
++            }
++            if let Err(e) = self.sync_folder_from(peer, &folder.folder_id).await {
++                warn!("Sync of folder {} with {} failed: {}", folder.folder_id, peer, e);
+             }
+-            _ => Ok(None),
+         }
+     }
+ 
+-    /// Configures Quinn QUIC server endpoint with self-signed certificate.
+-    pub fn create_quic_server(
+-        bind_addr: SocketAddr,
+-    ) -> Result<Endpoint, Box<dyn std::error::Error + Send + Sync>> {
+-        let cert = rcgen::generate_simple_self_signed(vec!["synapse.p2p".into()])?;
+-        let cert_der = CertificateDer::from(cert.cert);
+-        let priv_key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
++    /// Pushes local changes: on every `FILE_CHANGED`, sends a `FileNotice` to each connected
++    /// peer the folder is shared with.
++    fn spawn_change_pusher(&self) {
++        let me = self.clone();
++        let mut rx = self.event_sender.subscribe();
++        tokio::spawn(async move {
++            loop {
++                match rx.recv().await {
++                    Ok(CoreEvent::FileChanged { folder_id, relative_path, .. }) => {
++                        me.push_file(&folder_id, &relative_path).await;
++                    }
++                    Ok(_) => {}
++                    Err(broadcast::error::RecvError::Lagged(n)) => {
++                        warn!("Change pusher lagged by {} events; peers will catch up on next index sync", n);
++                    }
++                    Err(broadcast::error::RecvError::Closed) => break,
++                }
++            }
++        });
++    }
+ 
+-        let mut server_config =
+-            ServerConfig::with_single_cert(vec![cert_der], priv_key.into())?;
+-        
+-        // Transport settings
+-        let transport = Arc::get_mut(&mut server_config.transport).unwrap();
+-        transport.max_idle_timeout(Some(Duration::from_secs(30).try_into()?));
++    /// Sends the current revision of one file to every connected peer sharing its folder.
++    pub async fn push_file(&self, folder_id: &str, relative_path: &str) {
++        let notice = match self.build_file_notice(folder_id, relative_path) {
++            Ok(Some(n)) => n,
++            _ => return,
++        };
++        let payload = match serde_json::to_value(&notice) {
++            Ok(v) => v,
++            Err(_) => return,
++        };
++        let storage = self.sync_engine.storage().clone();
++        let peers: Vec<String> = self.connections.lock().await.keys().cloned().collect();
++        for peer in peers {
++            if !folder_shared_with(&storage, folder_id, &peer) {
++                continue;
++            }
++            let Ok(msg) = serde_json::from_value::<P2PMessage>(payload.clone()) else { continue };
++            let me = self.clone();
++            tokio::spawn(async move {
++                if let Err(e) = me.request(&peer, msg).await {
++                    warn!("Could not push change to {}: {}", peer, e);
++                }
++            });
++        }
++    }
+ 
+-        let endpoint = Endpoint::server(server_config, bind_addr)?;
+-        Ok(endpoint)
++    /// Binds the mutually-authenticated QUIC endpoint (server and client on one socket).
++    pub fn create_quic_endpoint(&self, bind_addr: SocketAddr) -> Result<Endpoint, Box<dyn std::error::Error + Send + Sync>> {
++        let tls = self.tls.clone().ok_or("QUIC transport disabled (no TLS identity)")?;
++        Ok(Endpoint::server(tls.server_config()?, bind_addr)?)
+     }
+ 
+-    /// Spawns both QUIC server and BEP v1 (Syncthing Block Exchange Protocol) TCP listeners.
++    /// Spawns the BEP v1 listener and the authenticated QUIC server, and accepts peers.
+     pub async fn run_server(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+-        // 1. Start BEP v1 TCP listener for official Go Syncthing node interoperability
++        // 1. BEP v1 TCP listener (Syncthing wire protocol). Unauthenticated: peers are listed
++        //    under a derived "BEP-…" id and are never matched to paired devices by name.
+         let bep_port = self.bep_port;
+         let local_name = self.device_name.clone();
+         let storage = self.sync_engine.storage().clone();
+@@ -609,32 +1050,20 @@
+         let on_peer_connected = Arc::new(move |hello: BepHello, _config: BepClusterConfig, addr: SocketAddr| {
+             let p2p = self_clone.clone();
+             tokio::spawn(async move {
+-                let storage = p2p.sync_engine.storage();
+-                let matched_device_id = storage
+-                    .list_devices()
+-                    .ok()
+-                    .and_then(|devs| {
+-                        devs.into_iter()
+-                            .find(|d| d.name == hello.device_name)
+-                            .map(|d| d.device_id)
+-                    })
+-                    .unwrap_or_else(|| {
+-                        format!("BEP-{}", blake3::hash(hello.device_name.as_bytes()).to_hex()[..16].to_ascii_uppercase())
+-                    });
+-
++                let bep_id = format!(
++                    "BEP-{}",
++                    blake3::hash(hello.device_name.as_bytes()).to_hex()[..16].to_ascii_uppercase()
++                );
+                 let client_str = format!("syncthing-bep-v1 ({}/{})", hello.client_name, hello.client_version);
+                 p2p.register_peer(PeerInfo {
+-                    device_id: matched_device_id.clone(),
++                    device_id: bep_id.clone(),
+                     device_name: hello.device_name.clone(),
+                     addr,
+                     last_seen: std::time::Instant::now(),
+                     client_type: client_str,
+-                }).await;
+-
+-                let _ = p2p.event_sender.send(CoreEvent::PeerConnected {
+-                    peer_id: matched_device_id,
+-                    addr: addr.to_string(),
+-                });
++                })
++                .await;
++                let _ = p2p.event_sender.send(CoreEvent::PeerConnected { peer_id: bep_id, addr: addr.to_string() });
+             });
+         });
+ 
+@@ -642,24 +1071,43 @@
+             warn!("Unable to start BEP v1 listener on port {}: {}", bep_port, e);
+         }
+ 
+-        // 2. Start high-speed QUIC server for native Synapse mesh
++        // 2. Mutually-authenticated QUIC endpoint for the Synapse mesh
+         let bind_addr = SocketAddr::from(([0, 0, 0, 0], self.p2p_port));
+-        let endpoint = match Self::create_quic_server(bind_addr) {
++        let endpoint = match self.create_quic_endpoint(bind_addr) {
+             Ok(ep) => ep,
+             Err(e) => {
+                 warn!("Unable to start QUIC server on {}: {}", bind_addr, e);
+                 return Ok(());
+             }
+         };
++        info!(
++            "Synapse Core QUIC P2P (mutual TLS) listening on {}",
++            endpoint.local_addr().map(|a| a.to_string()).unwrap_or_default()
++        );
++        *self.endpoint.lock().await = Some(endpoint.clone());
++        self.spawn_change_pusher();
+ 
+-        info!("Synapse Core QUIC P2P listening on {}", bind_addr);
+-        let manager = Arc::new(self.clone());
+-
+-        while let Some(conn) = endpoint.accept().await {
+-            let manager = manager.clone();
++        while let Some(incoming) = endpoint.accept().await {
++            let me = self.clone();
+             tokio::spawn(async move {
+-                if let Ok(connection) = conn.await {
+-                    let _ = handle_quic_connection(connection, manager).await;
++                let Ok(conn) = incoming.await else { return };
++                let Some(peer_hex) = secure::peer_device_id(&conn) else {
++                    conn.close(1u32.into(), b"no identity");
++                    return;
++                };
++                let addr = conn.remote_address();
++                let (stored_id, pairing) = resolve_device(me.sync_engine.storage(), &peer_hex);
++                use crate::state::DevicePairingState as Pairing;
++                match pairing {
++                    Some(Pairing::Paused) | Some(Pairing::Rejected) => {
++                        conn.close(2u32.into(), b"not accepted");
++                    }
++                    Some(Pairing::Paired) => {
++                        me.adopt_connection(stored_id.clone(), peer_hex, conn, addr).await;
++                        me.sync_all_folders_with(&stored_id).await;
++                    }
++                    // Unknown or pending: allowed to say Hello (pairing request) only.
++                    _ => me.adopt_connection(stored_id, peer_hex, conn, addr).await,
+                 }
+             });
+         }
+@@ -668,26 +1116,68 @@
+     }
+ }
+ 
+-/// Handles incoming streams on an active QUIC connection.
+-async fn handle_quic_connection(
+-    conn: quinn::Connection,
+-    manager: Arc<P2PManager>,
+-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+-    let remote_addr = conn.remote_address();
+-    while let Ok((mut send, mut recv)) = conn.accept_bi().await {
+-        let p2p = manager.clone();
+-        tokio::spawn(async move {
+-            if let Ok(buf) = recv.read_to_end(16 * 1024 * 1024).await {
+-                if let Ok(msg) = serde_json::from_slice::<P2PMessage>(&buf) {
+-                    if let Ok(Some(reply)) = p2p.handle_p2p_message(msg, Some(remote_addr)).await {
+-                        if let Ok(reply_bytes) = serde_json::to_vec(&reply) {
+-                            let _ = send.write_all(&reply_bytes).await;
+-                            let _ = send.finish();
+-                        }
+-                    }
+-                }
+-            }
+-        });
++/// Largest request we accept from a peer.
++const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
++/// Largest reply we accept (index responses and JSON-encoded chunks).
++const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
++/// Most ancestor revisions sent with a file notice.
++const MAX_ANCESTRY: usize = 256;
++
++/// Lowercase hex form of a device id given as hex or grouped Base32, if it is a public-key id.
++fn normalize_hex(device_id: &str) -> Option<String> {
++    let n = identity::normalize_device_id(device_id).ok()?;
++    (n.len() == 64 && n.chars().all(|c| c.is_ascii_hexdigit())).then_some(n)
++}
++
++/// Parses a configured peer address into a socket address. Accepts `ip:port`,
++/// `quic://host:port`, and `host:port`; ignores `dynamic` and other schemes (e.g. BEP's
++/// `tcp://`, which is a different port).
++pub fn parse_peer_address(address: &str) -> Option<SocketAddr> {
++    let a = address.trim();
++    let rest = a.strip_prefix("quic://").unwrap_or(a);
++    if rest.contains("://") || rest.eq_ignore_ascii_case("dynamic") {
++        return None;
++    }
++    if let Ok(sa) = rest.parse::<SocketAddr>() {
++        return Some(sa);
+     }
+-    Ok(())
++    use std::net::ToSocketAddrs;
++    rest.to_socket_addrs().ok()?.next()
++}
++
++/// Whether two device ids (hex or grouped Base32) refer to the same device.
++fn same_device(a: &str, b: &str) -> bool {
++    match (normalize_hex(a), normalize_hex(b)) {
++        (Some(x), Some(y)) => x == y,
++        _ => a == b,
++    }
++}
++
++/// Finds how a device is stored locally (it may have been paired by hex id or by its grouped
++/// Base32 form) and its pairing state. Returns `(stored_id, state)`; `stored_id` falls back
++/// to the given id when the device is unknown.
++pub fn resolve_device(
++    storage: &crate::storage::StorageEngine,
++    device_id: &str,
++) -> (String, Option<crate::state::DevicePairingState>) {
++    let mut candidates = vec![device_id.to_string()];
++    if let Some(hex) = normalize_hex(device_id) {
++        if let Ok(bytes) = hex::decode(&hex) {
++            candidates.push(identity::format_device_id(&bytes));
++        }
++        candidates.push(hex);
++    }
++    for c in &candidates {
++        if let Ok(Some(state)) = storage.device_pairing_state(c) {
++            return (c.clone(), Some(state));
++        }
++    }
++    (device_id.to_string(), None)
++}
++
++fn folder_shared_with(storage: &crate::storage::StorageEngine, folder_id: &str, stored_device_id: &str) -> bool {
++    storage
++        .list_folder_devices(folder_id)
++        .map(|devs| devs.iter().any(|d| d == stored_device_id))
++        .unwrap_or(false)
+ }
+--- a/synapse-core/src/p2p/secure.rs
++++ b/synapse-core/src/p2p/secure.rs
+@@ -0,0 +1,327 @@
++//! Mutually-authenticated QUIC transport bound to device identity.
++//!
++//! Every node presents a self-signed X.509 certificate whose key **is** its Ed25519 node
++//! identity key, so the device ID (hex of the Ed25519 public key) is proven by the TLS 1.3
++//! handshake itself — never taken from a message field. Both sides require a certificate
++//! (mutual TLS); the dialing side additionally pins the identity it expects, so a
++//! man-in-the-middle cannot answer for another device.
++//!
++//! Trust (is this device paired? which folders may it see?) is decided above this layer,
++//! from the authenticated device ID.
++
++use std::sync::Arc;
++use std::time::Duration;
++
++use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
++use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, WebPkiSupportedAlgorithms};
++use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
++use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
++use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
++
++use super::identity::NodeIdentity;
++
++/// TLS server name used by every Synapse node (identity comes from the key, not the name).
++pub const SERVER_NAME: &str = "synapse.p2p";
++/// ALPN protocol id for the Synapse peer protocol.
++pub const ALPN: &[u8] = b"synapse/1";
++
++/// DER prefix of an Ed25519 SubjectPublicKeyInfo: SEQ{ SEQ{ OID 1.3.101.112 }, BIT STRING(33) 0x00 … }.
++const ED25519_SPKI_PREFIX: [u8; 12] = [0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
++/// DER prefix of a PKCS#8 v1 Ed25519 private key wrapping a 32-byte seed.
++const ED25519_PKCS8_PREFIX: [u8; 16] = [
++    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
++];
++
++type BoxError = Box<dyn std::error::Error + Send + Sync>;
++
++/// Certificate + private key derived from a node's Ed25519 identity.
++pub struct TlsIdentity {
++    cert: CertificateDer<'static>,
++    key: Vec<u8>,
++    /// Hex device ID proven by this certificate.
++    pub device_id: String,
++}
++
++impl TlsIdentity {
++    /// Builds a self-signed certificate whose public key is the node's identity key.
++    pub fn from_identity(identity: &NodeIdentity) -> Result<Self, BoxError> {
++        let mut pkcs8 = ED25519_PKCS8_PREFIX.to_vec();
++        pkcs8.extend_from_slice(&identity.signing_key.to_bytes());
++        let key_der = PrivatePkcs8KeyDer::from(pkcs8.clone());
++        let key_pair = rcgen::KeyPair::from_pkcs8_der_and_sign_algo(&key_der, &rcgen::PKCS_ED25519)?;
++        let params = rcgen::CertificateParams::new(vec![SERVER_NAME.to_string()])?;
++        let cert = params.self_signed(&key_pair)?;
++        let cert_der = cert.der().clone();
++        let device_id = device_id_from_cert(&cert_der).ok_or("generated certificate has no Ed25519 key")?;
++        if device_id != identity.device_id {
++            return Err("certificate key does not match node identity".into());
++        }
++        Ok(Self { cert: cert_der, key: pkcs8, device_id })
++    }
++
++    fn key_der(&self) -> PrivateKeyDer<'static> {
++        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(self.key.clone()))
++    }
++
++    /// QUIC server config: TLS 1.3, client certificate required.
++    pub fn server_config(&self) -> Result<quinn::ServerConfig, BoxError> {
++        let provider = Arc::new(rustls::crypto::ring::default_provider());
++        let mut tls = rustls::ServerConfig::builder_with_provider(provider.clone())
++            .with_protocol_versions(&[&rustls::version::TLS13])?
++            .with_client_cert_verifier(Arc::new(PeerVerifier::new(&provider, None)))
++            .with_single_cert(vec![self.cert.clone()], self.key_der())?;
++        tls.alpn_protocols = vec![ALPN.to_vec()];
++        let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(tls)?;
++        let mut config = quinn::ServerConfig::with_crypto(Arc::new(crypto));
++        let transport = Arc::get_mut(&mut config.transport).ok_or("transport config shared")?;
++        transport.max_idle_timeout(Some(Duration::from_secs(30).try_into()?));
++        transport.keep_alive_interval(Some(Duration::from_secs(10)));
++        Ok(config)
++    }
++
++    /// QUIC client config that only accepts the peer whose device ID is `expected_device_id`.
++    pub fn client_config(&self, expected_device_id: &str) -> Result<quinn::ClientConfig, BoxError> {
++        let provider = Arc::new(rustls::crypto::ring::default_provider());
++        let mut tls = rustls::ClientConfig::builder_with_provider(provider.clone())
++            .with_protocol_versions(&[&rustls::version::TLS13])?
++            .dangerous()
++            .with_custom_certificate_verifier(Arc::new(PeerVerifier::new(
++                &provider,
++                Some(expected_device_id.to_ascii_lowercase()),
++            )))
++            .with_client_auth_cert(vec![self.cert.clone()], self.key_der())?;
++        tls.alpn_protocols = vec![ALPN.to_vec()];
++        let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls)?;
++        let mut config = quinn::ClientConfig::new(Arc::new(crypto));
++        let mut transport = quinn::TransportConfig::default();
++        transport.max_idle_timeout(Some(Duration::from_secs(30).try_into()?));
++        transport.keep_alive_interval(Some(Duration::from_secs(10)));
++        config.transport_config(Arc::new(transport));
++        Ok(config)
++    }
++}
++
++/// Device ID (hex Ed25519 public key) proven by an established QUIC connection.
++pub fn peer_device_id(conn: &quinn::Connection) -> Option<String> {
++    let identity = conn.peer_identity()?;
++    let certs = identity.downcast::<Vec<CertificateDer<'static>>>().ok()?;
++    certs.first().and_then(|c| device_id_from_cert(c))
++}
++
++// -----------------------------------------------------------------------------
++// Strict X.509 parsing: locate tbsCertificate.subjectPublicKeyInfo by structure
++// (never by searching bytes, which a crafted extension could spoof).
++// -----------------------------------------------------------------------------
++
++/// Reads one DER TLV at `pos`; returns (tag, content_start, content_end).
++fn der_tlv(buf: &[u8], pos: usize) -> Option<(u8, usize, usize)> {
++    let tag = *buf.get(pos)?;
++    let first = *buf.get(pos + 1)? as usize;
++    let (len, header) = if first < 0x80 {
++        (first, 2)
++    } else {
++        let n = first & 0x7f;
++        if n == 0 || n > 4 {
++            return None;
++        }
++        let mut len = 0usize;
++        for i in 0..n {
++            len = (len << 8) | *buf.get(pos + 2 + i)? as usize;
++        }
++        (len, 2 + n)
++    };
++    let start = pos + header;
++    let end = start.checked_add(len)?;
++    if end > buf.len() {
++        return None;
++    }
++    Some((tag, start, end))
++}
++
++/// Extracts the hex device ID from an Ed25519 X.509 certificate, or `None` if the
++/// certificate is malformed or not Ed25519.
++pub fn device_id_from_cert(cert: &[u8]) -> Option<String> {
++    // Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signature }
++    let (tag, cert_start, cert_end) = der_tlv(cert, 0)?;
++    if tag != 0x30 || cert_end != cert.len() {
++        return None;
++    }
++    // tbsCertificate ::= SEQUENCE { [0] version OPTIONAL, serial, signature, issuer, validity, subject, spki, ... }
++    let (tag, tbs_start, tbs_end) = der_tlv(cert, cert_start)?;
++    if tag != 0x30 {
++        return None;
++    }
++    let mut pos = tbs_start;
++    let (tag, _, end) = der_tlv(cert, pos)?;
++    if tag == 0xa0 {
++        pos = end; // explicit version
++    }
++    // serialNumber INTEGER, signature SEQ, issuer SEQ, validity SEQ, subject SEQ
++    for expected in [0x02u8, 0x30, 0x30, 0x30, 0x30] {
++        let (tag, _, end) = der_tlv(cert, pos)?;
++        if tag != expected || end > tbs_end {
++            return None;
++        }
++        pos = end;
++    }
++    // subjectPublicKeyInfo
++    let (tag, _, spki_end) = der_tlv(cert, pos)?;
++    if tag != 0x30 || spki_end > tbs_end {
++        return None;
++    }
++    let spki = &cert[pos..spki_end];
++    if spki.len() != ED25519_SPKI_PREFIX.len() + 32 || !spki.starts_with(&ED25519_SPKI_PREFIX) {
++        return None;
++    }
++    Some(hex::encode(&spki[ED25519_SPKI_PREFIX.len()..]))
++}
++
++// -----------------------------------------------------------------------------
++// Verifiers
++// -----------------------------------------------------------------------------
++
++/// Accepts self-signed Ed25519 node certificates. The TLS 1.3 handshake signature is
++/// verified against the certificate key, proving possession of the identity key. When
++/// `expected` is set (dialing side), the certificate must belong to that device.
++#[derive(Debug)]
++struct PeerVerifier {
++    algorithms: WebPkiSupportedAlgorithms,
++    expected: Option<String>,
++}
++
++impl PeerVerifier {
++    fn new(provider: &rustls::crypto::CryptoProvider, expected: Option<String>) -> Self {
++        Self { algorithms: provider.signature_verification_algorithms, expected }
++    }
++
++    fn check(&self, end_entity: &CertificateDer<'_>) -> Result<(), rustls::Error> {
++        let id = device_id_from_cert(end_entity)
++            .ok_or_else(|| rustls::Error::General("peer certificate is not a Synapse Ed25519 identity".into()))?;
++        if let Some(expected) = &self.expected {
++            if &id != expected {
++                return Err(rustls::Error::General(format!(
++                    "peer identity mismatch: expected {}, got {}",
++                    expected, id
++                )));
++            }
++        }
++        Ok(())
++    }
++}
++
++impl ServerCertVerifier for PeerVerifier {
++    fn verify_server_cert(
++        &self,
++        end_entity: &CertificateDer<'_>,
++        _intermediates: &[CertificateDer<'_>],
++        _server_name: &ServerName<'_>,
++        _ocsp_response: &[u8],
++        _now: UnixTime,
++    ) -> Result<ServerCertVerified, rustls::Error> {
++        self.check(end_entity)?;
++        Ok(ServerCertVerified::assertion())
++    }
++
++    fn verify_tls12_signature(
++        &self,
++        message: &[u8],
++        cert: &CertificateDer<'_>,
++        dss: &DigitallySignedStruct,
++    ) -> Result<HandshakeSignatureValid, rustls::Error> {
++        verify_tls12_signature(message, cert, dss, &self.algorithms)
++    }
++
++    fn verify_tls13_signature(
++        &self,
++        message: &[u8],
++        cert: &CertificateDer<'_>,
++        dss: &DigitallySignedStruct,
++    ) -> Result<HandshakeSignatureValid, rustls::Error> {
++        verify_tls13_signature(message, cert, dss, &self.algorithms)
++    }
++
++    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
++        vec![SignatureScheme::ED25519]
++    }
++}
++
++impl ClientCertVerifier for PeerVerifier {
++    fn root_hint_subjects(&self) -> &[DistinguishedName] {
++        &[]
++    }
++
++    fn verify_client_cert(
++        &self,
++        end_entity: &CertificateDer<'_>,
++        _intermediates: &[CertificateDer<'_>],
++        _now: UnixTime,
++    ) -> Result<ClientCertVerified, rustls::Error> {
++        self.check(end_entity)?;
++        Ok(ClientCertVerified::assertion())
++    }
++
++    fn client_auth_mandatory(&self) -> bool {
++        true
++    }
++
++    fn verify_tls12_signature(
++        &self,
++        message: &[u8],
++        cert: &CertificateDer<'_>,
++        dss: &DigitallySignedStruct,
++    ) -> Result<HandshakeSignatureValid, rustls::Error> {
++        verify_tls12_signature(message, cert, dss, &self.algorithms)
++    }
++
++    fn verify_tls13_signature(
++        &self,
++        message: &[u8],
++        cert: &CertificateDer<'_>,
++        dss: &DigitallySignedStruct,
++    ) -> Result<HandshakeSignatureValid, rustls::Error> {
++        verify_tls13_signature(message, cert, dss, &self.algorithms)
++    }
++
++    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
++        vec![SignatureScheme::ED25519]
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn identity() -> NodeIdentity {
++        let dir = std::env::temp_dir().join(format!("synapse_tls_{}", uuid::Uuid::new_v4()));
++        std::fs::create_dir_all(&dir).unwrap();
++        NodeIdentity::load_or_generate(&dir).unwrap()
++    }
++
++    #[test]
++    fn test_certificate_proves_node_identity() {
++        let id = identity();
++        let tls = TlsIdentity::from_identity(&id).unwrap();
++        assert_eq!(tls.device_id, id.device_id);
++        assert_eq!(device_id_from_cert(&tls.cert).unwrap(), id.device_id);
++        assert!(tls.server_config().is_ok());
++        assert!(tls.client_config(&id.device_id).is_ok());
++    }
++
++    #[test]
++    fn test_spki_extraction_rejects_spoofed_or_malformed_certs() {
++        let id = identity();
++        let tls = TlsIdentity::from_identity(&id).unwrap();
++        // Not a certificate at all, or truncated
++        assert!(device_id_from_cert(&[]).is_none());
++        assert!(device_id_from_cert(&tls.cert[..tls.cert.len() - 1]).is_none());
++        // Trailing junk after the certificate
++        let mut padded = tls.cert.to_vec();
++        padded.push(0);
++        assert!(device_id_from_cert(&padded).is_none());
++        // A blob that merely *contains* an Ed25519 SPKI pattern is not accepted
++        let mut fake = vec![0x30, 0x2c];
++        fake.extend_from_slice(&ED25519_SPKI_PREFIX);
++        fake.extend_from_slice(&[7u8; 32]);
++        assert!(device_id_from_cert(&fake).is_none());
++    }
++}
+--- a/synapse-core/src/storage/mod.rs
++++ b/synapse-core/src/storage/mod.rs
+@@ -1514,6 +1514,24 @@
+         }
+     }
+ 
++    /// Whether a chunk belongs to the current revision of a file in a folder shared with
++    /// `device_id` (i.e. whether that peer may download it).
++    pub fn chunk_visible_to_device(&self, chunk_hash: &str, device_id: &str) -> SqlResult<bool> {
++        if !is_valid_chunk_hash(chunk_hash) {
++            return Ok(false);
++        }
++        let conn = self.conn.lock().unwrap();
++        conn.query_row(
++            "SELECT EXISTS(
++                SELECT 1 FROM file_chunks fc
++                JOIN files f ON f.current_revision = fc.revision_hash
++                JOIN folder_devices fd ON fd.folder_id = f.folder_id
++                WHERE fc.chunk_hash = ?1 AND fd.device_id = ?2)",
++            params![chunk_hash, device_id],
++            |row| row.get(0),
++        )
++    }
++
+     /// Checks if a chunk is locally available in CAS.
+     pub fn has_chunk(&self, chunk_hash: &str) -> bool {
+         self.get_chunk_file_path(chunk_hash).is_some_and(|p| p.exists())
+--- a/synapse-core/tests/integration_test.rs
++++ b/synapse-core/tests/integration_test.rs
+@@ -2033,28 +2033,64 @@
+     use synapse_core::p2p::P2PMessage;
+     let harness = TestHarness::new();
+     let p2p = harness.app_state.p2p_manager.clone();
+-    let peer = Some("192.0.2.10:9190".parse().unwrap());
++    let addr = Some("192.0.2.10:9190".parse().unwrap());
+ 
+-    // Payload that doesn't match its claimed hash is dropped.
++    // A real indexed file in a folder shared with PEER-SHARED only
++    let dir = harness.temp_dir.join("shared");
++    fs::create_dir_all(&dir).unwrap();
++    fs::write(dir.join("doc.txt"), b"shared content").unwrap();
++    harness.storage.add_folder(&FolderRecord::new("shared", dir.to_string_lossy())).unwrap();
++    harness.sync_engine.index_folder("shared").unwrap();
++    let file = harness.storage.get_file("shared", "doc.txt").unwrap().unwrap();
++    let chunk = harness.storage.get_revision_chunks(&file.current_revision).unwrap()[0].clone();
++    for id in ["PEER-SHARED", "PEER-OTHER"] {
++        harness.storage.add_device(&DeviceRecord {
++            device_id: id.into(), name: id.into(), addresses: vec![], is_paused: false,
++            is_trusted: true, introducer: false, cert_name: None, created_at: 0,
++        }).unwrap();
++    }
++    harness.storage.share_folder_with_device("shared", "PEER-SHARED").unwrap();
++
++    // Unsolicited chunk responses are never stored — not from strangers, not from paired peers
+     let honest = b"real chunk bytes".to_vec();
+     let claimed = blake3::hash(&honest).to_hex().to_string();
+-    p2p.handle_p2p_message(P2PMessage::ChunkResponse { chunk_hash: claimed.clone(), data: b"poison".to_vec() }, peer)
+-        .await.unwrap();
++    for peer in ["STRANGER", "PEER-SHARED"] {
++        let r = p2p.handle_peer_message(peer, addr,
++            P2PMessage::ChunkResponse { chunk_hash: claimed.clone(), data: honest.clone() }).await.unwrap();
++        assert!(r.is_none());
++    }
+     assert!(!harness.storage.has_chunk(&claimed));
+ 
+-    // Path traversal in the chunk ID is dropped and nothing is written.
+-    let escape = harness.temp_dir.join("escaped");
+-    let evil = format!("../../../{}", escape.display());
+-    p2p.handle_p2p_message(P2PMessage::ChunkResponse { chunk_hash: evil.clone(), data: b"x".to_vec() }, peer)
+-        .await.unwrap();
++    // Path traversal in a chunk id is rejected without touching the filesystem
++    let evil = format!("../../../{}", harness.temp_dir.join("escaped").display());
++    let r = p2p.handle_peer_message("PEER-SHARED", addr, P2PMessage::ChunkRequest { chunk_hash: evil }).await.unwrap();
++    assert!(r.is_none());
+     assert!(!harness.temp_dir.join("escaped.chunk").exists());
+-    let reply = p2p.handle_p2p_message(P2PMessage::ChunkRequest { chunk_hash: evil }, peer).await.unwrap();
+-    assert!(reply.is_none());
+ 
+-    // A matching payload is stored.
+-    p2p.handle_p2p_message(P2PMessage::ChunkResponse { chunk_hash: claimed.clone(), data: honest.clone() }, peer)
+-        .await.unwrap();
+-    assert_eq!(harness.storage.get_chunk(&claimed).unwrap().unwrap(), honest);
++    // Chunks are only served to paired peers the folder is shared with
++    let ask = || P2PMessage::ChunkRequest { chunk_hash: chunk.clone() };
++    assert!(p2p.handle_peer_message("STRANGER", addr, ask()).await.unwrap().is_none());
++    assert!(p2p.handle_peer_message("PEER-OTHER", addr, ask()).await.unwrap().is_none());
++    match p2p.handle_peer_message("PEER-SHARED", addr, ask()).await.unwrap() {
++        Some(P2PMessage::ChunkResponse { chunk_hash, data }) => {
++            assert_eq!(chunk_hash, chunk);
++            assert_eq!(data, b"shared content");
++        }
++        other => panic!("expected chunk, got {:?}", other),
++    }
++
++    // Index and file requests follow the same sharing rules
++    let idx = |id: &str| (id.to_string(), P2PMessage::IndexRequest { folder_id: "shared".into() });
++    for (id, msg) in [idx("STRANGER"), idx("PEER-OTHER")] {
++        assert!(p2p.handle_peer_message(&id, addr, msg).await.unwrap().is_none());
++    }
++    let (id, msg) = idx("PEER-SHARED");
++    assert!(matches!(p2p.handle_peer_message(&id, addr, msg).await.unwrap(),
++        Some(P2PMessage::IndexResponse { ref files, .. }) if files.len() == 1));
++
++    // A paused peer gets nothing either
++    harness.storage.set_device_paused("PEER-SHARED", true).unwrap();
++    assert!(p2p.handle_peer_message("PEER-SHARED", addr, ask()).await.unwrap().is_none());
+ }
+ 
+ // =============================================================================
+@@ -2316,11 +2352,12 @@
+     assert_eq!(api_json(&router, "POST", "/api/v1/devices/NO-SUCH-DEVICE/pause").await.0, StatusCode::NOT_FOUND);
+ 
+     // Regression: a *paused* paired device saying Hello must not become a pairing request.
+-    harness.app_state.p2p_manager.handle_p2p_message(
++    harness.app_state.p2p_manager.handle_peer_message(
++        id,
++        Some("192.0.2.5:9190".parse().unwrap()),
+         synapse_core::p2p::P2PMessage::Hello {
+             device_id: id.into(), device_name: "Tablet".into(), folders: vec![], cluster_devices: vec![],
+         },
+-        Some("192.0.2.5:9190".parse().unwrap()),
+     ).await.unwrap();
+     assert!(harness.storage.get_pending_device(id).unwrap().is_none());
+     assert_eq!(api_json(&router, "POST", &format!("/api/v1/devices/{}/resume", id)).await.0, StatusCode::OK);
+@@ -2364,3 +2401,49 @@
+     assert_eq!(disconnects, 1);
+     assert_eq!(harness.app_state.peer_count.load(std::sync::atomic::Ordering::Relaxed), 0);
+ }
++
++/// Regression: folders added at runtime were never watched until the engine restarted.
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn test_folder_watching_follows_folder_lifecycle() {
++    let harness = TestHarness::new();
++    let router = ApiServer::create_router(harness.app_state.clone());
++    let dir = harness.temp_dir.join("live");
++    fs::create_dir_all(&dir).unwrap();
++
++    let res = router.clone().oneshot(
++        Request::builder().method("POST").uri("/api/v1/folders")
++            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
++            .header("Content-Type", "application/json")
++            .body(Body::from(format!(r#"{{"folder_id":"live","local_path":"{}"}}"#, dir.display()))).unwrap(),
++    ).await.unwrap();
++    assert_eq!(res.status(), StatusCode::CREATED);
++
++    let engine = harness.sync_engine.clone();
++    let wait = |cond: Box<dyn Fn() -> bool>, what: &'static str| async move {
++        let start = std::time::Instant::now();
++        while !cond() {
++            assert!(start.elapsed() < Duration::from_secs(10), "timed out: {}", what);
++            tokio::time::sleep(Duration::from_millis(50)).await;
++        }
++    };
++    let e = engine.clone();
++    wait(Box::new(move || e.is_watching("live")), "watcher started for new folder").await;
++
++    // A file written after registration is picked up by the watcher, no rescan needed
++    fs::write(dir.join("new.txt"), b"picked up live").unwrap();
++    let st = harness.storage.clone();
++    wait(Box::new(move || st.get_file("live", "new.txt").unwrap().is_some()), "live change indexed").await;
++
++    // Pause stops watching; resume starts it again; delete stops it
++    assert_eq!(api_json(&router, "POST", "/api/v1/folders/live/pause").await.0, StatusCode::OK);
++    assert!(!engine.is_watching("live"));
++    assert_eq!(api_json(&router, "POST", "/api/v1/folders/live/resume").await.0, StatusCode::OK);
++    assert!(engine.is_watching("live"));
++    let res = router.clone().oneshot(
++        Request::builder().method("DELETE").uri("/api/v1/folders/live")
++            .header("Authorization", format!("Bearer {}", TEST_TOKEN))
++            .body(Body::empty()).unwrap(),
++    ).await.unwrap();
++    assert!(res.status().is_success());
++    assert!(!engine.is_watching("live"));
++}
+--- a/synapse-core/tests/sync_e2e_test.rs
++++ b/synapse-core/tests/sync_e2e_test.rs
+@@ -0,0 +1,229 @@
++//! Two (and three) real engines syncing over mutually-authenticated QUIC on loopback.
++
++use std::net::SocketAddr;
++use std::path::PathBuf;
++use std::sync::atomic::AtomicUsize;
++use std::sync::Arc;
++use std::time::{Duration, Instant};
++
++use synapse_core::conflict::ConflictEngine;
++use synapse_core::engine::SyncEngine;
++use synapse_core::p2p::{NodeIdentity, P2PManager, P2PMessage};
++use synapse_core::storage::{DeviceRecord, FolderRecord, StorageEngine};
++
++struct Node {
++    home: PathBuf,
++    folder_dir: PathBuf,
++    storage: StorageEngine,
++    engine: SyncEngine,
++    p2p: Arc<P2PManager>,
++    id: String,
++    addr: SocketAddr,
++}
++
++impl Node {
++    async fn start(name: &str) -> Node {
++        let home = std::env::temp_dir().join(format!("synapse_e2e_{}_{}", name, uuid::Uuid::new_v4()));
++        std::fs::create_dir_all(&home).unwrap();
++        let storage = StorageEngine::new(&home).unwrap();
++        let identity = NodeIdentity::load_or_generate(&home).unwrap();
++        let id = identity.device_id.clone();
++        let (tx, _) = tokio::sync::broadcast::channel(1024);
++        let conflicts = Arc::new(ConflictEngine::new(storage.clone(), tx.clone(), id.clone()));
++        let engine = SyncEngine::new(storage.clone(), conflicts, tx.clone(), id.clone());
++        let p2p = Arc::new(P2PManager::new(
++            identity,
++            name.to_string(),
++            0,
++            0,
++            engine.clone(),
++            Arc::new(AtomicUsize::new(0)),
++            tx,
++        ));
++        let server = p2p.clone();
++        tokio::spawn(async move {
++            let _ = server.run_server().await;
++        });
++        let start = Instant::now();
++        let port = loop {
++            if let Some(a) = p2p.local_quic_addr().await {
++                break a.port();
++            }
++            assert!(start.elapsed() < Duration::from_secs(5), "QUIC endpoint never started");
++            tokio::time::sleep(Duration::from_millis(20)).await;
++        };
++        let folder_dir = home.join("docs");
++        std::fs::create_dir_all(&folder_dir).unwrap();
++        storage.add_folder(&FolderRecord::new("docs", folder_dir.to_string_lossy())).unwrap();
++        Node { home, folder_dir, storage, engine, p2p, id, addr: SocketAddr::from(([127, 0, 0, 1], port)) }
++    }
++
++    /// Pairs with `other` and shares the "docs" folder with it.
++    fn pair_and_share(&self, other: &Node) {
++        self.storage
++            .add_device(&DeviceRecord {
++                device_id: other.id.clone(),
++                name: "peer".into(),
++                addresses: vec![other.addr.to_string()],
++                is_paused: false,
++                is_trusted: true,
++                introducer: false,
++                cert_name: None,
++                created_at: 0,
++            })
++            .unwrap();
++        self.storage.share_folder_with_device("docs", &other.id).unwrap();
++    }
++
++    fn write(&self, rel: &str, data: &[u8]) {
++        let p = self.folder_dir.join(rel);
++        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
++        std::fs::write(&p, data).unwrap();
++    }
++
++    fn read(&self, rel: &str) -> Option<Vec<u8>> {
++        std::fs::read(self.folder_dir.join(rel)).ok()
++    }
++}
++
++impl Drop for Node {
++    fn drop(&mut self) {
++        let _ = std::fs::remove_dir_all(&self.home);
++    }
++}
++
++async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
++    let start = Instant::now();
++    while !check() {
++        assert!(start.elapsed() < Duration::from_secs(15), "timed out waiting for: {}", what);
++        tokio::time::sleep(Duration::from_millis(50)).await;
++    }
++}
++
++fn pseudo_random(len: usize, seed: u64) -> Vec<u8> {
++    let mut x = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
++    (0..len)
++        .map(|_| {
++            x ^= x << 13;
++            x ^= x >> 7;
++            x ^= x << 17;
++            (x >> 24) as u8
++        })
++        .collect()
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn test_two_nodes_sync_end_to_end() {
++    let _ = tracing_subscriber::fmt().with_test_writer().with_env_filter("info").try_init();
++    let a = Node::start("alice").await;
++    let b = Node::start("bob").await;
++    a.pair_and_share(&b);
++    b.pair_and_share(&a);
++
++    // Content on A before the devices ever talk: small, multi-chunk, and nested files
++    let big = pseudo_random(3 * 1024 * 1024 + 12345, 7);
++    a.write("hello.txt", b"hello from alice\n");
++    a.write("media/big.bin", &big);
++    a.write("notes/deep/plan.md", b"# Plan\n- one\n- two\n");
++    a.engine.index_folder("docs").unwrap();
++
++    // 1. Connect (mutual TLS) -> both sides pull what they are missing
++    a.p2p.ensure_connected(&b.id, b.addr).await.unwrap();
++    assert!(a.p2p.is_connected_to(&b.id).await);
++    eventually("initial files on bob", || {
++        b.read("hello.txt").as_deref() == Some(b"hello from alice\n".as_slice())
++            && b.read("media/big.bin").as_deref() == Some(big.as_slice())
++            && b.read("notes/deep/plan.md").is_some()
++    })
++    .await;
++    // Same revision ids on both sides (no re-revisioning on receipt)
++    for rel in ["hello.txt", "media/big.bin", "notes/deep/plan.md"] {
++        let ra = a.storage.get_file("docs", rel).unwrap().unwrap().current_revision;
++        let rb = b.storage.get_file("docs", rel).unwrap().unwrap().current_revision;
++        assert_eq!(ra, rb, "{} revision differs", rel);
++    }
++
++    // 2. Live push A -> B on local change
++    a.write("hello.txt", b"hello again from alice\n");
++    a.engine.index_single_file("docs", "hello.txt").unwrap();
++    eventually("alice's edit on bob", || {
++        b.read("hello.txt").as_deref() == Some(b"hello again from alice\n".as_slice())
++    })
++    .await;
++
++    // 3. Live push B -> A (same connection, other direction)
++    b.write("from-bob.txt", b"bob was here\n");
++    b.engine.index_single_file("docs", "from-bob.txt").unwrap();
++    eventually("bob's file on alice", || a.read("from-bob.txt").as_deref() == Some(b"bob was here\n".as_slice()))
++        .await;
++
++    // 4. Re-indexing received files must not create new revisions (no ping-pong)
++    let before = b.storage.get_file("docs", "hello.txt").unwrap().unwrap().current_revision;
++    assert!(!b.engine.index_single_file("docs", "hello.txt").unwrap());
++    assert_eq!(b.storage.get_file("docs", "hello.txt").unwrap().unwrap().current_revision, before);
++
++    // 5. Concurrent edits while B ignores A (paused), then catch up: no edit may be lost
++    b.storage.set_device_paused(&a.id, true).unwrap();
++    a.write("notes/deep/plan.md", b"# Plan\n- one (alice)\n- two\n");
++    a.engine.index_single_file("docs", "notes/deep/plan.md").unwrap();
++    b.write("notes/deep/plan.md", b"# Plan\n- one\n- two (bob)\n");
++    b.engine.index_single_file("docs", "notes/deep/plan.md").unwrap();
++    tokio::time::sleep(Duration::from_millis(300)).await;
++    assert_eq!(b.read("notes/deep/plan.md").unwrap(), b"# Plan\n- one\n- two (bob)\n", "paused peer applied a push");
++    b.storage.set_device_paused(&a.id, false).unwrap();
++    b.p2p.sync_folder_from(&a.id, "docs").await.unwrap();
++
++    let merged = String::from_utf8(b.read("notes/deep/plan.md").unwrap()).unwrap();
++    let quarantined = !b.storage.list_pending_conflicts().unwrap().is_empty();
++    assert!(merged.contains("two (bob)"), "bob's edit was lost: {}", merged);
++    assert!(
++        merged.contains("one (alice)") || quarantined,
++        "alice's edit was neither merged nor quarantined: {}",
++        merged
++    );
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
++async fn test_peer_identity_cannot_be_spoofed() {
++    let a = Node::start("alice").await;
++    let b = Node::start("bob").await;
++    let m = Node::start("mallory").await;
++    a.pair_and_share(&b);
++    b.pair_and_share(&a);
++    a.write("secret.txt", b"for bob only\n");
++    a.engine.index_folder("docs").unwrap();
++
++    // Dialing "bob" but reaching mallory's address: the pinned identity check refuses it.
++    let err = a.p2p.ensure_connected(&b.id, m.addr).await;
++    assert!(err.is_err(), "connected to the wrong identity");
++    assert!(!a.p2p.is_connected_to(&b.id).await);
++
++    // Mallory connects to alice with her own (genuine) identity...
++    m.pair_and_share(&a); // mallory trusts alice locally; alice does NOT trust mallory
++    m.p2p.ensure_connected(&a.id, a.addr).await.unwrap();
++
++    // ...claims to be bob in a Hello: ignored, no pairing request is recorded for bob's id
++    let reply = m
++        .p2p
++        .request(
++            &a.id,
++            P2PMessage::Hello { device_id: b.id.clone(), device_name: "bob".into(), folders: vec![], cluster_devices: vec![] },
++        )
++        .await
++        .unwrap();
++    assert!(reply.is_none());
++
++    // ...asks for alice's folder and chunks: nothing, she is not paired or shared
++    let idx = m.p2p.request(&a.id, P2PMessage::IndexRequest { folder_id: "docs".into() }).await.unwrap();
++    assert!(idx.is_none());
++    let file = a.storage.get_file("docs", "secret.txt").unwrap().unwrap();
++    let chunk = a.storage.get_revision_chunks(&file.current_revision).unwrap()[0].clone();
++    let got = m.p2p.request(&a.id, P2PMessage::ChunkRequest { chunk_hash: chunk }).await.unwrap();
++    assert!(got.is_none());
++
++    // Alice recorded mallory as a pending request under her *proven* id, nothing else
++    let pending = a.storage.list_pending_devices().unwrap();
++    assert_eq!(pending.len(), 1);
++    assert_eq!(pending[0].device_id, m.id);
++    assert!(m.read("secret.txt").is_none());
++}
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,74 @@
++name: CI
++
++on:
++  push:
++    branches: [ "main", "synaptic-core" ]
++  pull_request:
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++concurrency:
++  group: ci-${{ github.ref }}
++  cancel-in-progress: true
++
++jobs:
++  engine:
++    name: Engine (synapse-core) — build, test, lint, audit
++    runs-on: ubuntu-latest
++    defaults:
++      run:
++        working-directory: synapse-core
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: dtolnay/rust-toolchain@stable
++        with:
++          components: clippy
++
++      - uses: Swatinem/rust-cache@v2
++        with:
++          workspaces: synapse-core
++
++      - name: Build
++        run: cargo build --locked --all-targets
++
++      - name: Test (unit, integration, lifecycle, two-node sync)
++        run: cargo test --locked
++
++      - name: Lint (bug-class lints are errors; style lints are reported)
++        run: cargo clippy --locked --all-targets -- -D clippy::correctness -D clippy::suspicious
++
++      - name: Release build without test-only features
++        run: cargo build --locked --release --bin synapse-core
++
++      - uses: taiki-e/install-action@v2
++        with:
++          tool: cargo-audit
++
++      - name: Dependency vulnerability audit
++        run: cargo audit
++
++  app:
++    name: App (Kotlin) — compile desktop + Android debug
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: actions/setup-java@v5
++        with:
++          distribution: temurin
++          java-version: '17'
++          cache: gradle
++
++      - uses: android-actions/setup-android@v3
++
++      - name: Make gradlew executable
++        run: chmod +x gradlew
++
++      - name: Compile shared + desktop (JVM)
++        run: ./gradlew :app:shared:compileKotlinJvm :app:desktopApp:compileKotlin --no-daemon
++
++      - name: Assemble Android debug
++        run: ./gradlew :app:androidApp:assembleDebug --no-daemon
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -38,15 +38,129 @@
+           echo "version=${TAG}" >> $GITHUB_OUTPUT
+           echo "raw_version=${RAW_VER}" >> $GITHUB_OUTPUT
+ 
++  # ---------------------------------------------------------------------------
++  # Engine built from source for every release (previously releases packaged
++  # whatever binaries happened to be committed in the repository).
++  # ---------------------------------------------------------------------------
++  build-engine:
++    name: Build engine from source (${{ matrix.name }})
++    needs: version-env
++    runs-on: ${{ matrix.os }}
++    strategy:
++      fail-fast: true
++      matrix:
++        include:
++          - name: linux-x86_64
++            os: ubuntu-latest
++            target: x86_64-unknown-linux-gnu
++            bin: synapse-core
++          - name: windows-x64
++            os: windows-latest
++            target: x86_64-pc-windows-msvc
++            bin: synapse-core.exe
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
++      - name: Install Rust toolchain
++        uses: dtolnay/rust-toolchain@stable
++        with:
++          targets: ${{ matrix.target }}
++
++      - uses: Swatinem/rust-cache@v2
++        with:
++          workspaces: synapse-core
++
++      - name: Test engine
++        if: runner.os == 'Linux'
++        working-directory: synapse-core
++        run: cargo test --locked
++
++      - name: Build release engine
++        working-directory: synapse-core
++        run: cargo build --locked --release --target ${{ matrix.target }} --bin synapse-core
++
++      - name: Stage binary
++        shell: bash
++        run: |
++          mkdir -p engine-dist
++          cp synapse-core/target/${{ matrix.target }}/release/${{ matrix.bin }} engine-dist/${{ matrix.bin }}
++
++      - name: Upload engine
++        uses: actions/upload-artifact@v4
++        with:
++          name: engine-${{ matrix.name }}
++          path: engine-dist/
++
++  build-engine-android:
++    name: Build engine from source (Android)
++    needs: version-env
++    runs-on: ubuntu-latest
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
++      - name: Install Rust toolchain
++        uses: dtolnay/rust-toolchain@stable
++        with:
++          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
++
++      - uses: Swatinem/rust-cache@v2
++        with:
++          workspaces: synapse-core
++
++      - name: Setup Android NDK
++        id: ndk
++        uses: nttld/setup-ndk@v1
++        with:
++          ndk-version: r26d
++
++      - uses: taiki-e/install-action@v2
++        with:
++          tool: cargo-ndk
++
++      - name: Build engine for all ABIs
++        working-directory: synapse-core
++        env:
++          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
++        run: cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 build --locked --release --bin synapse-core
++
++      - name: Stage jniLibs
++        run: |
++          mkdir -p jniLibs/arm64-v8a jniLibs/armeabi-v7a jniLibs/x86_64
++          cp synapse-core/target/aarch64-linux-android/release/synapse-core jniLibs/arm64-v8a/libsynapse.so
++          cp synapse-core/target/armv7-linux-androideabi/release/synapse-core jniLibs/armeabi-v7a/libsynapse.so
++          cp synapse-core/target/x86_64-linux-android/release/synapse-core jniLibs/x86_64/libsynapse.so
++
++      - name: Upload jniLibs
++        uses: actions/upload-artifact@v4
++        with:
++          name: engine-android-jniLibs
++          path: jniLibs/
++
+   build-linux:
+     name: Build Native Linux Release & JAR
+-    needs: version-env
++    needs: [version-env, build-engine]
+     runs-on: ubuntu-latest
+ 
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+ 
++      - name: Download engine (built from source)
++        uses: actions/download-artifact@v4
++        with:
++          name: engine-linux-x86_64
++          path: engine-dl
++
++      - name: Use freshly built engine
++        run: |
++          for dest in bin app/desktopApp/bin synapse-core/bin; do
++            mkdir -p "$dest"
++            cp engine-dl/synapse-core "$dest/synapse-core"
++            chmod +x "$dest/synapse-core"
++          done
++
+       - name: Set up JDK 17
+         uses: actions/setup-java@v5
+         with:
+@@ -82,13 +196,27 @@
+ 
+   build-arch-packages:
+     name: Build Arch Linux & CachyOS Packages
+-    needs: version-env
++    needs: [version-env, build-engine]
+     runs-on: ubuntu-latest
+ 
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+ 
++      - name: Download engine (built from source)
++        uses: actions/download-artifact@v4
++        with:
++          name: engine-linux-x86_64
++          path: engine-dl
++
++      - name: Use freshly built engine
++        run: |
++          for dest in bin app/desktopApp/bin synapse-core/bin; do
++            mkdir -p "$dest"
++            cp engine-dl/synapse-core "$dest/synapse-core"
++            chmod +x "$dest/synapse-core"
++          done
++
+       - name: Set up JDK 17
+         uses: actions/setup-java@v5
+         with:
+@@ -137,13 +265,27 @@
+ 
+   build-windows:
+     name: Build Windows Installers
+-    needs: version-env
++    needs: [version-env, build-engine]
+     runs-on: windows-latest
+ 
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+ 
++      - name: Download engine (built from source)
++        uses: actions/download-artifact@v4
++        with:
++          name: engine-windows-x64
++          path: engine-dl
++
++      - name: Use freshly built engine
++        shell: bash
++        run: |
++          for dest in bin app/desktopApp/bin synapse-core/bin; do
++            mkdir -p "$dest"
++            cp engine-dl/synapse-core.exe "$dest/synapse-core.exe"
++          done
++
+       - name: Set up JDK 17
+         uses: actions/setup-java@v5
+         with:
+@@ -174,13 +316,31 @@
+ 
+   build-android:
+     name: Build Android Release APK
+-    needs: version-env
++    needs: [version-env, build-engine-android]
+     runs-on: ubuntu-latest
+ 
+     steps:
+       - name: Checkout repository
+         uses: actions/checkout@v4
+ 
++      - name: Download Android engine (built from source)
++        uses: actions/download-artifact@v4
++        with:
++          name: engine-android-jniLibs
++          path: app/androidApp/src/main/jniLibs
++
++      - name: Prepare release signing key
++        env:
++          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
++        run: |
++          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
++            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/synapse-release.jks"
++            echo "SYNAPSE_KEYSTORE_FILE=$RUNNER_TEMP/synapse-release.jks" >> "$GITHUB_ENV"
++            echo "Release signing key configured."
++          else
++            echo "::warning title=Android release is debug-signed::Add the ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD secrets (see docs/RELEASE_SIGNING.md). Debug-signed APKs cannot update each other or be published on Google Play."
++          fi
++
+       - name: Set up JDK 17
+         uses: actions/setup-java@v5
+         with:
+@@ -195,6 +355,10 @@
+         run: chmod +x gradlew
+ 
+       - name: Build Android Release APK
++        env:
++          SYNAPSE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
++          SYNAPSE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
++          SYNAPSE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+         run: ./gradlew :app:androidApp:assembleRelease --no-daemon
+ 
+       - name: Prepare APK Artifact
+@@ -208,7 +372,7 @@
+ 
+   publish-release:
+     name: Publish GitHub Release
+-    needs: [version-env, build-linux, build-arch-packages, build-windows, build-android]
++    needs: [version-env, build-engine, build-linux, build-arch-packages, build-windows, build-android]
+     runs-on: ubuntu-latest
+     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+ 
+@@ -231,6 +395,18 @@
+         with:
+           name: windows-installers
+ 
++      - name: Download engine binaries
++        uses: actions/download-artifact@v4
++        with:
++          pattern: engine-*-x*
++          path: engine-dl
++
++      - name: Name engine binaries for release
++        run: |
++          cp engine-dl/engine-linux-x86_64/synapse-core synapse-core-linux-x86_64
++          cp engine-dl/engine-windows-x64/synapse-core.exe synapse-core-windows-x64.exe
++          sha256sum synapse-core-linux-x86_64 synapse-core-windows-x64.exe > synapse-core-SHA256SUMS.txt
++
+       - name: Download Android Artifact
+         uses: actions/download-artifact@v4
+         with:
+@@ -247,7 +423,7 @@
+ 
+           ${CUSTOM_NOTES}
+ 
+-          Synapse is an open-source, continuous peer-to-peer file synchronization app built with Kotlin Multiplatform and powered by Syncthing.
++          Synapse is an open-source, continuous peer-to-peer file synchronization app built with Kotlin Multiplatform and powered by the Synapse Core engine.
+ 
+           ### 💻 Windows PC
+           * Full system tray support (runs quietly in background)
+@@ -299,6 +475,9 @@
+             Synapse-Setup-${{ needs.version-env.outputs.version }}.exe
+             Synapse-Setup-${{ needs.version-env.outputs.version }}.msi
+             Synapse-${{ needs.version-env.outputs.version }}.apk
++            synapse-core-linux-x86_64
++            synapse-core-windows-x64.exe
++            synapse-core-SHA256SUMS.txt
+           name: Synapse ${{ needs.version-env.outputs.version }}
+           body_path: release_body.md
+           generate_release_notes: true
+--- a/app/androidApp/build.gradle.kts
++++ b/app/androidApp/build.gradle.kts
+@@ -44,6 +44,25 @@
+             enableV3Signing = true
+             enableV4Signing = true
+         }
++        // Release key: from CI secrets (env vars) or local ~/.gradle/gradle.properties.
++        // See docs/RELEASE_SIGNING.md. Never commit the keystore or its passwords.
++        val releaseKeystore = System.getenv("SYNAPSE_KEYSTORE_FILE")
++            ?: (project.findProperty("synapse.keystore.file") as String?)
++        if (releaseKeystore != null && file(releaseKeystore).exists()) {
++            create("release") {
++                storeFile = file(releaseKeystore)
++                storePassword = System.getenv("SYNAPSE_KEYSTORE_PASSWORD")
++                    ?: (project.findProperty("synapse.keystore.password") as String?)
++                keyAlias = System.getenv("SYNAPSE_KEY_ALIAS")
++                    ?: (project.findProperty("synapse.key.alias") as String?)
++                keyPassword = System.getenv("SYNAPSE_KEY_PASSWORD")
++                    ?: (project.findProperty("synapse.key.password") as String?)
++                enableV1Signing = true
++                enableV2Signing = true
++                enableV3Signing = true
++                enableV4Signing = true
++            }
++        }
+     }
+     packaging {
+         jniLibs {
+@@ -57,7 +76,11 @@
+         getByName("release") {
+             isMinifyEnabled = true
+             isShrinkResources = true
+-            signingConfig = signingConfigs.getByName("debug")
++            // Real release key when configured; otherwise debug (local builds keep working,
++            // but debug-signed releases cannot update each other or go on Google Play).
++            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug").also {
++                logger.warn("Synapse: no release signing key configured — release APK will be DEBUG-signed. See docs/RELEASE_SIGNING.md")
++            }
+             proguardFiles(
+                 getDefaultProguardFile("proguard-android-optimize.txt"),
+                 "proguard-rules.pro"
+--- a/app/androidApp/src/main/AndroidManifest.xml
++++ b/app/androidApp/src/main/AndroidManifest.xml
+@@ -20,7 +20,7 @@
+ 
+     <application
+         android:name=".SynapseApp"
+-        android:allowBackup="true"
++        android:allowBackup="false"
+         android:icon="@drawable/logo"
+         android:label="@string/app_name"
+         android:roundIcon="@drawable/logo"
+@@ -52,7 +52,7 @@
+             android:exported="false">
+             <property 
+                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" 
+-                android:value="Synapse is a continuous peer-to-peer file synchronization app wrapper. It runs the local Syncthing daemon process in the background to sync folders with connected devices." />
++                android:value="Synapse is a continuous peer-to-peer file synchronization app. It runs the local Synapse Core sync engine in the background to keep folders in sync with your paired devices." />
+         </service>
+         
+         <!-- Boot Receiver for Auto-Start -->
+--- a/docs/RELEASE_SIGNING.md
++++ b/docs/RELEASE_SIGNING.md
+@@ -0,0 +1,50 @@
++# Android release signing
++
++Until a release key is configured, release APKs are signed with a **debug** key. On CI that key is regenerated on every run, so:
++- users cannot install an update over a previous version (the signature differs), and
++- Google Play rejects debug-signed apps.
++
++Set this up once. It takes about 5 minutes.
++
++## 1. Create the key (once, on your own machine)
++
++```bash
++keytool -genkeypair -v \
++  -keystore synapse-release.jks \
++  -alias synapse \
++  -keyalg RSA -keysize 4096 -validity 10000
++```
++
++Choose strong passwords and **back up `synapse-release.jks` and both passwords somewhere safe** (e.g. a password manager). If you lose them, you can never ship an update to existing installs.
++
++**Never commit the keystore or passwords to the repository.**
++
++## 2. Add GitHub secrets
++
++In the repository, open **Settings → Secrets and variables → Actions → New repository secret** and add:
++
++| Secret | Value |
++|---|---|
++| `ANDROID_KEYSTORE_BASE64` | Output of `base64 -w0 synapse-release.jks` (macOS: `base64 -i synapse-release.jks`; Windows PowerShell: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("synapse-release.jks"))`) |
++| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
++| `ANDROID_KEY_ALIAS` | `synapse` (or whatever you used) |
++| `ANDROID_KEY_PASSWORD` | Key password |
++
++The release workflow decodes the key, signs the APK with it, and deletes nothing from your repo. If the secrets are missing, the build still succeeds but shows the warning **"Android release is debug-signed"**.
++
++## 3. Optional: sign local release builds
++
++Add this to `~/.gradle/gradle.properties` (your user folder, **not** the project):
++
++```properties
++synapse.keystore.file=/absolute/path/to/synapse-release.jks
++synapse.keystore.password=…
++synapse.key.alias=synapse
++synapse.key.password=…
++```
++
++Then `./gradlew :app:androidApp:assembleRelease` produces a properly signed APK.
++
++## Note for existing users
++
++Apps already installed from earlier debug-signed releases must be **uninstalled once** before installing the first properly signed version. After that, updates install normally.
+--- a/docs/SYNC_AND_SECURITY.md
++++ b/docs/SYNC_AND_SECURITY.md
+@@ -0,0 +1,106 @@
++# Device sync, peer security, and release pipeline: 22 November 2026
++
++## What changed, in one paragraph
++
++**Devices now actually sync, and only with devices that can prove who they are.** Every engine presents a TLS certificate made from its own Ed25519 identity key, and both sides require one (mutual TLS 1.3 over QUIC). A device's ID is therefore *proven by the connection*, never taken from a message. Paired devices exchange file indexes, pull what they're missing (every chunk and manifest verified), and push local changes as they happen. Concurrent edits go through the existing merge/quarantine pipeline, so nothing is silently lost.
++
++Alongside that:
++- The SQLite vulnerability is fixed.
++- Folders added at runtime are watched immediately.
++- CI runs on every push.
++- Releases build the engine from source.
++- Android releases can be signed with a real key.
++
++---
++
++## 1. Peer authentication (`src/p2p/secure.rs`, `src/p2p/mod.rs`)
++
++| Before | After |
++|---|---|
++| QUIC used a fresh random certificate each run, unrelated to the device identity, with no client auth | The certificate key **is** the device identity key; client certificates are mandatory |
++| `device_id` in `Hello` was taken at face value | Device ID is read from the peer's certificate by strict X.509 parsing; a `Hello` claiming another ID is ignored |
++| The dialer accepted whoever answered | The dialer pins the expected device ID; a different identity at that address is refused |
++| Any connected peer could request any chunk | Only **paired, unpaused** peers can request anything, and only for **folders shared with them** (`chunk_visible_to_device`) |
++| Unsolicited `ChunkResponse` was written to the block store | Responses are only accepted as replies to our own requests |
++| Introducer lists were trusted from any claimed `introducer_id`, including over UDP broadcast | Only from authenticated peers that **you** marked as introducers, attributed to their proven ID |
++| UDP discovery marked devices "online" and broadcast folder IDs and device lists to the LAN | Discovery only starts pairing and tells us where to dial. Presence comes from authenticated connections; folders and device lists are no longer broadcast |
++| BEP (plain TCP) peers were matched to paired devices **by name** | BEP peers are listed under a derived `BEP-…` id and never impersonate a paired device |
++
++## 2. Sync protocol
++
++- **Connect:**
++  - **When:** a paired device is dialled when its discovery broadcast is heard, and every 30 s at any configured address (`ip:port`, `quic://host:port`, `host:port`), which works across subnets and VPNs.
++  - **What happens:** both sides exchange `Hello` and then **pull** every shared folder.
++- **Pull:** `IndexRequest` → compare revisions (skip files where we're equal or ahead) → `FileRequest` → `FileNotice` (revision + chunk list + DAG ancestry).
++- **Push:** every local change (`FILE_CHANGED`) sends a `FileNotice` to each connected peer sharing that folder.
++- **Apply:** before anything is applied:
++  - the manifest must match the chunk list;
++  - missing chunks are fetched from the sender, and each must hash to its ID;
++  - the assembled size must match.
++
++  The engine then fast-forwards, auto-merges, or quarantines using the shared ancestry.
++- **No echo:** re-indexing a received file whose content hasn't changed refreshes its metadata without creating a new revision. This prevents ping-pong on filesystems with coarser timestamp precision (e.g. NTFS).
++- **Not yet:** deletions and renames don't sync yet (they're skipped safely); there's no bandwidth throttling or relay/NAT traversal on this path; and transfer is whole-file in memory (fine for typical files, not for multi-GB ones).
++
++## 3. Other fixes
++
++- **SQLite vulnerability RUSTSEC-2026-0459:** `rusqlite` 0.32 → **0.43** (`libsqlite3-sys` 0.40). `cargo audit` now reports **0 vulnerabilities**; the only notice left is that `chrono` is unmaintained.
++- **Test-only code out of production:** `tokio`'s `test-util` feature moved to dev-dependencies.
++- **Folder watching:** folders added through the API are watched immediately (previously only after a restart). Pause stops watching, resume restarts it, delete stops it, and shutdown clears all watchers. No more parked threads.
++- **Version numbers:** the CLI `--version` and the startup log come from `Cargo.toml`.
++
++## 4. CI and release
++
++- **New `.github/workflows/ci.yml`** runs on every push and PR:
++  - engine build, all tests, lint gate (bug-class clippy lints are errors), release build, `cargo audit`;
++  - app compile (shared and desktop) and Android debug assemble.
++- **`release.yml`:**
++  - builds the engine **from source** for Linux, Windows, and Android (arm64-v8a, armeabi-v7a, x86_64) and runs the engine tests;
++  - drops the fresh binaries into `bin/`, `app/desktopApp/bin/` and `jniLibs/` before packaging, so the stale committed binaries no longer reach users;
++  - attaches `synapse-core-linux-x86_64`, `synapse-core-windows-x64.exe` and `SHA256SUMS` to the release.
++- **Android signing:** `app/androidApp/build.gradle.kts` uses a release key from CI secrets or local properties, and falls back to debug with a visible warning. Setup: `docs/RELEASE_SIGNING.md`.
++- **Android manifest:**
++  - `allowBackup="false"`, so the device identity key isn't copied into backups (a restored backup would otherwise clone the device's identity);
++  - the foreground-service text now names Synapse Core.
++- **Note:** `synapse-core/.github/workflows/build-binaries.yml` has **never run**. GitHub only runs workflows in the repo-root `.github/workflows`. Its job is now done by `release.yml`, so you can delete it.
++
++## 5. Verification
++
++| Check | Result |
++|---|---|
++| Tests | **180 pass** (157 unit, 20 integration, 1 lifecycle, 2 two-node sync) |
++| Two engines over real mutual-TLS QUIC | Initial pull (3 MB multi-chunk file, nested folders), live push both ways, no ping-pong, concurrent edits merged or quarantined with nothing lost. **10/10 repeated runs passed** |
++| Spoofing | Wrong identity at a dialled address refused; forged `Hello` ignored; unpaired node gets no index or chunks and is recorded as pending under its proven ID |
++| Two real daemon processes, configured only via the HTTP API | Found each other by configured address, synced existing files, then live watcher-detected edits both ways; peer shown `online` via `synapse-quic (mTLS)`; no warnings; graceful shutdown |
++| Lint gate (`-D clippy::correctness -D clippy::suspicious`) | Passes. Style warnings unchanged at 16 |
++| `cargo audit` | 0 vulnerabilities |
++| CI and release YAML | Parsed and job graph checked. **Not yet run on GitHub**: the first push is their first real run |
++| Gradle signing change | Standard Android Gradle Plugin APIs, but **not compiled here** (Android/Maven repositories are blocked in this environment). CI's `assembleDebug` job will be its first build |
++
++### Compatibility
++- **Peer protocol:** engines from *before* today can't talk to new engines over QUIC (they never did mutual TLS). Update all devices together.
++- **API:** unchanged. The desktop app keeps working with the new engine (verified earlier today).
++
++## 6. What still needs you
++
++1. **Kotlin app changes** (the 5 UI blockers, the token wiring, replacing the hardcoded key, and the app-side state machines). I can't reach the source from here. Either free about 17 GB of disk so the local shell works, or add these folders in the Claude desktop app:
++   - `app\shared\src\commonMain\kotlin\com\arcadelabs\synapse`
++   - `app\shared\src\jvmMain\kotlin\com\arcadelabs\synapse`
++   - `core\src\commonMain\kotlin\com\arcadelabs\synapse\core`
++
++   **Ship this before rebuilding the engine binaries**, or fresh installs lose conflicts, pairing and Settings data (`ui-review/UI_BLOCKER_FIXES.md` #5).
++2. **Commit** (git needs the local shell, which needs disk space). From the project folder:
++   ```bash
++   git checkout -b synapse-hardening
++   git add synapse-core .github app/androidApp/build.gradle.kts app/androidApp/src/main/AndroidManifest.xml docs
++   git commit -m "Engine: auth, state machines, mTLS peer sync, CI/release hardening"
++   ```
++3. **(Optional) Stop tracking committed binaries.** Releases no longer use them.
++   - **Desktop:**
++     ```bash
++     git rm --cached bin/synapse-core app/desktopApp/bin/synapse-core
++     ```
++     Then remove the `!/bin/synapse-core` and `!/app/desktopApp/bin/synapse-core` lines from `.gitignore`. Locally, `./gradlew buildSynapseCore` rebuilds them.
++   - **Android `.so` files:** untrack them only if every developer has the Android NDK. Local Android builds would then need `synapse-core/scripts/build-android.sh` first.
++4. **Create the Android release key and add the 4 GitHub secrets** (`docs/RELEASE_SIGNING.md`).
++5. **Push**, and check that the first CI run is green.
