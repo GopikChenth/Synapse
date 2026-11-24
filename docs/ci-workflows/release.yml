@@ -1,0 +1,506 @@
+name: Release Synapse
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+      custom_notes:
+        description: 'Optional custom release notes'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  version-env:
+    name: Determine Release Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set_version.outputs.version }}
+      raw_version: ${{ steps.set_version.outputs.raw_version }}
+    steps:
+      - name: Calculate Version
+        id: set_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          RAW_VER=$(echo "$TAG" | sed 's/^v//')
+          echo "version=${TAG}" >> $GITHUB_OUTPUT
+          echo "raw_version=${RAW_VER}" >> $GITHUB_OUTPUT
+
+  # ---------------------------------------------------------------------------
+  # Engine built from source for every release (previously releases packaged
+  # whatever binaries happened to be committed in the repository).
+  # ---------------------------------------------------------------------------
+  build-engine:
+    name: Build engine from source (${{ matrix.name }})
+    needs: version-env
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin: synapse-core
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: synapse-core.exe
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: synapse-core
+
+      - name: Test engine
+        if: runner.os == 'Linux'
+        working-directory: synapse-core
+        run: cargo test --locked
+
+      - name: Build release engine
+        working-directory: synapse-core
+        run: cargo build --locked --release --target ${{ matrix.target }} --bin synapse-core
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p engine-dist
+          cp synapse-core/target/${{ matrix.target }}/release/${{ matrix.bin }} engine-dist/${{ matrix.bin }}
+
+      - name: Upload engine
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.name }}
+          path: engine-dist/
+
+  build-engine-android:
+    name: Build engine from source (Android)
+    needs: version-env
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: synapse-core
+
+      - name: Setup Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          # r28c built the engine binaries previously committed to jniLibs. NDK r28+ lays
+          # executables out for 16 KB pages by default; r26 and older use 4 KB, which
+          # Android 15+ devices with 16 KB pages refuse to execute.
+          ndk-version: r28c
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
+      - name: Build engine for all ABIs
+        working-directory: synapse-core
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 build --locked --release --bin synapse-core
+
+      - name: Stage jniLibs
+        run: |
+          mkdir -p jniLibs/arm64-v8a jniLibs/armeabi-v7a jniLibs/x86_64
+          cp synapse-core/target/aarch64-linux-android/release/synapse-core jniLibs/arm64-v8a/libsynapse.so
+          cp synapse-core/target/armv7-linux-androideabi/release/synapse-core jniLibs/armeabi-v7a/libsynapse.so
+          cp synapse-core/target/x86_64-linux-android/release/synapse-core jniLibs/x86_64/libsynapse.so
+
+      - name: Verify Android engine binaries
+        run: bash synapse-core/scripts/verify-android-engine.sh jniLibs
+
+      - name: Upload jniLibs
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-android-jniLibs
+          path: jniLibs/
+
+  build-linux:
+    name: Build Native Linux Release & JAR
+    needs: [version-env, build-engine]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download engine (built from source)
+        uses: actions/download-artifact@v4
+        with:
+          name: engine-linux-x86_64
+          path: engine-dl
+
+      - name: Use freshly built engine
+        run: |
+          for dest in bin app/desktopApp/bin synapse-core/bin; do
+            mkdir -p "$dest"
+            cp engine-dl/synapse-core "$dest/synapse-core"
+            chmod +x "$dest/synapse-core"
+          done
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build Native Linux Distributable & Release UberJar
+        run: |
+          ./gradlew :app:desktopApp:createDistributable --no-daemon
+          ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
+
+      - name: Compress Linux Binary to tar.gz
+        run: |
+          cd app/desktopApp/build/compose/binaries/main/app/Synapse
+          tar -czvf ${{ github.workspace }}/Synapse-Linux-x64-${{ needs.version-env.outputs.version }}.tar.gz .
+
+      - name: Prepare Desktop JAR Artifact
+        run: |
+          JAR_FILE=$(find app/desktopApp/build/compose/jars -name "*.jar" | head -n 1)
+          cp "$JAR_FILE" ${{ github.workspace }}/Synapse-Desktop-${{ needs.version-env.outputs.version }}.jar
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-distributable
+          path: |
+            Synapse-Linux-x64-${{ needs.version-env.outputs.version }}.tar.gz
+            Synapse-Desktop-${{ needs.version-env.outputs.version }}.jar
+
+  build-arch-packages:
+    name: Build Arch Linux & CachyOS Packages
+    needs: [version-env, build-engine]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download engine (built from source)
+        uses: actions/download-artifact@v4
+        with:
+          name: engine-linux-x86_64
+          path: engine-dl
+
+      - name: Use freshly built engine
+        run: |
+          for dest in bin app/desktopApp/bin synapse-core/bin; do
+            mkdir -p "$dest"
+            cp engine-dl/synapse-core "$dest/synapse-core"
+            chmod +x "$dest/synapse-core"
+          done
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build Desktop UberJar for Arch Packaging
+        run: ./gradlew :app:desktopApp:packageReleaseUberJarForCurrentOS --no-daemon || ./gradlew :app:desktopApp:packageUberJarForCurrentOS --no-daemon
+
+      - name: Build Arch Linux & CachyOS Packages in Docker
+        run: |
+          mkdir -p arch-artifacts
+          RAW_VER="${{ needs.version-env.outputs.raw_version }}"
+          # makepkg forbids hyphens in pkgver (v1.0.7-rc1 -> 1.0.7_rc1)
+          RAW_VER="${RAW_VER//-/_}"
+          sed -i "s/pkgver=1.0.0/pkgver=${RAW_VER}/g" packaging/arch/PKGBUILD
+          sed -i "s/pkgver=1.0.0/pkgver=${RAW_VER}/g" packaging/cachyos/PKGBUILD
+          docker run --rm -v ${{ github.workspace }}:/workspace archlinux:latest bash -c "
+            pacman -Sy --noconfirm base-devel java-runtime-headless syncthing hicolor-icon-theme git &&
+            useradd -m builder &&
+            git config --global --add safe.directory '*' &&
+            cp -r /workspace /tmp/pkgbuild &&
+            chown -R builder /tmp/pkgbuild &&
+            cd /tmp/pkgbuild/packaging/arch &&
+            su builder -c 'git config --global --add safe.directory \"*\"; makepkg -d --noconfirm' &&
+            cp *.pkg.tar.zst /workspace/arch-artifacts/
+          "
+          docker run --rm -v ${{ github.workspace }}:/workspace archlinux:latest bash -c "
+            pacman -Sy --noconfirm base-devel java-runtime-headless syncthing hicolor-icon-theme git &&
+            useradd -m builder &&
+            git config --global --add safe.directory '*' &&
+            cp -r /workspace /tmp/pkgbuild &&
+            chown -R builder /tmp/pkgbuild &&
+            cd /tmp/pkgbuild/packaging/cachyos &&
+            su builder -c 'git config --global --add safe.directory \"*\"; makepkg -d --noconfirm' &&
+            cp *.pkg.tar.zst /workspace/arch-artifacts/
+          "
+
+      - name: Upload Arch & CachyOS Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-cachyos-packages
+          path: arch-artifacts/*
+
+  build-windows:
+    name: Build Windows Installers
+    needs: [version-env, build-engine]
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download engine (built from source)
+        uses: actions/download-artifact@v4
+        with:
+          name: engine-windows-x64
+          path: engine-dl
+
+      - name: Use freshly built engine
+        shell: bash
+        run: |
+          for dest in bin app/desktopApp/bin synapse-core/bin; do
+            mkdir -p "$dest"
+            cp engine-dl/synapse-core.exe "$dest/synapse-core.exe"
+          done
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Build Windows Installers
+        run: .\gradlew.bat :app:desktopApp:packageDistributionForCurrentOS --no-daemon
+
+      - name: Rename & Prepare Windows Artifacts
+        shell: powershell
+        run: |
+          $ver = "${{ needs.version-env.outputs.version }}"
+          $exeFile = Get-ChildItem -Path "app/desktopApp/build/compose/binaries/main/exe/*.exe" | Select-Object -First 1
+          $msiFile = Get-ChildItem -Path "app/desktopApp/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
+          
+          if ($exeFile) { Copy-Item $exeFile.FullName "Synapse-Setup-$ver.exe" }
+          if ($msiFile) { Copy-Item $msiFile.FullName "Synapse-Setup-$ver.msi" }
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: |
+            Synapse-Setup-${{ needs.version-env.outputs.version }}.exe
+            Synapse-Setup-${{ needs.version-env.outputs.version }}.msi
+
+  build-android:
+    name: Build Android Release APK
+    needs: [version-env, build-engine-android]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Android engine (built from source)
+        uses: actions/download-artifact@v4
+        with:
+          name: engine-android-jniLibs
+          path: app/androidApp/src/main/jniLibs
+
+      - name: Prepare release signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/synapse-release.jks"
+            echo "SYNAPSE_KEYSTORE_FILE=$RUNNER_TEMP/synapse-release.jks" >> "$GITHUB_ENV"
+            echo "Release signing key configured."
+          else
+            echo "::warning title=Android release is debug-signed::Add the ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD secrets (see docs/RELEASE_SIGNING.md). Debug-signed APKs cannot update each other or be published on Google Play."
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build Android Release APK
+        env:
+          SYNAPSE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SYNAPSE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SYNAPSE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew :app:androidApp:assembleRelease --no-daemon
+
+      - name: Verify the APK contains this run's engine
+        run: |
+          apk=app/androidApp/build/outputs/apk/release/androidApp-release.apk
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            if ! unzip -p "$apk" "lib/$abi/libsynapse.so" | grep -qaF 'synapse-quic (mTLS)'; then
+              echo "::error::lib/$abi/libsynapse.so is missing from the APK or is not the engine built in this run"
+              exit 1
+            fi
+          done
+          echo "APK contains the current engine for all 3 ABIs."
+
+      - name: Prepare APK Artifact
+        run: cp app/androidApp/build/outputs/apk/release/androidApp-release.apk Synapse-${{ needs.version-env.outputs.version }}.apk
+
+      - name: Upload Android Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: Synapse-${{ needs.version-env.outputs.version }}.apk
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [version-env, build-engine, build-linux, build-arch-packages, build-windows, build-android]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-distributable
+
+      - name: Download Arch & CachyOS Packages
+        uses: actions/download-artifact@v4
+        with:
+          name: arch-cachyos-packages
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installers
+
+      - name: Download engine binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: engine-*-x*
+          path: engine-dl
+
+      - name: Name engine binaries for release
+        run: |
+          cp engine-dl/engine-linux-x86_64/synapse-core synapse-core-linux-x86_64
+          cp engine-dl/engine-windows-x64/synapse-core.exe synapse-core-windows-x64.exe
+          sha256sum synapse-core-linux-x86_64 synapse-core-windows-x64.exe > synapse-core-SHA256SUMS.txt
+
+      - name: Download Android Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+
+      - name: Create Dynamic Release Body
+        id: release_body
+        run: |
+          VER="${{ needs.version-env.outputs.version }}"
+          CUSTOM_NOTES="${{ github.event.inputs.custom_notes }}"
+          
+          cat << EOF > release_body.md
+          ## Synapse ${VER} 🎉
+
+          ${CUSTOM_NOTES}
+
+          Synapse is an open-source, continuous peer-to-peer file synchronization app built with Kotlin Multiplatform and powered by the Synapse Core engine.
+
+          ### 💻 Windows PC
+          * Full system tray support (runs quietly in background)
+          * Windows dark mode title bar integration
+          * Custom installer (\`.exe\` / \`.msi\`) with auto-start configuration
+
+          ### 📱 Android
+          * Native mobile interface with smooth folder & device management
+          * Built-in QR scanner for quick device pairing
+          * Custom dynamic splash screen matching your selected app theme
+
+          ### 🐧 Linux (Arch Linux, CachyOS, Ubuntu, Fedora)
+          * **CachyOS (x86-64 Microarchitecture Optimized):** \`synapse-cachyos-*.pkg.tar.zst\` with hardware AVX2/AVX512 vectorization
+          * **Arch Linux Package:** \`synapse-*.pkg.tar.zst\`
+          * **Universal Desktop Executable:** \`Synapse-Desktop-${VER}.jar\` & \`Synapse-Linux-x64-${VER}.tar.gz\`
+          * **Hyprland & Wayland Desktop Integration:** Headless CLI (\`--toggle\`, \`--pause\`, \`--resume\`, \`--rescan\`), scratchpad bindings, and live Waybar status widget (\`--waybar\`)
+          * **FreeDesktop Desktop Actions:** Quick Actions menu in application launchers (Rofi, Wofi, Walker)
+
+          ### 🎨 Design & Interface (Material 3 Expressive)
+          * Upgraded to Material 3 Expressive design standard with 4dp typography hierarchy
+          * Expressive pill-shape segmented controls with bouncy spring animations
+          * Unified 28dp rounded dialogs and animated Floating Action Buttons
+          * Centralized semantic status color tokens (Emerald Connected, Amber Paused, Crimson Disconnected)
+          * Includes 4 built-in theme presets: **Standard Purple**, **Deep Space**, **Midnight Green**, and **Tactical HUD**
+
+          ---
+
+          ### 📥 Installation Guide
+
+          * **CachyOS:** Download \`synapse-cachyos-*.pkg.tar.zst\` and install via \`sudo pacman -U synapse-cachyos-*.pkg.tar.zst\`.
+          * **Arch Linux:** Download \`synapse-*.pkg.tar.zst\` and install via \`sudo pacman -U synapse-*.pkg.tar.zst\`.
+          * **Universal Linux/Desktop:** Download \`Synapse-Desktop-${VER}.jar\` and run \`java -jar Synapse-Desktop-${VER}.jar\`.
+          * **Windows:** Download \`Synapse-Setup-${VER}.exe\` and run the installer.
+          * **Android:** Download \`Synapse-${VER}.apk\` and open it on your phone to install.
+
+          ---
+          *License: GNU General Public License v3.0 (GPL-3.0)*
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version-env.outputs.version }}
+          clobber: true
+          files: |
+            Synapse-Linux-x64-${{ needs.version-env.outputs.version }}.tar.gz
+            Synapse-Desktop-${{ needs.version-env.outputs.version }}.jar
+            *.pkg.tar.zst
+            Synapse-Setup-${{ needs.version-env.outputs.version }}.exe
+            Synapse-Setup-${{ needs.version-env.outputs.version }}.msi
+            Synapse-${{ needs.version-env.outputs.version }}.apk
+            synapse-core-linux-x86_64
+            synapse-core-windows-x64.exe
+            synapse-core-SHA256SUMS.txt
+          name: Synapse ${{ needs.version-env.outputs.version }}
+          body_path: release_body.md
+          generate_release_notes: true
+          draft: false
+          # Tags with a hyphen (v1.0.7-rc1, v1.1.0-beta) are test builds: published as
+          # pre-releases so they never become the "latest" release users are sent to.
+          prerelease: ${{ contains(needs.version-env.outputs.version, '-') }}

@@ -113,7 +113,10 @@ jobs:
         id: ndk
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r26d
+          # r28c built the engine binaries previously committed to jniLibs. NDK r28+ lays
+          # executables out for 16 KB pages by default; r26 and older use 4 KB, which
+          # Android 15+ devices with 16 KB pages refuse to execute.
+          ndk-version: r28c
 
       - uses: taiki-e/install-action@v2
         with:
@@ -131,6 +134,9 @@ jobs:
           cp synapse-core/target/aarch64-linux-android/release/synapse-core jniLibs/arm64-v8a/libsynapse.so
           cp synapse-core/target/armv7-linux-androideabi/release/synapse-core jniLibs/armeabi-v7a/libsynapse.so
           cp synapse-core/target/x86_64-linux-android/release/synapse-core jniLibs/x86_64/libsynapse.so
+
+      - name: Verify Android engine binaries
+        run: bash synapse-core/scripts/verify-android-engine.sh jniLibs
 
       - name: Upload jniLibs
         uses: actions/upload-artifact@v4
@@ -234,6 +240,8 @@ jobs:
         run: |
           mkdir -p arch-artifacts
           RAW_VER="${{ needs.version-env.outputs.raw_version }}"
+          # makepkg forbids hyphens in pkgver (v1.0.7-rc1 -> 1.0.7_rc1)
+          RAW_VER="${RAW_VER//-/_}"
           sed -i "s/pkgver=1.0.0/pkgver=${RAW_VER}/g" packaging/arch/PKGBUILD
           sed -i "s/pkgver=1.0.0/pkgver=${RAW_VER}/g" packaging/cachyos/PKGBUILD
           docker run --rm -v ${{ github.workspace }}:/workspace archlinux:latest bash -c "
@@ -360,6 +368,17 @@ jobs:
           SYNAPSE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           SYNAPSE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: ./gradlew :app:androidApp:assembleRelease --no-daemon
+
+      - name: Verify the APK contains this run's engine
+        run: |
+          apk=app/androidApp/build/outputs/apk/release/androidApp-release.apk
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            if ! unzip -p "$apk" "lib/$abi/libsynapse.so" | grep -qaF 'synapse-quic (mTLS)'; then
+              echo "::error::lib/$abi/libsynapse.so is missing from the APK or is not the engine built in this run"
+              exit 1
+            fi
+          done
+          echo "APK contains the current engine for all 3 ABIs."
 
       - name: Prepare APK Artifact
         run: cp app/androidApp/build/outputs/apk/release/androidApp-release.apk Synapse-${{ needs.version-env.outputs.version }}.apk
