@@ -23,9 +23,13 @@ syncthing-main/
 **/bin/
 !/bin/
 !/bin/synapse-core
+!/bin/synapse-core.exe
+!/bin/android/
 !/app/desktopApp/bin/
 !/app/desktopApp/bin/synapse-core
+!/app/desktopApp/bin/synapse-core.exe
 **/out/
+dist/
 reference_syncthing_fork
 /ArcadeLabs/
 
