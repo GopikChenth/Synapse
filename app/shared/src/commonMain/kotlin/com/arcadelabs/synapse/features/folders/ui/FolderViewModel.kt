@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class FolderViewModel(
-    private val apiClient: SyncthingApiClient
+    private val apiClient: SynapseApiClient
 ) : ViewModel() {
 
     // ── Explicit State Machine (Primary Source of Truth) ─────────────────────
@@ -162,11 +162,11 @@ class FolderViewModel(
 
     private fun mapExceptionToUserMessage(e: Exception, defaultMsg: String): String {
         return when (e) {
-            is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
-            is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-            is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
-            is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
-            is SyncthingApiException -> "API Error: ${e.message}"
+            is ApiKeyNotConfiguredException -> "Synapse API key is missing or not configured."
+            is SynapseUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+            is SynapseNotFoundException -> "Endpoint not found. Check the base URL."
+            is SynapseTimeoutException -> "Connection timed out. Is Synapse running?"
+            is SynapseApiException -> "API Error: ${e.message}"
             else -> {
                 val msg = e.message ?: ""
                 if (
@@ -186,22 +186,18 @@ class FolderViewModel(
 
     fun createFolder(
         id: String,
-        label: String,
         path: String,
         type: String,
         paused: Boolean,
-        watchForChanges: Boolean,
         sharedDevices: List<String>,
         versioningType: String,
         onSuccess: () -> Unit
     ) {
         val newFolder = Folder(
             id = id,
-            label = label,
             path = path,
             type = type,
             paused = paused,
-            fsWatcherEnabled = watchForChanges,
             devices = sharedDevices.map { FolderDeviceReference(it.normalizeDeviceId()) },
             versioning = FolderVersioning(type = versioningType)
         )
@@ -213,9 +209,21 @@ class FolderViewModel(
 
         viewModelScope.launch {
             try {
+                // Create through the engine's folder route so it is indexed and watched right
+                // away (a config upsert alone only stores it until the engine restarts).
+                // Best effort: the legacy engine has no such route and uses the config below.
+                apiClient.registerFolder(id, path)
+
+                // Then apply type, versioning, pause state and shares through the config as before.
                 val currentConfig = apiClient.systemConfig()
-                val updatedConfig = currentConfig.copy(folders = currentConfig.folders + newFolder)
+                val updatedConfig = currentConfig.copy(
+                    folders = currentConfig.folders.filter { it.id != newFolder.id } + newFolder
+                )
                 apiClient.updateSystemConfig(updatedConfig)
+                if (paused) {
+                    // The config only stores the flag; this also stops the watcher.
+                    apiClient.setFolderPaused(id, true)
+                }
 
                 val confirmed = apiClient.systemConfig()
                 removeOperation(newFolder.id)
@@ -299,28 +307,25 @@ class FolderViewModel(
 
     fun updateFolder(
         id: String,
-        label: String,
         path: String,
         type: String,
         paused: Boolean,
-        watchForChanges: Boolean,
         sharedDevices: List<String>,
         versioningType: String,
-        cleanoutAfter: Int,
+        cleanoutDays: Int,
         onSuccess: () -> Unit
     ) {
-        val updatedFolder = Folder(
-            id = id,
-            label = label,
+        // Fields the dialog no longer edits (label, fsWatcherEnabled, rescan interval) keep
+        // their current values so a legacy-engine config round-trip doesn't reset them.
+        fun applyEdits(base: Folder) = base.copy(
             path = path,
             type = type,
             paused = paused,
-            fsWatcherEnabled = watchForChanges,
             devices = sharedDevices.map { FolderDeviceReference(it.normalizeDeviceId()) },
             versioning = FolderVersioning(
                 type = versioningType,
                 params = if (versioningType == "trashcan" || versioningType == "staggered") {
-                    mapOf("cleanoutAfter" to cleanoutAfter.toString())
+                    mapOf("cleanoutDays" to cleanoutDays.toString())
                 } else {
                     emptyMap()
                 }
@@ -328,17 +333,23 @@ class FolderViewModel(
         )
 
         val snapshot = _state.value.folders
-        val optimisticList = snapshot.map { if (it.id == id) updatedFolder else it }
+        val optimisticList = snapshot.map { if (it.id == id) applyEdits(it) else it }
         commitState(resource = AsyncResource.Success(optimisticList, isRefreshing = true))
 
         viewModelScope.launch {
             try {
                 val currentConfig = apiClient.systemConfig()
+                val wasPaused = currentConfig.folders.firstOrNull { it.id == id }?.paused
                 val updatedFolders = currentConfig.folders.map {
-                    if (it.id == id) updatedFolder else it
+                    if (it.id == id) applyEdits(it) else it
                 }
                 val updatedConfig = currentConfig.copy(folders = updatedFolders)
                 apiClient.updateSystemConfig(updatedConfig)
+                if (wasPaused != null && wasPaused != paused) {
+                    // The config upsert only writes the flag; this pauses/resumes the engine
+                    // (stops or starts the watcher), same call as the folder menu's Pause/Resume.
+                    apiClient.setFolderPaused(id, paused)
+                }
 
                 val confirmed = apiClient.systemConfig()
                 fetchMyIdAndConnections()

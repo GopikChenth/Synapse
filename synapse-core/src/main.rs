@@ -40,7 +40,7 @@ struct Cli {
     #[arg(long, default_value_t = 9190)]
     p2p_port: u16,
 
-    /// BEP v1 (Syncthing wire protocol) TCP listening port
+    /// BEP v1 wire protocol TCP listening port
     #[arg(long, default_value_t = 22000)]
     bep_port: u16,
 

@@ -6,7 +6,7 @@ pkgdesc="Continuous Peer-to-Peer File Synchronization Client"
 arch=('x86_64' 'aarch64')
 url="https://github.com/GopikChenth/Synapse"
 license=('GPL3')
-depends=('java-runtime>=17' 'syncthing' 'hicolor-icon-theme')
+depends=('java-runtime>=17' 'hicolor-icon-theme')
 optdepends=(
     'hyprland: dynamic tiling Wayland compositor support and scratchpad integration'
     'libnotify: desktop notifications on hotkey triggers'
@@ -48,6 +48,14 @@ package() {
     # Install application JAR
     install -Dm755 "${JAR_FILE}" "${pkgdir}/usr/share/synapse/Synapse.jar"
 
+    # Install the Synapse Core engine (the desktop app runs it from ~/Synapse/bin).
+    CORE_BIN=$(find "${startdir}" "${srcdir}/../../.." -path "*/bin/synapse-core" -type f 2>/dev/null | head -n 1)
+    if [ -z "$CORE_BIN" ] || [ ! -f "$CORE_BIN" ]; then
+        echo "ERROR: synapse-core engine binary not found (build it with: cd synapse-core && cargo build --release, then copy it to bin/)"
+        exit 1
+    fi
+    install -Dm755 "${CORE_BIN}" "${pkgdir}/usr/bin/synapse-core"
+
     # Create executable launcher script in /usr/bin/synapse
     mkdir -p "${pkgdir}/usr/bin"
     cat << 'EOF' > "${pkgdir}/usr/bin/synapse"
@@ -71,10 +79,6 @@ mkdir -p "$HOME/Synapse/bin"
 SYSTEM_SYNAPSE_CORE=$(which synapse-core 2>/dev/null || echo "")
 if [ -x "$SYSTEM_SYNAPSE_CORE" ] && [ ! -x "$HOME/Synapse/bin/synapse-core" ]; then
     ln -sf "$SYSTEM_SYNAPSE_CORE" "$HOME/Synapse/bin/synapse-core"
-fi
-SYSTEM_SYNCTHING=$(which syncthing 2>/dev/null || echo "/usr/bin/syncthing")
-if [ -x "$SYSTEM_SYNCTHING" ] && [ ! -x "$HOME/Synapse/bin/syncthing.exe" ]; then
-    ln -sf "$SYSTEM_SYNCTHING" "$HOME/Synapse/bin/syncthing.exe"
 fi
 
 exec java -jar /usr/share/synapse/Synapse.jar "$@"

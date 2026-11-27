@@ -9,7 +9,7 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.util.concurrent.atomic.AtomicReference
 
-class SyncthingRunnable(
+class EngineRunnable(
     private val context: Context,
     private val commandType: CommandType
 ) {
@@ -28,7 +28,7 @@ class SyncthingRunnable(
                 if (it.exists()) it else File(context.applicationInfo.nativeLibraryDir, "libsyncthingnative.so")
             }
             if (!binary.exists()) {
-                Log.e(TAG, "Synapse/Syncthing core binary missing at ${binary.absolutePath}")
+                Log.e(TAG, "Synapse core binary missing at ${binary.absolutePath}")
                 onExit(-1)
                 return@launch
             }
@@ -66,7 +66,7 @@ class SyncthingRunnable(
             env["SQLITE_TMPDIR"] = context.cacheDir.absolutePath
 
             try {
-                Log.i(TAG, "Launching Syncthing daemon...")
+                Log.i(TAG, "Launching Synapse daemon...")
                 val process = pb.start()
                 processRef.set(process)
 
@@ -96,12 +96,12 @@ class SyncthingRunnable(
                 }
 
                 val exitCode = process.waitFor()
-                Log.i(TAG, "Syncthing process exited with code $exitCode")
+                Log.i(TAG, "Synapse process exited with code $exitCode")
                 processRef.set(null)
                 onExit(exitCode)
 
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to execute Syncthing", e)
+                Log.e(TAG, "Failed to execute Synapse", e)
                 onExit(-2)
             }
         }
@@ -121,7 +121,7 @@ class SyncthingRunnable(
     }
 
     companion object {
-        private const val TAG = "SyncthingRunnable"
-        private const val TAG_NATIVE = "SyncthingDaemon"
+        private const val TAG = "EngineRunnable"
+        private const val TAG_NATIVE = "EngineDaemon"
     }
 }

@@ -1,44 +1,28 @@
 package com.arcadelabs.synapse.features.settings.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.draw.alpha
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.ui.composed
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.shrinkHorizontally
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import com.arcadelabs.synapse.core.designsystem.*
 import com.arcadelabs.synapse.DesktopQrCodeView
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
-import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
+import com.arcadelabs.synapse.core.designsystem.SynapseIcons
+import com.arcadelabs.synapse.core.designsystem.SynapseStatusColors
+import com.arcadelabs.synapse.core.designsystem.components.SettingsContentPadding
+import com.arcadelabs.synapse.core.designsystem.components.SettingsGroup
+import com.arcadelabs.synapse.core.designsystem.components.SettingsSectionHeader
+import com.arcadelabs.synapse.core.designsystem.components.SettingsSwitchItem
+import com.arcadelabs.synapse.core.designsystem.components.SettingsTextField
+import com.arcadelabs.synapse.core.designsystem.components.SettingsThemeItem
+import com.arcadelabs.synapse.core.designsystem.components.SettingsThemeModeItem
+import com.arcadelabs.synapse.core.network.SynapseApiClient
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -46,10 +30,9 @@ import org.koin.compose.viewmodel.koinViewModel
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DesktopSettingsScreen(
-    apiClient: SyncthingApiClient,
+    apiClient: SynapseApiClient,
     openUrl: ((String) -> Unit)? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -91,54 +74,61 @@ fun DesktopSettingsScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(MaterialTheme.colorScheme.background)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(rememberScrollState()),
+            contentAlignment = Alignment.TopCenter
+        ) {
+        Column(
+            modifier = Modifier
+                .widthIn(max = 840.dp)
+                .fillMaxWidth()
                 .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // Header with Save button
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = "Settings",
                     style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
+                    color = MaterialTheme.colorScheme.onSurface
                 )
-
-                val saveInteraction = remember { MutableInteractionSource() }
-                Button(
-                    onClick = { viewModel.saveSettings() },
-                    enabled = !state.isSaving && !state.isLoading && state.error == null,
-                    interactionSource = saveInteraction,
-                    modifier = Modifier.bounceClick(saveInteraction)
-                ) {
-                    if (state.isSaving) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    } else {
-                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
+                // Only the legacy engine has settings saved through this button; everything
+                // shown for Synapse Core (appearance, start on boot) is stored as it changes.
+                if (state.isLegacyEngine) {
+                    Button(
+                        onClick = { viewModel.saveSettings() },
+                        enabled = !state.isSaving && !state.isLoading && state.error == null,
+                        contentPadding = ButtonDefaults.ButtonWithIconContentPadding
+                    ) {
+                        if (state.isSaving) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(ButtonDefaults.IconSize),
+                                strokeWidth = 2.dp,
+                                color = LocalContentColor.current
+                            )
+                        } else {
+                            Icon(SynapseIcons.Check, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                        }
+                        Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
+                        Text("Save")
                     }
-                    Text("Save Settings")
                 }
             }
 
-            // Device Identity Card
-            DesktopSettingsCard(title = "Device Identity", subtitle = "This device's ID is shown below. Other devices need this ID to connect and sync folders with you.") {
+            // Device identity
+            SettingsGroup(
+                title = "This device",
+                subtitle = "Other devices need this ID to connect and share folders with you."
+            ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = SettingsContentPadding.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (state.deviceId.isNotEmpty()) {
@@ -147,723 +137,314 @@ fun DesktopSettingsScreen(
                         } else {
                             state.deviceId
                         }
-                        DesktopQrCodeView(
-                            text = qrText,
-                            modifier = Modifier
-                                .size(120.dp)
-                                .background(Color.White, shape = RoundedCornerShape(8.dp))
-                                .padding(8.dp)
-                        )
+                        // QR codes need fixed dark-on-white to scan reliably.
+                        Surface(color = Color.White, shape = MaterialTheme.shapes.small) {
+                            DesktopQrCodeView(
+                                text = qrText,
+                                modifier = Modifier.size(120.dp).padding(8.dp)
+                            )
+                        }
                         Spacer(modifier = Modifier.width(16.dp))
                     }
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "My Device ID",
+                            text = "Device ID",
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(4.dp))
-                        SelectionContainer {
-                            Text(
-                                text = state.deviceId.ifEmpty { "Loading..." },
-                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .background(
-                                        MaterialTheme.colorScheme.surfaceVariant,
-                                        shape = RoundedCornerShape(8.dp)
-                                    )
-                                    .padding(8.dp)
-                                    .fillMaxWidth()
-                            )
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            SelectionContainer {
+                                Text(
+                                    text = state.deviceId.ifEmpty { "Loading…" },
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                )
+                            }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        Row {
-                            val copyInteraction = remember { MutableInteractionSource() }
-                            Button(
-                                onClick = {
-                                    if (state.deviceId.isNotEmpty()) {
-                                        try {
-                                            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-                                            val selection = StringSelection(state.deviceId)
-                                            clipboard.setContents(selection, selection)
-                                            isCopyClicked = true
-                                        } catch (_: Exception) {}
-                                    }
-                                },
-                                enabled = state.deviceId.isNotEmpty(),
-                                interactionSource = copyInteraction,
-                                modifier = Modifier.bounceClick(copyInteraction)
-                            ) {
-                                Text(if (isCopyClicked) "Copied!" else "Copy ID")
-                            }
+                        FilledTonalButton(
+                            onClick = {
+                                if (state.deviceId.isNotEmpty()) {
+                                    try {
+                                        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+                                        val selection = StringSelection(state.deviceId)
+                                        clipboard.setContents(selection, selection)
+                                        isCopyClicked = true
+                                    } catch (_: Exception) {}
+                                }
+                            },
+                            enabled = state.deviceId.isNotEmpty(),
+                            contentPadding = ButtonDefaults.ButtonWithIconContentPadding
+                        ) {
+                            Icon(
+                                if (isCopyClicked) SynapseIcons.Check else SynapseIcons.Copy,
+                                contentDescription = null,
+                                modifier = Modifier.size(ButtonDefaults.IconSize)
+                            )
+                            Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
+                            Text(if (isCopyClicked) "Copied" else "Copy ID")
                         }
                     }
                 }
             }
 
-            // Loading / Error state for settings
             if (state.isLoading) {
                 Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
             } else if (state.error != null) {
-                DesktopSettingsCard(title = "Error") {
-                    Text(
-                        text = state.error ?: "Unknown error",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(onClick = { viewModel.loadSettings() }) {
-                        Text("Retry")
+                SettingsGroup(title = "Couldn't load settings") {
+                    Column(modifier = SettingsContentPadding) {
+                        Text(
+                            text = state.error ?: "Unknown error",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(onClick = { viewModel.loadSettings() }) {
+                            Text("Retry")
+                        }
                     }
                 }
             } else {
-                // --- General Section ---
-                DesktopSectionHeader("General")
+                // Each setting is shown only where it takes effect: engine settings need the
+                // legacy engine (Synapse Core has no API for them), and start-on-boot is only
+                // implemented for Windows (see setWindowsStartup in desktopApp main.kt).
+                val legacy = state.isLegacyEngine
+                val startOnBootSupported = remember {
+                    System.getProperty("os.name").orEmpty().lowercase().contains("win")
+                }
+                if (legacy || startOnBootSupported) {
+                    SettingsSectionHeader("General")
+                    SettingsGroup {
+                        if (legacy) {
+                            SettingsTextField(
+                                label = "Device name",
+                                value = state.deviceName,
+                                onValueChange = { viewModel.updateDeviceName(it) },
+                                supportingText = "How this device appears to others",
+                                modifier = SettingsContentPadding
+                            )
+                        }
+                        if (startOnBootSupported) {
+                            SettingsSwitchItem(
+                                label = "Start on boot",
+                                description = "Launch Synapse when you sign in to your computer",
+                                checked = state.autoStart,
+                                onCheckedChange = { viewModel.updateAutoStart(it) }
+                            )
+                        }
+                        if (legacy) {
+                            SettingsSwitchItem(
+                                label = "Usage reporting",
+                                description = "Send anonymous usage data",
+                                checked = state.urAccepted > 0,
+                                onCheckedChange = { viewModel.updateUsageReporting(it) }
+                            )
+                        }
+                    }
+                }
 
-                DesktopSettingsCard(title = "General Options") {
-                    DesktopSettingsTextField(
-                        label = "Device Name",
-                        value = state.deviceName,
-                        onValueChange = { viewModel.updateDeviceName(it) },
-                        supportingText = "The name by which this device is known to others"
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    DesktopSettingsSwitchRow(
-                        label = "Usage Reporting",
-                        description = "Allow anonymous usage data to be sent to the Syncthing developers",
-                        checked = state.urAccepted > 0,
-                        onCheckedChange = { viewModel.updateUsageReporting(it) }
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    DesktopSettingsSwitchRow(
-                        label = "Start on Boot",
-                        description = "Launch Synapse automatically when you turn on your computer",
-                        checked = state.autoStart,
-                        onCheckedChange = { viewModel.updateAutoStart(it) }
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    DesktopThemeSelectionRow(
+                SettingsSectionHeader("Appearance")
+                SettingsGroup {
+                    SettingsThemeItem(
                         selectedTheme = state.selectedTheme,
-                        onThemeSelected = { themeKey ->
-                            viewModel.updateSelectedTheme(themeKey)
-                            if (themeKey == "TacticalHUD" && state.themeMode == "Light") {
-                                viewModel.updateThemeMode("Dark")
+                        onThemeSelected = { viewModel.updateSelectedTheme(it) }
+                    )
+                    SettingsThemeModeItem(
+                        selectedMode = state.themeMode,
+                        onModeSelected = { viewModel.updateThemeMode(it) }
+                    )
+                }
+
+                if (legacy) {
+                    SettingsSectionHeader("Connections")
+                    SettingsGroup {
+                        SettingsTextField(
+                            label = "Listen addresses",
+                            value = state.listenAddresses,
+                            onValueChange = { viewModel.updateListenAddresses(it) },
+                            supportingText = "Comma-separated, e.g. default, tcp://0.0.0.0:22000",
+                            modifier = SettingsContentPadding
+                        )
+                        Row(
+                            modifier = SettingsContentPadding.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            SettingsTextField(
+                                label = "Download limit (KiB/s)",
+                                value = state.maxRecvKbps,
+                                onValueChange = { viewModel.updateMaxRecvKbps(it) },
+                                keyboardType = KeyboardType.Number,
+                                supportingText = "0 = unlimited",
+                                modifier = Modifier.weight(1f)
+                            )
+                            SettingsTextField(
+                                label = "Upload limit (KiB/s)",
+                                value = state.maxSendKbps,
+                                onValueChange = { viewModel.updateMaxSendKbps(it) },
+                                keyboardType = KeyboardType.Number,
+                                supportingText = "0 = unlimited",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        SettingsSwitchItem(
+                            label = "NAT traversal",
+                            description = "Try to connect through routers and firewalls",
+                            checked = state.natEnabled,
+                            onCheckedChange = { viewModel.updateNatEnabled(it) }
+                        )
+                        SettingsSwitchItem(
+                            label = "Relaying",
+                            description = "Use relay servers when a direct connection isn't possible",
+                            checked = state.relaysEnabled,
+                            onCheckedChange = { viewModel.updateRelaysEnabled(it) }
+                        )
+                        SettingsSwitchItem(
+                            label = "Local discovery",
+                            description = "Find devices on the local network",
+                            checked = state.localAnnounceEnabled,
+                            onCheckedChange = { viewModel.updateLocalAnnounceEnabled(it) }
+                        )
+                        SettingsSwitchItem(
+                            label = "Global discovery",
+                            description = "Find devices through discovery servers",
+                            checked = state.globalAnnounceEnabled,
+                            onCheckedChange = { viewModel.updateGlobalAnnounceEnabled(it) }
+                        )
+                        SettingsTextField(
+                            label = "Discovery servers",
+                            value = state.globalAnnounceServers,
+                            onValueChange = { viewModel.updateGlobalAnnounceServers(it) },
+                            supportingText = "Comma-separated server URLs",
+                            modifier = SettingsContentPadding
+                        )
+                    }
+
+                    SettingsSectionHeader("Web GUI")
+                    SettingsGroup {
+                        Row(
+                            modifier = SettingsContentPadding.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            SettingsTextField(
+                                label = "Listen address",
+                                value = state.guiAddress,
+                                onValueChange = { viewModel.updateGuiAddress(it) },
+                                supportingText = "Address and port, e.g. 127.0.0.1:8384",
+                                modifier = Modifier.weight(1f)
+                            )
+                            SettingsTextField(
+                                label = "Username",
+                                value = state.guiUser,
+                                onValueChange = { viewModel.updateGuiUser(it) },
+                                supportingText = "Leave empty to turn off sign-in",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        SettingsSwitchItem(
+                            label = "Use HTTPS",
+                            description = "Requires TLS certificates",
+                            checked = state.guiUseTLS,
+                            onCheckedChange = { viewModel.updateGuiUseTLS(it) }
+                        )
+                        Box(modifier = SettingsContentPadding) {
+                            OutlinedButton(
+                                onClick = { openUrl?.invoke("http://127.0.0.1:8384") },
+                                contentPadding = ButtonDefaults.ButtonWithIconContentPadding
+                            ) {
+                                Icon(SynapseIcons.Web, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                                Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
+                                Text("Open Web GUI")
                             }
                         }
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    DesktopAppearanceModeRow(
-                        selectedMode = state.themeMode,
-                        onModeSelected = { viewModel.updateThemeMode(it) },
-                        disabledOptions = if (state.selectedTheme == "TacticalHUD") listOf("Light") else emptyList()
-                    )
-                }
-
-                // --- Connections Section ---
-                DesktopSectionHeader("Connections")
-
-                DesktopSettingsCard(title = "Connection Settings") {
-                    DesktopSettingsTextField(
-                        label = "Listen Addresses",
-                        value = state.listenAddresses,
-                        onValueChange = { viewModel.updateListenAddresses(it) },
-                        supportingText = "Comma-separated list (e.g. default, tcp://0.0.0.0:22000)"
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        DesktopSettingsTextField(
-                            label = "Incoming Rate Limit (kbps)",
-                            value = state.maxRecvKbps,
-                            onValueChange = { viewModel.updateMaxRecvKbps(it) },
-                            keyboardType = KeyboardType.Number,
-                            supportingText = "0 = unlimited",
-                            modifier = Modifier.weight(1f)
-                        )
-                        DesktopSettingsTextField(
-                            label = "Outgoing Rate Limit (kbps)",
-                            value = state.maxSendKbps,
-                            onValueChange = { viewModel.updateMaxSendKbps(it) },
-                            keyboardType = KeyboardType.Number,
-                            supportingText = "0 = unlimited",
-                            modifier = Modifier.weight(1f)
-                        )
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Toggle row with 2 columns
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(24.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            DesktopSettingsSwitchRow(
-                                label = "NAT Traversal",
-                                description = "Attempt to punch through NATs",
-                                checked = state.natEnabled,
-                                onCheckedChange = { viewModel.updateNatEnabled(it) }
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            DesktopSettingsSwitchRow(
-                                label = "Relaying",
-                                description = "Use relay servers when direct connection fails",
-                                checked = state.relaysEnabled,
-                                onCheckedChange = { viewModel.updateRelaysEnabled(it) }
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(24.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            DesktopSettingsSwitchRow(
-                                label = "Local Discovery",
-                                description = "Discover devices on the local network",
-                                checked = state.localAnnounceEnabled,
-                                onCheckedChange = { viewModel.updateLocalAnnounceEnabled(it) }
-                            )
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            DesktopSettingsSwitchRow(
-                                label = "Global Discovery",
-                                description = "Register and look up via discovery servers",
-                                checked = state.globalAnnounceEnabled,
-                                onCheckedChange = { viewModel.updateGlobalAnnounceEnabled(it) }
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    DesktopSettingsTextField(
-                        label = "Global Discovery Servers",
-                        value = state.globalAnnounceServers,
-                        onValueChange = { viewModel.updateGlobalAnnounceServers(it) },
-                        supportingText = "Comma-separated list of discovery server URLs"
-                    )
-                }
-
-                // --- Web GUI Section ---
-                DesktopSectionHeader("Web GUI")
-
-                DesktopSettingsCard(title = "GUI Configuration") {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        DesktopSettingsTextField(
-                            label = "GUI Listen Address",
-                            value = state.guiAddress,
-                            onValueChange = { viewModel.updateGuiAddress(it) },
-                            supportingText = "Address and port (e.g. 127.0.0.1:8384)",
-                            modifier = Modifier.weight(1f)
-                        )
-                        DesktopSettingsTextField(
-                            label = "GUI Username",
-                            value = state.guiUser,
-                            onValueChange = { viewModel.updateGuiUser(it) },
-                            supportingText = "Leave empty for no authentication",
-                            modifier = Modifier.weight(1f)
+                    SettingsSectionHeader("Advanced")
+                    SettingsGroup {
+                        SettingsSwitchItem(
+                            label = "Crash reporting",
+                            description = "Send crash reports to help fix problems",
+                            checked = state.crashReportingEnabled,
+                            onCheckedChange = { viewModel.updateCrashReportingEnabled(it) }
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    DesktopSettingsSwitchRow(
-                        label = "Use HTTPS",
-                        description = "Enable HTTPS for the GUI (requires TLS certificates)",
-                        checked = state.guiUseTLS,
-                        onCheckedChange = { viewModel.updateGuiUseTLS(it) }
-                    )
-                }
-
-                // --- Advanced Section ---
-                DesktopSectionHeader("Advanced")
-
-                DesktopSettingsCard(title = "Advanced Options") {
-                    DesktopSettingsSwitchRow(
-                        label = "Crash Reporting",
-                        description = "Send crash reports to help improve Syncthing",
-                        checked = state.crashReportingEnabled,
-                        onCheckedChange = { viewModel.updateCrashReportingEnabled(it) }
-                    )
                 }
             }
 
-            // Configuration Import/Export Card (always shown)
-            DesktopSettingsCard(
-                title = "Import / Export Configuration",
-                subtitle = "Directly view or modify the raw JSON configuration of your Syncthing instance."
+            SettingsSectionHeader("Import and export")
+            SettingsGroup(
+                subtitle = null
             ) {
-                OutlinedTextField(
-                    value = configJsonText,
-                    onValueChange = {
-                        configJsonText = it
-                        importStatusMessage = null
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(240.dp),
-                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    label = { Text("Configuration JSON") }
-                )
-
-                if (importStatusMessage != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                Column(modifier = SettingsContentPadding) {
                     Text(
-                        text = importStatusMessage!!,
-                        color = if (isImportSuccess) SynapseStatusColors.Connected else MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold
+                        "View, copy or replace the raw JSON configuration.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = configJsonText,
+                        onValueChange = {
+                            configJsonText = it
+                            importStatusMessage = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        label = { Text("Configuration JSON") }
+                    )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                    if (importStatusMessage != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = importStatusMessage!!,
+                            color = if (isImportSuccess) SynapseStatusColors.Connected else MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
 
-                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                    Button(
-                        onClick = {
-                            coroutineScope.launch {
-                                try {
-                                    Json.parseToJsonElement(configJsonText)
-                                    apiClient.updateRawSystemConfig(configJsonText)
-                                    isImportSuccess = true
-                                    importStatusMessage = "Configuration imported successfully!"
-                                } catch(e: Exception) {
-                                    isImportSuccess = false
-                                    val msg = e.message ?: ""
-                                    importStatusMessage = if (
-                                        msg.contains("connect", ignoreCase = true) ||
-                                        msg.contains("127.0.0.1") ||
-                                        msg.contains("refused", ignoreCase = true)
-                                    ) {
-                                        "Error: Daemon is not running"
-                                    } else {
-                                        "Error importing config: $msg"
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                        FilledTonalButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    try {
+                                        Json.parseToJsonElement(configJsonText)
+                                        apiClient.updateRawSystemConfig(configJsonText)
+                                        isImportSuccess = true
+                                        importStatusMessage = "Configuration imported"
+                                    } catch(e: Exception) {
+                                        isImportSuccess = false
+                                        val msg = e.message ?: ""
+                                        importStatusMessage = if (
+                                            msg.contains("connect", ignoreCase = true) ||
+                                            msg.contains("127.0.0.1") ||
+                                            msg.contains("refused", ignoreCase = true)
+                                        ) {
+                                            "Synapse isn't running"
+                                        } else {
+                                            "Couldn't import: $msg"
+                                        }
                                     }
                                 }
                             }
+                        ) {
+                            Text("Import")
                         }
-                    ) {
-                        Text("Import Configuration")
                     }
                 }
-            }
-
-            // Web GUI Card (always shown)
-            DesktopSettingsCard(
-                title = "Advanced Integrations",
-                subtitle = "Open the official Syncthing Web GUI directly in your default web browser for advanced settings and diagnostics."
-            ) {
-                val webGuiInteraction = remember { MutableInteractionSource() }
-                Button(
-                    onClick = { openUrl?.invoke("http://127.0.0.1:8384") },
-                    interactionSource = webGuiInteraction,
-                    modifier = Modifier.bounceClick(webGuiInteraction)
-                ) {
-                    Text("Open Web GUI")
-                }
-            }
-        }
-    }
-}
-
-// --- Desktop-specific reusable components ---
-
-@Composable
-private fun DesktopSectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 4.dp)
-    )
-}
-
-@Composable
-private fun DesktopSettingsCard(
-    title: String,
-    subtitle: String? = null,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .animateContentSize(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMedium
-                )
-            ),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (subtitle != null) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                )
             }
             Spacer(modifier = Modifier.height(16.dp))
-            content()
+        }
         }
     }
 }
-
-@Composable
-private fun DesktopSettingsTextField(
-    label: String,
-    value: String,
-    onValueChange: (String) -> Unit,
-    supportingText: String? = null,
-    keyboardType: KeyboardType = KeyboardType.Text,
-    modifier: Modifier = Modifier
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label) },
-        supportingText = supportingText?.let { { Text(it, style = MaterialTheme.typography.bodySmall) } },
-        modifier = modifier.fillMaxWidth(),
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-        shape = RoundedCornerShape(12.dp),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = MaterialTheme.colorScheme.primary,
-            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
-        )
-    )
-}
-
-@Composable
-private fun DesktopSettingsSwitchRow(
-    label: String,
-    description: String? = null,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .bounceClick(interactionSource)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = { onCheckedChange(!checked) }
-            )
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            if (description != null) {
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(16.dp))
-        Switch(
-            checked = checked,
-            onCheckedChange = null // Row handles clicking to prevent double toggles
-        )
-    }
-}
-
-@Composable
-private fun DesktopThemeSelectionRow(
-    selectedTheme: String,
-    onThemeSelected: (String) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val themes = listOf(
-        "Default" to "Standard Purple (Default)",
-        "MidnightGreen" to "Midnight Green (Forest)",
-        "DeepSpace" to "Deep Space (Sleek Dark)",
-        "TacticalHUD" to "Tactical HUD (Cyberpunk)"
-    )
-    val selectedLabel = themes.find { it.first == selectedTheme }?.second ?: "Standard Purple (Default)"
-    val interactionSource = remember { MutableInteractionSource() }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .bounceClick(interactionSource)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = { expanded = true }
-            )
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "App Theme",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "Select premium interface theme",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Box {
-            Text(
-                text = selectedLabel,
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(end = 8.dp)
-            )
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false }
-            ) {
-                themes.forEach { (themeKey, themeLabel) ->
-                    DropdownMenuItem(
-                        text = { Text(themeLabel) },
-                        onClick = {
-                            onThemeSelected(themeKey)
-                            expanded = false
-                        }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DesktopAppearanceModeRow(
-    selectedMode: String,
-    onModeSelected: (String) -> Unit,
-    disabledOptions: List<String> = emptyList()
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-            Text(
-                text = "Appearance Mode",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "Choose light, dark, or system preference",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        
-        DesktopSegmentedButtonRow(
-            options = listOf("Light", "Dark", "System"),
-            selectedOption = selectedMode,
-            onOptionSelected = onModeSelected,
-            disabledOptions = disabledOptions,
-            modifier = Modifier.width(220.dp)
-        )
-    }
-}
-
-@Composable
-private fun DesktopSegmentedButtonRow(
-    options: List<String>,
-    selectedOption: String,
-    onOptionSelected: (String) -> Unit,
-    disabledOptions: List<String> = emptyList(),
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .height(40.dp)
-            .border(
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                shape = RoundedCornerShape(24.dp)
-            )
-            .background(Color.Transparent),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        options.forEachIndexed { index, option ->
-            val isSelected = option == selectedOption
-            val isDisabled = disabledOptions.contains(option)
-
-            val animatedWeight by animateFloatAsState(
-                targetValue = if (isSelected) 1.6f else 0.7f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessMedium
-                )
-            )
-
-            val animatedTopStart by animateDpAsState(
-                targetValue = if (isSelected) 24.dp else if (index == 0) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
-            )
-            val animatedBottomStart by animateDpAsState(
-                targetValue = if (isSelected) 24.dp else if (index == 0) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
-            )
-            val animatedTopEnd by animateDpAsState(
-                targetValue = if (isSelected) 24.dp else if (index == options.size - 1) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
-            )
-            val animatedBottomEnd by animateDpAsState(
-                targetValue = if (isSelected) 24.dp else if (index == options.size - 1) 18.dp else 0.dp,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
-            )
-
-            val animatedShape = RoundedCornerShape(
-                topStart = animatedTopStart.coerceAtLeast(0.dp),
-                bottomStart = animatedBottomStart.coerceAtLeast(0.dp),
-                topEnd = animatedTopEnd.coerceAtLeast(0.dp),
-                bottomEnd = animatedBottomEnd.coerceAtLeast(0.dp)
-            )
-
-            val containerColor by animateColorAsState(
-                targetValue = if (isSelected) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    Color.Transparent
-                },
-                animationSpec = tween(durationMillis = 200)
-            )
-
-            val contentColor by animateColorAsState(
-                targetValue = when {
-                    isDisabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                    isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                animationSpec = tween(durationMillis = 200)
-            )
-
-            val interactionSource = remember { MutableInteractionSource() }
-            val isPressed by interactionSource.collectIsPressedAsState()
-            val scale by animateFloatAsState(
-                targetValue = if (isPressed) 0.98f else 1.0f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessMedium
-                )
-            )
-
-            Box(
-                modifier = Modifier
-                    .weight(animatedWeight)
-                    .fillMaxHeight()
-                    .alpha(if (isDisabled) 0.38f else 1f)
-                    .background(containerColor, animatedShape)
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                    }
-                    .clickable(
-                        interactionSource = interactionSource,
-                        indication = null,
-                        enabled = !isDisabled,
-                        onClick = { onOptionSelected(option) }
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                ) {
-                    Icon(
-                        imageVector = getIconForOption(option),
-                        contentDescription = null,
-                        tint = contentColor,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    AnimatedVisibility(
-                        visible = isSelected,
-                        enter = expandHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + fadeIn(),
-                        exit = shrinkHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + fadeOut()
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = option,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = contentColor,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (index < options.size - 1 && !isSelected && !(options.getOrNull(index + 1) == selectedOption)) {
-                VerticalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant,
-                    modifier = Modifier.fillMaxHeight().padding(vertical = 8.dp)
-                )
-            }
-        }
-    }
-}
-
-private fun getIconForOption(option: String): ImageVector {
-    return when (option) {
-        "Light" -> SunIcon
-        "Dark" -> MoonIcon
-        "System" -> SystemIcon
-        else -> SystemIcon
-    }
-}
-
-private fun Modifier.bounceClick(interactionSource: MutableInteractionSource): Modifier = composed {
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.98f else 1.0f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMedium
-        )
-    )
-    this.graphicsLayer {
-        scaleX = scale
-        scaleY = scale
-    }
-}
-

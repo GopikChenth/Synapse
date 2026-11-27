@@ -8,8 +8,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -45,7 +43,6 @@ fun DesktopEditFolderDialog(
     }
 
     // Form States
-    var folderLabel by remember { mutableStateOf(folder.label) }
     var folderPath by remember { mutableStateOf(folder.path) }
     val selectedDevices = remember {
         mutableStateListOf<String>().apply {
@@ -53,12 +50,13 @@ fun DesktopEditFolderDialog(
         }
     }
     var folderType by remember { mutableStateOf(folder.type) }
-    var watchForChanges by remember { mutableStateOf(folder.fsWatcherEnabled) }
     var pauseFolder by remember { mutableStateOf(folder.paused) }
     var versioningType by remember { mutableStateOf(folder.versioning.type) }
-    var cleanoutAfter by remember {
+    // The engine reads and returns "cleanoutDays"; "cleanoutAfter" is the old app-side key.
+    var cleanoutDays by remember {
         mutableStateOf(
-            folder.versioning.params["cleanoutAfter"]?.toIntOrNull() ?: 0
+            (folder.versioning.params["cleanoutDays"] ?: folder.versioning.params["cleanoutAfter"])
+                ?.toIntOrNull() ?: 0
         )
     }
 
@@ -69,26 +67,21 @@ fun DesktopEditFolderDialog(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            shape = SynapseDialogShape,
-            title = { Text("Delete Folder?", style = MaterialTheme.typography.titleLarge) },
+            title = { Text("Delete folder?") },
             text = {
                 Text(
-                    "Remove \"${folder.label.ifEmpty { folder.id }}\" from Syncthing?\n\nThis will stop syncing but will NOT delete the files on disk.",
+                    "Remove \"${folder.label.ifEmpty { folder.id }}\" from Synapse?\n\nThis will stop syncing but will NOT delete the files on disk.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             },
             confirmButton = {
-                Button(
+                TextButton(
                     onClick = {
                         viewModel.deleteFolder(folder.id)
                         showDeleteConfirm = false
                         onDismiss()
                     },
-                    shape = SynapsePillShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) {
                     Text("Delete")
                 }
@@ -96,7 +89,6 @@ fun DesktopEditFolderDialog(
             dismissButton = {
                 TextButton(
                     onClick = { showDeleteConfirm = false },
-                    shape = SynapsePillShape
                 ) {
                     Text("Cancel")
                 }
@@ -107,12 +99,10 @@ fun DesktopEditFolderDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = SynapseDialogShape,
         title = {
             Text(
                 "Edit Folder Options",
                 style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
             )
         },
         text = {
@@ -125,7 +115,7 @@ fun DesktopEditFolderDialog(
                 if (error != null) {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = MaterialTheme.shapes.small,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
@@ -136,15 +126,6 @@ fun DesktopEditFolderDialog(
                         )
                     }
                 }
-
-                // Folder Label
-                OutlinedTextField(
-                    value = folderLabel,
-                    onValueChange = { folderLabel = it },
-                    label = { Text("Folder Label (optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
 
                 // Folder ID (Read-only)
                 OutlinedTextField(
@@ -247,41 +228,15 @@ fun DesktopEditFolderDialog(
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.weight(1f)
                             )
-                            Switch(
+                            Checkbox(
                                 checked = isChecked,
                                 onCheckedChange = { checked ->
                                     if (checked) selectedDevices.add(device.deviceID.normalizeDeviceId())
                                     else selectedDevices.remove(device.deviceID.normalizeDeviceId())
                                 },
-                                modifier = Modifier.scale(0.8f)
                             )
                         }
                     }
-                }
-
-                // Watch for Changes toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Watch for Changes",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            "Auto-detect file changes without manual rescanning",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = watchForChanges,
-                        onCheckedChange = { watchForChanges = it },
-                        modifier = Modifier.scale(0.8f)
-                    )
                 }
 
                 // Pause Folder toggle
@@ -292,14 +247,12 @@ fun DesktopEditFolderDialog(
                 ) {
                     Text(
                         "Pause Folder",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.weight(1f)
                     )
                     Switch(
                         checked = pauseFolder,
                         onCheckedChange = { pauseFolder = it },
-                        modifier = Modifier.scale(0.8f)
                     )
                 }
 
@@ -356,42 +309,19 @@ fun DesktopEditFolderDialog(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(
-                            text = if (cleanoutAfter == 0) "Never (0)" else "$cleanoutAfter days",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.width(90.dp)
+                        Slider(
+                            value = cleanoutDays.toFloat(),
+                            onValueChange = { cleanoutDays = kotlin.math.round(it).toInt() },
+                            valueRange = 0f..90f,
+                            steps = 89,
+                            modifier = Modifier.weight(1f)
                         )
-                        
-                        val listState = rememberLazyListState(initialFirstVisibleItemIndex = maxOf(0, cleanoutAfter - 2))
-                        LazyRow(
-                            state = listState,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.weight(1f).height(50.dp)
-                        ) {
-                            items(91) { index ->
-                                val isSelected = index == cleanoutAfter
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .background(
-                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                                            shape = RoundedCornerShape(8.dp)
-                                        )
-                                        .clickable { cleanoutAfter = index },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = if (index == 0) "∞" else index.toString(),
-                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                            }
-                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = if (cleanoutDays == 0) "Never" else "$cleanoutDays days",
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.widthIn(min = 72.dp)
+                        )
                     }
                 }
             }
@@ -402,15 +332,11 @@ fun DesktopEditFolderDialog(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Delete Button
-                Button(
+                TextButton(
                     onClick = { showDeleteConfirm = true },
-                    shape = SynapsePillShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) {
-                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(SynapseIcons.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Delete")
                 }
@@ -420,19 +346,16 @@ fun DesktopEditFolderDialog(
                         if (canSave) {
                             viewModel.updateFolder(
                                 id = folder.id,
-                                label = folderLabel.trim(),
                                 path = folderPath.trim(),
                                 type = folderType,
                                 paused = pauseFolder,
-                                watchForChanges = watchForChanges,
                                 sharedDevices = selectedDevices.toList(),
                                 versioningType = versioningType,
-                                cleanoutAfter = cleanoutAfter,
+                                cleanoutDays = cleanoutDays,
                                 onSuccess = onDismiss
                             )
                         }
                     },
-                    shape = SynapsePillShape,
                     enabled = canSave && !isLoading
                 ) {
                     if (isLoading) {
@@ -446,7 +369,6 @@ fun DesktopEditFolderDialog(
         dismissButton = {
             TextButton(
                 onClick = onDismiss,
-                shape = SynapsePillShape
             ) {
                 Text("Cancel")
             }

@@ -6,7 +6,7 @@ Icon=synapse-cachyos
 Terminal=false
 Type=Application
 Categories=Network;FileTransfer;Utility;
-Keywords=sync;syncthing;p2p;backup;
+Keywords=sync;file sync;p2p;backup;
 Actions=ToggleWindow;PauseAll;ResumeAll;ToggleSync;RescanAll;Status;
 
 [Desktop Action ToggleWindow]

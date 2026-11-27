@@ -4,7 +4,7 @@
 </p>
 
 <p align="center">
-  <strong>Cross-platform Compose Multiplatform client for Syncthing.</strong>
+  <strong>Cross-platform, peer-to-peer file sync built with Compose Multiplatform and a Rust engine.</strong>
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
 
 ---
 
-**Synapse** is a dashboard and user interface for managing [Syncthing](https://syncthing.net/) file synchronization states. Built using Kotlin Multiplatform and Compose Multiplatform, it provides a Material 3 interface across Android, Desktop (JVM), and Web browsers.
+**Synapse** keeps folders in sync directly between your devices, with no cloud in between. Its engine, **Synapse Core** (Rust, in [`/synapse-core`](./synapse-core)), handles indexing, content-defined chunking, end-to-end encrypted peer connections and three-way conflict merging. The app, built with Kotlin Multiplatform and Compose Multiplatform, provides a Material 3 interface across Android, Desktop (JVM), and Web browsers.
 
 ---
 
@@ -27,7 +27,7 @@
 </p>
 
 * **Synapse GUI:** Communicates with the daemon REST API and opens WebSockets to receive real-time sync state updates.
-* **Syncthing Daemon:** Runs in the background, handling block index exchanges and peer-to-peer file transfer protocols (BEP).
+* **Synapse Core engine:** Runs in the background, indexing folders and exchanging files with paired devices over mutually authenticated QUIC connections.
 
 ---
 
@@ -117,16 +117,16 @@ Run tests inside your IDE gutter or run them from the command line:
 
 ### ⚠️ Web Deployment Constraints
 
-When compiling or deploying the Web (WasmJs/JS) targets, browsers enforce strict security rules that affect communication with Syncthing:
+When compiling or deploying the Web (WasmJs/JS) targets, browsers enforce strict security rules that affect communication with the Synapse Core engine:
 
 > [!WARNING]
 > **CORS (Cross-Origin Resource Sharing)**
-> By default, the Syncthing daemon does not send CORS headers. This prevents browser applications hosted on a different origin (e.g., Synapse on `http://localhost:8080`) from making REST calls to the daemon.
+> By default, the Synapse Core engine rejects requests from browser origins it has not been told to trust. This prevents browser applications hosted on a different origin (e.g., Synapse on `http://localhost:8080`) from making REST calls to the daemon.
 > 
-> * **Workaround:** Configure Syncthing to include CORS headers, run the Synapse Web App as a browser extension with host permissions, or serve both the Synapse assets and the daemon through a reverse proxy.
+> * **Workaround:** Start the engine with `--allow-origin <origin>` for the web app's origin, run the Synapse Web App as a browser extension with host permissions, or serve both the Synapse assets and the daemon through a reverse proxy.
 
 > [!IMPORTANT]
 > **Mixed-Content Restrictions**
-> Modern web browsers block insecure HTTP requests (like local Syncthing on `http://127.0.0.1:8384`) from sites served securely over HTTPS.
+> Modern web browsers block insecure HTTP requests (like the local engine on `http://127.0.0.1:8384`) from sites served securely over HTTPS.
 > 
-> * **Workaround:** If hosting Synapse on a secure HTTPS server, you must configure Syncthing to use HTTPS (and ensure you accept its certificate in your browser).
+> * **Workaround:** If hosting Synapse on a secure HTTPS server, you must serve the engine's API over HTTPS, e.g. through a reverse proxy (and ensure you accept its certificate in your browser).

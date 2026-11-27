@@ -20,7 +20,7 @@
 
 **Synapse Core** is an embedded, peer-to-peer (P2P) continuous file synchronization and semantic conflict resolution engine. It is designed to act as the unified native backend for the Synapse ecosystem across **Desktop (Linux, macOS, Windows)**, **Mobile (Android)**, and **Web**.
 
-Existing sync systems like **Syncthing** rely on opaque, fixed-size binary blocks (up to 16 MiB) and destructive file-renaming policies (`.sync-conflict-*`), which litter user directories, break internal wiki links, and cause silent build corruptions. Meanwhile, **CRDTs** suffer from massive operation-log bloat and syntactic corruption when applied blindly to raw filesystem files.
+Existing block-based sync systems rely on opaque, fixed-size binary blocks (up to 16 MiB) and destructive file-renaming policies (`.sync-conflict-*`), which litter user directories, break internal wiki links, and cause silent build corruptions. Meanwhile, **CRDTs** suffer from massive operation-log bloat and syntactic corruption when applied blindly to raw filesystem files.
 
 Synapse Core resolves these limitations through three foundational pillars:
 
@@ -32,7 +32,7 @@ Synapse Core resolves these limitations through three foundational pillars:
 
 ## Architectural Comparison
 
-| Dimension | Syncthing | File-Level CRDTs (Automerge / Yjs) | Synapse Core |
+| Dimension | Block-based sync | File-Level CRDTs (Automerge / Yjs) | Synapse Core |
 |---|---|---|---|
 | **Conflict Strategy** | Renames files to `.sync-conflict-*` | Interweaves lines (causes syntax errors) | **3-Tier Pipeline** (Auto-Merge $\to$ Quarantine $\to$ Visual Diff) |
 | **Filesystem Safety** | Destructive clutter on user disk | Not native to disk (requires custom formats) | **Zero Pollution** (Local copy is never renamed or overwritten) |

@@ -33,8 +33,8 @@
 # Application entry point
 -keep class com.arcadelabs.synapse.SynapseApp
 -keep class com.arcadelabs.synapse.MainActivity
--keep class com.arcadelabs.synapse.service.SyncthingService
--keep class com.arcadelabs.synapse.service.SyncthingRunnable
+-keep class com.arcadelabs.synapse.service.SynapseSyncService
+-keep class com.arcadelabs.synapse.service.EngineRunnable
 
 # Google Play Services & MLKit Code Scanner
 -keep class com.google.android.gms.** { *; }

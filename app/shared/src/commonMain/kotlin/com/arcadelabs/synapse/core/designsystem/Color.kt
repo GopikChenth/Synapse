@@ -1,16 +1,36 @@
 package com.arcadelabs.synapse.core.designsystem
 
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.graphics.Color
 
 /**
- * Synapse Design Specification Status Colors
- * Conforms strictly to design.md Section 2:
- * - Connected: Safe emerald tint (Color(0xFF10B981))
- * - Paused: Warning amber tint (Color(0xFFF59E0B))
- * - Disconnected: Alert crimson tint (Color(0xFFEF4444))
+ * Sync-status colors, resolved from the active Material 3 theme.
+ *
+ * Connected → success role, Paused → warning role, Disconnected → error role.
+ * Each has a matching container / on-container pair for badges and chips,
+ * so status UI never uses alpha-tinted hex colors.
  */
 object SynapseStatusColors {
-    val Connected = Color(0xFF10B981)
-    val Paused = Color(0xFFF59E0B)
-    val Disconnected = Color(0xFFEF4444)
+    val Connected: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.statusColors.success
+    val ConnectedContainer: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.statusColors.successContainer
+    val OnConnectedContainer: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.statusColors.onSuccessContainer
+
+    val Paused: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.statusColors.warning
+    val PausedContainer: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.statusColors.warningContainer
+    val OnPausedContainer: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.statusColors.onWarningContainer
+
+    val Disconnected: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.error
+    val DisconnectedContainer: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.errorContainer
+    val OnDisconnectedContainer: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.onErrorContainer
 }

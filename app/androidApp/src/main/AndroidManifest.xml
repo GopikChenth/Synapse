@@ -47,7 +47,7 @@
         </activity>
 
         <service
-            android:name=".service.SyncthingService"
+            android:name=".service.SynapseSyncService"
             android:foregroundServiceType="specialUse"
             android:exported="false">
             <property 

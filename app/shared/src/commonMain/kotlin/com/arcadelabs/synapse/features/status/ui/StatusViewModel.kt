@@ -1,5 +1,6 @@
 package com.arcadelabs.synapse.features.status.ui
 
+import com.arcadelabs.synapse.core.domain.models.isSynapseCore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arcadelabs.synapse.core.domain.models.*
@@ -7,7 +8,6 @@ import com.arcadelabs.synapse.core.domain.state.BackendEngineType
 import com.arcadelabs.synapse.core.domain.state.EngineConnectionState
 import com.arcadelabs.synapse.core.network.*
 import com.arcadelabs.synapse.core.prefs.PreferencesHelper
-import kotlin.time.TimeSource
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,18 +26,12 @@ data class StatusUiState(
     val engineType: BackendEngineType = BackendEngineType.UNKNOWN,
     val myId: String = "",
     val uptime: Long = 0,
-    val allocBytes: Long = 0,
-    val sysBytes: Long = 0,
     val guiAddress: String = "",
-    val version: String = "",
-    val downloadSpeed: Long = 0, // bytes/sec
-    val uploadSpeed: Long = 0,   // bytes/sec
-    val totalDownload: Long = 0,
-    val totalUpload: Long = 0
+    val version: String = ""
 )
 
 class StatusViewModel(
-    private val apiClient: SyncthingApiClient,
+    private val apiClient: SynapseApiClient,
     private val preferencesHelper: PreferencesHelper
 ) : ViewModel() {
 
@@ -56,10 +50,6 @@ class StatusViewModel(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
-    private val timeSource = TimeSource.Monotonic
-    private var lastMark = timeSource.markNow()
-    private var lastInBytes: Long = 0
-    private var lastOutBytes: Long = 0
     // Only mark disconnected after this many consecutive poll failures (~6s at 2s interval)
     private var consecutiveFailures = 0
     private val failureThreshold = 3
@@ -85,11 +75,11 @@ class StatusViewModel(
                 loadLogs()
             } catch (e: Exception) {
                 _error.value = when (e) {
-                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
-                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
-                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
-                    is SyncthingApiException -> "API Error: ${e.message}"
+                    is ApiKeyNotConfiguredException -> "Synapse API key is missing or not configured."
+                    is SynapseUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SynapseNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SynapseTimeoutException -> "Connection timed out. Is Synapse running?"
+                    is SynapseApiException -> "API Error: ${e.message}"
                     else -> {
                         val msg = e.message ?: ""
                         if (
@@ -148,30 +138,9 @@ class StatusViewModel(
         try {
             val systemStatus = apiClient.systemStatus()
             val version = apiClient.systemVersion()
-            val connectionsResp = apiClient.systemConnections()
-            
-            val elapsed = lastMark.elapsedNow()
-            lastMark = timeSource.markNow()
-            val elapsedSeconds = elapsed.inWholeMilliseconds.toDouble() / 1000.0
 
-            val total = connectionsResp.total
-            val currentIn = total.inBytesTotal
-            val currentOut = total.outBytesTotal
-
-            val dlSpeed = if (lastInBytes > 0 && elapsedSeconds > 0) {
-                ((currentIn - lastInBytes) / elapsedSeconds).toLong().coerceAtLeast(0)
-            } else 0
-            val ulSpeed = if (lastOutBytes > 0 && elapsedSeconds > 0) {
-                ((currentOut - lastOutBytes) / elapsedSeconds).toLong().coerceAtLeast(0)
-            } else 0
-
-            lastInBytes = currentIn
-            lastOutBytes = currentOut
-
-            val isSynapse = version.longVersion.contains("Native Rust", ignoreCase = true) ||
-                version.longVersion.contains("synapse", ignoreCase = true) ||
-                version.currentVersion.contains("synapse", ignoreCase = true)
-            val engine = if (isSynapse) BackendEngineType.SYNAPSE_CORE else BackendEngineType.SYNCTHING
+            val isSynapse = version.isSynapseCore()
+            val engine = if (isSynapse) BackendEngineType.SYNAPSE_CORE else BackendEngineType.LEGACY_ENGINE
 
             val engineConn = EngineConnectionState.Connected(
                 engine = engine,
@@ -187,14 +156,8 @@ class StatusViewModel(
                 engineType = engine,
                 myId = systemStatus.myID,
                 uptime = systemStatus.uptime,
-                allocBytes = systemStatus.alloc,
-                sysBytes = systemStatus.sys,
                 guiAddress = systemStatus.guiAddressUsed,
-                version = version.currentVersion,
-                downloadSpeed = dlSpeed,
-                uploadSpeed = ulSpeed,
-                totalDownload = currentIn,
-                totalUpload = currentOut
+                version = version.currentVersion
             )
         } catch (e: Exception) {
             // Don't flip isRunning here — let the polling failure counter handle it
@@ -219,11 +182,11 @@ class StatusViewModel(
                 apiClient.restart()
             } catch (e: Exception) {
                 _error.value = when (e) {
-                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
-                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
-                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
-                    is SyncthingApiException -> "API Error: ${e.message}"
+                    is ApiKeyNotConfiguredException -> "Synapse API key is missing or not configured."
+                    is SynapseUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SynapseNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SynapseTimeoutException -> "Connection timed out. Is Synapse running?"
+                    is SynapseApiException -> "API Error: ${e.message}"
                     else -> {
                         val msg = e.message ?: ""
                         if (
@@ -249,11 +212,11 @@ class StatusViewModel(
                 apiClient.shutdown()
             } catch (e: Exception) {
                 _error.value = when (e) {
-                    is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
-                    is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-                    is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
-                    is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
-                    is SyncthingApiException -> "API Error: ${e.message}"
+                    is ApiKeyNotConfiguredException -> "Synapse API key is missing or not configured."
+                    is SynapseUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+                    is SynapseNotFoundException -> "Endpoint not found. Check the base URL."
+                    is SynapseTimeoutException -> "Connection timed out. Is Synapse running?"
+                    is SynapseApiException -> "API Error: ${e.message}"
                     else -> {
                         val msg = e.message ?: ""
                         if (

@@ -77,9 +77,9 @@ object LinuxHyprlandCli {
 
             Actions:
               --toggle, -t             Toggle Synapse scratchpad in Hyprland (or launch if not running)
-              --pause, -p              Pause all synchronization and peer connections
-              --resume, -r             Resume all synchronization and peer connections
-              --toggle-sync            Toggle between pause and resume states
+              --pause, -p              Pause syncing with every device
+              --resume, -r             Resume syncing with every device
+              --toggle-sync            Resume all devices if all are paused, otherwise pause all
               --rescan, -s [folder]    Trigger a rescan for all folders (or a specific folder ID)
               --status                 Display current daemon and sync status in terminal
               --waybar                 Output JSON status formatted for Waybar / eww status bars
@@ -147,82 +147,125 @@ object LinuxHyprlandCli {
     private fun handlePause() {
         val conn = resolveDaemonConnection()
         if (conn == null) {
-            notify("Synapse", "Syncthing daemon is offline.", urgency = "critical")
-            println("Error: Syncthing daemon is offline.")
+            notify("Synapse", "Synapse daemon is offline.", urgency = "critical")
+            println("Error: Synapse daemon is offline.")
             return
         }
-
         val (baseUrl, apiKey) = conn
-        val res = sendHttpRequest("POST", "$baseUrl/rest/system/pause", apiKey)
-        if (res.code in 200..299) {
-            notify("Synapse", "All synchronization paused.")
-            println("Synapse: All synchronization paused.")
-        } else {
-            notify("Synapse", "Failed to pause: HTTP ${res.code}", urgency = "critical")
-            println("Error: Failed to pause synchronization (HTTP ${res.code})")
-        }
+        setAllDevicesPaused(baseUrl, apiKey, pause = true)
     }
 
     private fun handleResume() {
         val conn = resolveDaemonConnection()
         if (conn == null) {
-            notify("Synapse", "Syncthing daemon is offline.", urgency = "critical")
-            println("Error: Syncthing daemon is offline.")
+            notify("Synapse", "Synapse daemon is offline.", urgency = "critical")
+            println("Error: Synapse daemon is offline.")
             return
         }
-
         val (baseUrl, apiKey) = conn
-        val res = sendHttpRequest("POST", "$baseUrl/rest/system/resume", apiKey)
-        if (res.code in 200..299) {
-            notify("Synapse", "Synchronization resumed.")
-            println("Synapse: Synchronization resumed.")
-        } else {
-            notify("Synapse", "Failed to resume: HTTP ${res.code}", urgency = "critical")
-            println("Error: Failed to resume synchronization (HTTP ${res.code})")
-        }
+        setAllDevicesPaused(baseUrl, apiKey, pause = false)
     }
 
     private fun handleToggleSync() {
         val conn = resolveDaemonConnection()
         if (conn == null) {
-            notify("Synapse", "Syncthing daemon is offline.", urgency = "critical")
-            println("Error: Syncthing daemon is offline.")
+            notify("Synapse", "Synapse daemon is offline.", urgency = "critical")
+            println("Error: Synapse daemon is offline.")
             return
         }
 
         val (baseUrl, apiKey) = conn
-        val connectionsRes = sendHttpRequest("GET", "$baseUrl/rest/system/connections", apiKey)
+        val devices = fetchRemoteDevices(baseUrl, apiKey)
+        if (devices == null) {
+            notify("Synapse", "Could not read the device list.", urgency = "critical")
+            println("Error: Could not read the device list from the daemon.")
+            return
+        }
+        val allPaused = devices.isNotEmpty() && devices.all { it.paused }
+        setAllDevicesPaused(baseUrl, apiKey, pause = !allPaused, devices = devices)
+    }
 
-        // Check if connections indicate paused
-        val isPaused = connectionsRes.body.contains("\"paused\": true") ||
-                connectionsRes.body.contains("\"paused\":true")
+    /**
+     * The engine pauses and resumes per device (`?device=<id>` is required), so this walks the
+     * configured remote devices and sends one request for each device not yet in the target state.
+     */
+    private fun setAllDevicesPaused(
+        baseUrl: String,
+        apiKey: String,
+        pause: Boolean,
+        devices: List<DeviceEntry>? = fetchRemoteDevices(baseUrl, apiKey)
+    ) {
+        val verb = if (pause) "pause" else "resume"
+        if (devices == null) {
+            notify("Synapse", "Failed to $verb: could not read the device list.", urgency = "critical")
+            println("Error: Failed to $verb synchronization (could not read the device list).")
+            return
+        }
+        if (devices.isEmpty()) {
+            notify("Synapse", "No devices to $verb.")
+            println("Synapse: No devices to $verb.")
+            return
+        }
 
-        if (isPaused) {
-            handleResume()
+        val targets = devices.filter { it.paused != pause }
+        val failed = targets.filter { device ->
+            val res = sendHttpRequest("POST", "$baseUrl/rest/system/$verb?device=${urlEncode(device.id)}", apiKey)
+            res.code !in 200..299
+        }
+
+        if (failed.isEmpty()) {
+            val msg = if (pause) "All devices paused." else "All devices resumed."
+            notify("Synapse", msg)
+            println("Synapse: $msg")
         } else {
-            handlePause()
+            val msg = "Failed to $verb ${failed.size} of ${targets.size} device(s)."
+            notify("Synapse", msg, urgency = "critical")
+            println("Error: $msg")
         }
     }
 
     private fun handleRescan(folderId: String?) {
         val conn = resolveDaemonConnection()
         if (conn == null) {
-            notify("Synapse", "Syncthing daemon is offline.", urgency = "critical")
-            println("Error: Syncthing daemon is offline.")
+            notify("Synapse", "Synapse daemon is offline.", urgency = "critical")
+            println("Error: Synapse daemon is offline.")
             return
         }
 
         val (baseUrl, apiKey) = conn
-        val url = if (folderId != null) "$baseUrl/rest/db/scan?folder=$folderId" else "$baseUrl/rest/db/scan"
-        val res = sendHttpRequest("POST", url, apiKey)
+        // The engine requires a folder per scan request, so "all folders" means one request each.
+        val folderIds = if (folderId != null) {
+            listOf(folderId)
+        } else {
+            fetchFolderIds(baseUrl, apiKey) ?: run {
+                notify("Synapse", "Rescan failed: could not read the folder list.", urgency = "critical")
+                println("Error: Rescan failed (could not read the folder list).")
+                return
+            }
+        }
+        if (folderIds.isEmpty()) {
+            notify("Synapse", "No folders to rescan.")
+            println("Synapse: No folders to rescan.")
+            return
+        }
 
-        if (res.code in 200..299) {
+        val failed = folderIds.filter { id ->
+            val res = sendHttpRequest("POST", "$baseUrl/rest/db/scan?folder=${urlEncode(id)}", apiKey)
+            res.code !in 200..299
+        }
+
+        if (failed.isEmpty()) {
             val msg = if (folderId != null) "Rescan triggered for folder '$folderId'." else "Rescan triggered for all folders."
             notify("Synapse", msg)
             println("Synapse: $msg")
         } else {
-            notify("Synapse", "Rescan failed: HTTP ${res.code}", urgency = "critical")
-            println("Error: Rescan failed (HTTP ${res.code})")
+            val msg = if (folderId != null) {
+                "Rescan failed for folder '$folderId'."
+            } else {
+                "Rescan failed for ${failed.size} of ${folderIds.size} folder(s): ${failed.joinToString()}"
+            }
+            notify("Synapse", msg, urgency = "critical")
+            println("Error: $msg")
         }
     }
 
@@ -230,23 +273,20 @@ object LinuxHyprlandCli {
         val conn = resolveDaemonConnection()
         if (conn == null) {
             println("Synapse Status: Offline")
-            println("Daemon: Not running (no active Syncthing instance responding on port 8384)")
+            println("Daemon: Not running (no active Synapse instance responding on port 8384)")
             return
         }
 
         val (baseUrl, apiKey) = conn
-        val statusRes = sendHttpRequest("GET", "$baseUrl/rest/system/status", apiKey)
         val connRes = sendHttpRequest("GET", "$baseUrl/rest/system/connections", apiKey)
 
         println("Synapse Status: Active")
         println("Daemon Address: $baseUrl")
         println("HTTP Ping: OK")
 
-        val connectedMatches = "\"connected\":\\s*true".toRegex().findAll(connRes.body).count()
-        val pausedMatches = "\"paused\":\\s*true".toRegex().findAll(connRes.body).count()
-
-        println("Connected Peers: $connectedMatches")
-        println("Paused Peers: $pausedMatches")
+        println("Connected Peers: ${countConnectedPeers(connRes.body)}")
+        val devices = fetchRemoteDevices(baseUrl, apiKey)
+        println("Paused Peers: ${devices?.count { it.paused }?.toString() ?: "unknown"}")
     }
 
     private fun handleWaybar() {
@@ -259,8 +299,9 @@ object LinuxHyprlandCli {
         val (baseUrl, apiKey) = conn
         val connRes = sendHttpRequest("GET", "$baseUrl/rest/system/connections", apiKey)
 
-        val connectedCount = "\"connected\":\\s*true".toRegex().findAll(connRes.body).count()
-        val isPaused = connRes.body.contains("\"paused\": true") || connRes.body.contains("\"paused\":true")
+        val connectedCount = countConnectedPeers(connRes.body)
+        val devices = fetchRemoteDevices(baseUrl, apiKey).orEmpty()
+        val isPaused = devices.isNotEmpty() && devices.all { it.paused }
 
         val (text, alt, cls, tooltip) = when {
             isPaused -> {
@@ -499,6 +540,114 @@ object LinuxHyprlandCli {
         }
     }
 
+    /** Synapse Core sends `"is_connected"`; the legacy engine sends `"connected"`. */
+    private fun countConnectedPeers(connectionsJson: String): Int =
+        "\"(?:is_)?connected\"\\s*:\\s*true".toRegex().findAll(connectionsJson).count()
+
+    /** Configured devices other than this one, with their paused flag, from GET /rest/system/config. */
+    private fun fetchRemoteDevices(baseUrl: String, apiKey: String): List<DeviceEntry>? {
+        val configRes = sendHttpRequest("GET", "$baseUrl/rest/system/config", apiKey)
+        if (configRes.code !in 200..299) return null
+        val statusRes = sendHttpRequest("GET", "$baseUrl/rest/system/status", apiKey)
+        val myId = if (statusRes.code in 200..299) {
+            "\"myID\"\\s*:\\s*\"([^\"]+)\"".toRegex().find(statusRes.body)?.groupValues?.get(1)
+        } else {
+            null
+        }
+        val idRegex = "\"deviceID\"\\s*:\\s*\"([^\"]+)\"".toRegex()
+        val pausedRegex = "\"paused\"\\s*:\\s*true".toRegex()
+        return topLevelArrayObjects(configRes.body, "devices").mapNotNull { obj ->
+            val id = idRegex.find(obj)?.groupValues?.get(1) ?: return@mapNotNull null
+            if (myId != null && id.equals(myId, ignoreCase = true)) return@mapNotNull null
+            DeviceEntry(id, pausedRegex.containsMatchIn(obj))
+        }
+    }
+
+    /** Folder IDs from GET /rest/system/config. */
+    private fun fetchFolderIds(baseUrl: String, apiKey: String): List<String>? {
+        val configRes = sendHttpRequest("GET", "$baseUrl/rest/system/config", apiKey)
+        if (configRes.code !in 200..299) return null
+        val idRegex = "\"id\"\\s*:\\s*\"([^\"]+)\"".toRegex()
+        return topLevelArrayObjects(configRes.body, "folders").mapNotNull { obj ->
+            idRegex.find(obj)?.groupValues?.get(1)
+        }
+    }
+
+    private fun urlEncode(value: String): String =
+        java.net.URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
+
+    /**
+     * Raw JSON text of each object in the root object's [key] array. Only the root level is
+     * matched, so nested arrays with the same name (e.g. folders[].devices) are skipped.
+     * A small scanner because no JSON library is on this module's classpath.
+     */
+    private fun topLevelArrayObjects(json: String, key: String): List<String> {
+        var depth = 0
+        var i = 0
+        while (i < json.length) {
+            when (json[i]) {
+                '"' -> {
+                    val end = stringEnd(json, i)
+                    if (depth == 1 && json.substring(i + 1, end) == key) {
+                        var j = end + 1
+                        while (j < json.length && json[j].isWhitespace()) j++
+                        if (j < json.length && json[j] == ':') {
+                            j++
+                            while (j < json.length && json[j].isWhitespace()) j++
+                            return if (j < json.length && json[j] == '[') arrayObjects(json, j) else emptyList()
+                        }
+                    }
+                    i = end
+                }
+                '{', '[' -> depth++
+                '}', ']' -> depth--
+            }
+            i++
+        }
+        return emptyList()
+    }
+
+    /** Objects directly inside the array that opens at [start]. */
+    private fun arrayObjects(json: String, start: Int): List<String> {
+        val objects = mutableListOf<String>()
+        var depth = 0
+        var objStart = -1
+        var i = start + 1
+        while (i < json.length) {
+            when (json[i]) {
+                '"' -> i = stringEnd(json, i)
+                '{', '[' -> {
+                    if (depth == 0 && json[i] == '{') objStart = i
+                    depth++
+                }
+                '}', ']' -> {
+                    if (depth == 0) return objects // closing bracket of the array itself
+                    depth--
+                    if (depth == 0 && json[i] == '}' && objStart >= 0) {
+                        objects.add(json.substring(objStart, i + 1))
+                        objStart = -1
+                    }
+                }
+            }
+            i++
+        }
+        return objects
+    }
+
+    /** Index of the closing quote of the string literal that opens at [start]. */
+    private fun stringEnd(json: String, start: Int): Int {
+        var i = start + 1
+        while (i < json.length) {
+            when (json[i]) {
+                '\\' -> i++
+                '"' -> return i
+            }
+            i++
+        }
+        return json.length // unterminated: treat the rest as the string
+    }
+
+    private data class DeviceEntry(val id: String, val paused: Boolean)
     private data class HttpResponseData(val code: Int, val body: String)
     private data class Quad(val first: String, val second: String, val third: String, val fourth: String)
 }

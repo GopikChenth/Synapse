@@ -18,13 +18,6 @@ elif [ -f "$HOME/Projects/Synapse Core/bin/synapse-core" ]; then
     echo "[Synapse] Installed Synapse Core from projects folder -> $HOME/Synapse/bin/synapse-core"
 fi
 
-# Priority 2: Fallback to syncthing
-SYSTEM_SYNCTHING=$(which syncthing 2>/dev/null || echo "/usr/bin/syncthing")
-if [ -x "$SYSTEM_SYNCTHING" ]; then
-    ln -sf "$SYSTEM_SYNCTHING" "$HOME/Synapse/bin/syncthing.exe"
-    echo "[Synapse] Linked $SYSTEM_SYNCTHING -> $HOME/Synapse/bin/syncthing.exe"
-fi
-
 # Hyprland auto-configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -d "$HOME/.config/hypr" ] || [ -n "$HYPRLAND_INSTANCE_SIGNATURE" ]; then

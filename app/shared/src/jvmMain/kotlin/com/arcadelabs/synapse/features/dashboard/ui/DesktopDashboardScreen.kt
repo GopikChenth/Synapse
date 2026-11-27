@@ -1,5 +1,6 @@
 package com.arcadelabs.synapse.features.dashboard.ui
 
+import com.arcadelabs.synapse.core.domain.models.formatDeviceId
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.*
@@ -13,11 +14,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -33,7 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arcadelabs.synapse.core.designsystem.*
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.network.SynapseApiClient
 import com.arcadelabs.synapse.features.devices.ui.DeviceViewModel
 import com.arcadelabs.synapse.features.devices.ui.DeviceUiModel
 import com.arcadelabs.synapse.features.folders.ui.FolderViewModel
@@ -46,7 +41,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.serialization.json.jsonPrimitive
 import org.koin.compose.viewmodel.koinViewModel
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
 import java.awt.Toolkit
@@ -58,7 +52,7 @@ fun DesktopDashboardScreen(
     onAddDeviceClick: (String, String) -> Unit,
     onEditFolderClick: (com.arcadelabs.synapse.core.domain.models.Folder) -> Unit,
     openFolder: ((String) -> Unit)? = null,
-    apiClient: SyncthingApiClient,
+    apiClient: SynapseApiClient,
     onOpenQuarantineClick: () -> Unit = {},
     folderViewModel: FolderViewModel = koinViewModel(),
     deviceViewModel: DeviceViewModel = koinViewModel(),
@@ -79,11 +73,7 @@ fun DesktopDashboardScreen(
     var copiedIdFeedback by remember { mutableStateOf<String?>(null) }
 
     // Layout configuration
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val useTwoColumns = maxWidth > 850.dp
 
         Column(
@@ -101,29 +91,16 @@ fun DesktopDashboardScreen(
                 Text(
                     text = "Dashboard",
                     style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
 
-                // Overall Status indicator
+                // Overall status
                 val isRunning = statusState.isRunning
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .background(
-                                color = if (isRunning) SynapseStatusColors.Connected else SynapseStatusColors.Disconnected,
-                                shape = RoundedCornerShape(5.dp)
-                            )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (isRunning) "Connected" else "Disconnected",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isRunning) SynapseStatusColors.Connected else SynapseStatusColors.Disconnected
-                    )
-                }
+                com.arcadelabs.synapse.core.designsystem.components.SyncStateBadge(
+                    state = if (isRunning) com.arcadelabs.synapse.core.designsystem.components.SyncState.Connected
+                        else com.arcadelabs.synapse.core.designsystem.components.SyncState.Disconnected,
+                    label = if (isRunning) "Connected" else "Disconnected"
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -252,7 +229,7 @@ fun FoldersCardSection(
     onAddFolderClick: () -> Unit,
     onEditFolderClick: (com.arcadelabs.synapse.core.domain.models.Folder) -> Unit,
     openFolder: ((String) -> Unit)? = null,
-    apiClient: SyncthingApiClient,
+    apiClient: SynapseApiClient,
     folderViewModel: FolderViewModel = koinViewModel()
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -266,7 +243,7 @@ fun FoldersCardSection(
     val json = remember { kotlinx.serialization.json.Json { ignoreUnknownKeys = true } }
 
     LaunchedEffect(expandedFolderId) {
-        if (expandedFolderId != null) {
+        if (!expandedFolderId.isNullOrBlank()) {
             while (true) {
                 try {
                     val status = apiClient.dbStatus(expandedFolderId)
@@ -301,8 +278,8 @@ fun FoldersCardSection(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -313,14 +290,13 @@ fun FoldersCardSection(
                 Text(
                     text = "Folders (${folders.size})",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 if (folders.size > 6) {
                     Text(
                         text = "Showing 6 of ${folders.size}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -333,7 +309,7 @@ fun FoldersCardSection(
                     Text(
                         text = "No folders added.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             } else {
@@ -345,17 +321,6 @@ fun FoldersCardSection(
                         "receiveonly" -> "Receive Only"
                         else          -> "Send & Receive"
                     }
-                    val rescanLabel = run {
-                        val hours = folder.rescanIntervalS / 3600
-                        val mins = (folder.rescanIntervalS % 3600) / 60
-                        val timeStr = when {
-                            folder.rescanIntervalS == 0 -> "Disabled"
-                            hours > 0 -> "${hours}h"
-                            else -> "${mins}m"
-                        }
-                        val watcherStr = if (folder.fsWatcherEnabled) "  Enabled" else "  Disabled"
-                        "$timeStr$watcherStr"
-                    }
                     val sharedWithLabel = if (folder.devices.isEmpty()) {
                         "Nobody"
                     } else {
@@ -363,32 +328,18 @@ fun FoldersCardSection(
                             devices.find { it.id.normalizeDeviceId() == ref.deviceID.normalizeDeviceId() }?.name ?: ref.deviceID.take(7)
                         }.joinToString(", ")
                     }
-                    val lastScanLabel = folderStatusState?.stateChanged?.let { isoTime ->
-                        try {
-                            val tIndex = isoTime.indexOf('T')
-                            if (tIndex != -1) {
-                                val datePart = isoTime.substring(0, tIndex)
-                                val timePart = isoTime.substring(tIndex + 1, tIndex + 9)
-                                "$datePart $timePart"
-                            } else {
-                                isoTime
-                            }
-                        } catch (_: Exception) {
-                            isoTime
-                        }
-                    } ?: "Scanning..."
                     val latestChangeLabel = folderLatestChangeState ?: "No recent changes"
 
                     Column(
                         modifier = Modifier.fillMaxWidth().animateContentSize()
                     ) {
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        HorizontalDivider()
 
-                        // Header Row — clicking toggles expansion; clicking again closes
+                        // Header Row — the caller toggles: clicking an expanded folder collapses it (id -> null)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onFolderClick(if (isExpanded) "" else folder.id) }
+                                .clickable { onFolderClick(folder.id) }
                                 .padding(vertical = 12.dp, horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -413,21 +364,21 @@ fun FoldersCardSection(
 
                             val stateColor = if (folder.paused) SynapseStatusColors.Paused else SynapseStatusColors.Connected
                             Text(
-                                text = if (folder.paused) "Paused" else "Up to Date",
+                                text = if (folder.paused) "Paused" else "Active",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = stateColor,
                                 fontWeight = FontWeight.Bold
                             )
                         }
 
-                        // Expanded Detail Area (Syncthing-style rows)
+                        // Expanded Detail Area (detail rows)
                         if (isExpanded) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .background(
-                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                                        RoundedCornerShape(8.dp)
+                                        MaterialTheme.colorScheme.surfaceContainerLow,
+                                        MaterialTheme.shapes.small
                                     )
                                     .padding(horizontal = 12.dp, vertical = 10.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -442,12 +393,6 @@ fun FoldersCardSection(
                                     clickable = true,
                                     onClick = { openFolder?.invoke(folder.path) }
                                 )
-                                // Global State
-                                val globalStateText = folderStatusState?.let { status ->
-                                    "${status.globalFiles}  ${status.globalDirectories}  ~${formatBinaryBytes(status.globalBytes)}"
-                                } ?: "Loading..."
-                                FolderInfoRow(label = "Global State", value = globalStateText)
-
                                 // Local State
                                 val localStateText = folderStatusState?.let { status ->
                                     "${status.localFiles}  ${status.localDirectories}  ~${formatBinaryBytes(status.localBytes)}"
@@ -456,26 +401,18 @@ fun FoldersCardSection(
                                 
                                 // Folder Type
                                 FolderInfoRow(label = "Folder Type", value = folderTypeLabel)
-                                // Block Indexing
-                                FolderInfoRow(label = "Block Indexing", value = "Yes")
-                                // Rescans
-                                FolderInfoRow(label = "Rescans", value = rescanLabel)
-                                // File Pull Order
-                                FolderInfoRow(label = "File Pull Order", value = "Random")
                                 // Shared With
                                 FolderInfoRow(
                                     label = "Shared With",
                                     value = sharedWithLabel,
                                     valueColor = if (sharedWithLabel != "Nobody") MaterialTheme.colorScheme.primary else null
                                 )
-                                // Last Scan
-                                FolderInfoRow(label = "Last Scan", value = lastScanLabel)
                                 // Latest Change
                                 FolderInfoRow(label = "Latest Change", value = latestChangeLabel)
 
                                 HorizontalDivider(
                                     modifier = Modifier.padding(vertical = 4.dp),
-                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                    color = MaterialTheme.colorScheme.outlineVariant
                                 )
 
                                 // Action buttons
@@ -511,7 +448,7 @@ fun FoldersCardSection(
                 }
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            HorizontalDivider()
             Spacer(modifier = Modifier.height(16.dp))
 
             // Bottom action buttons
@@ -551,7 +488,7 @@ fun FoldersCardSection(
                     onClick = onAddFolderClick,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(SynapseIcons.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Add Folder")
                 }
@@ -579,7 +516,7 @@ fun FolderInfoRow(
         Text(
             text = label,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(0.4f)
         )
         Text(
@@ -590,143 +527,6 @@ fun FolderInfoRow(
             modifier = Modifier.weight(0.6f),
             maxLines = 2
         )
-    }
-}
-
-@Composable
-fun SpeedGraph(
-    label: String,
-    currentSpeed: Long,
-    totalBytes: Long,
-    color: Color,
-    modifier: Modifier = Modifier
-) {
-    val history = remember { mutableStateListOf<Float>() }
-    
-    // Add current speed to history when it updates
-    LaunchedEffect(currentSpeed) {
-        history.add(currentSpeed.toFloat())
-        if (history.size > 40) {
-            history.removeAt(0)
-        }
-    }
-    
-    var targetSpeed by remember { mutableStateOf(0f) }
-    var targetBytes by remember { mutableStateOf(0f) }
-    LaunchedEffect(currentSpeed, totalBytes) {
-        targetSpeed = currentSpeed.toFloat()
-        targetBytes = totalBytes.toFloat()
-    }
-    val animatedSpeed by animateFloatAsState(
-        targetValue = targetSpeed,
-        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
-    )
-    val animatedBytes by animateFloatAsState(
-        targetValue = targetBytes,
-        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
-    )
-
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-        ),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f)
-        )
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                )
-                Text(
-                    text = formatSpeed(animatedSpeed.toLong()),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Bold,
-                    color = color
-                )
-            }
-            
-            Spacer(modifier = Modifier.height(2.dp))
-            
-            Text(
-                text = "Total: ${formatBytes(animatedBytes.toLong())}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-            )
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            Canvas(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(60.dp)
-            ) {
-                val width = size.width
-                val height = size.height
-                
-                if (history.size > 1) {
-                    val maxVal = history.maxOrNull()?.coerceAtLeast(1024f) ?: 1024f
-                    val path = Path()
-                    val fillPath = Path()
-                    
-                    val stepX = width / (history.size - 1)
-                    
-                    history.forEachIndexed { index, value ->
-                        val x = index * stepX
-                        val normalizedY = value / maxVal
-                        val y = height - (normalizedY * (height - 4f)) - 2f
-                        
-                        if (index == 0) {
-                            path.moveTo(x, y)
-                            fillPath.moveTo(x, height)
-                            fillPath.lineTo(x, y)
-                        } else {
-                            path.lineTo(x, y)
-                            fillPath.lineTo(x, y)
-                        }
-                        
-                        if (index == history.size - 1) {
-                            fillPath.lineTo(x, height)
-                            fillPath.close()
-                        }
-                    }
-                    
-                    drawPath(
-                        path = fillPath,
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                color.copy(alpha = 0.25f),
-                                color.copy(alpha = 0.0f)
-                            )
-                        )
-                    )
-                    
-                    drawPath(
-                        path = path,
-                        color = color,
-                        style = Stroke(width = 2.dp.toPx())
-                    )
-                } else {
-                    drawLine(
-                        color = color.copy(alpha = 0.2f),
-                        start = androidx.compose.ui.geometry.Offset(0f, height / 2),
-                        end = androidx.compose.ui.geometry.Offset(width, height / 2),
-                        strokeWidth = 1.5.dp.toPx()
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -835,10 +635,7 @@ fun DonutChart(
             // Value text inside donut hole
             Text(
                 text = "${animatedValue.toInt()}/$max",
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 10.sp
-                ),
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
@@ -861,7 +658,7 @@ fun ThisDeviceSection(
     devices: List<DeviceUiModel>,
     copiedIdFeedback: String?,
     onCopyClick: (String) -> Unit,
-    apiClient: SyncthingApiClient,
+    apiClient: SynapseApiClient,
     onOpenQuarantineClick: () -> Unit = {}
 ) {
     // Find local device in devices list to resolve its name
@@ -892,22 +689,6 @@ fun ThisDeviceSection(
         animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
     )
 
-    val animatedDownloadSpeed by animateFloatAsState(
-        targetValue = statusState.downloadSpeed.toFloat(),
-        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
-    )
-    val animatedTotalDownload by animateFloatAsState(
-        targetValue = statusState.totalDownload.toFloat(),
-        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
-    )
-    val animatedUploadSpeed by animateFloatAsState(
-        targetValue = statusState.uploadSpeed.toFloat(),
-        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
-    )
-    val animatedTotalUpload by animateFloatAsState(
-        targetValue = statusState.totalUpload.toFloat(),
-        animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
-    )
     val animatedUptime by animateFloatAsState(
         targetValue = statusState.uptime.toFloat(),
         animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
@@ -915,7 +696,6 @@ fun ThisDeviceSection(
 
     LaunchedEffect(folders) {
         if (folders.isNotEmpty()) {
-            var lastEventId = 0
             while (isActive) {
                 try {
                     val statuses = coroutineScope {
@@ -937,15 +717,11 @@ fun ThisDeviceSection(
                     totalLocalDirs = dirsSum
                     totalLocalBytes = bytesSum
 
-                    // Only fetch events newer than the last seen id, and accumulate new conflicts
-                    val events = apiClient.getEvents(since = lastEventId, limit = 100)
-                    if (events.isNotEmpty()) {
-                        lastEventId = events.last().id
-                        syncConflictsCount += events.count { event ->
-                            event.type == "ItemFinished" &&
-                                event.data?.get("item")?.jsonPrimitive?.content?.contains("sync-conflict", ignoreCase = true) == true
-                        }
-                    }
+                    // Show the engine's current number of open conflicts (the same list the
+                    // Quarantine dialog shows), instead of summing file events across polls.
+                    syncConflictsCount = try {
+                        apiClient.getConflicts().count { !it.isTerminal }
+                    } catch (_: Exception) { syncConflictsCount }
                 } catch (_: Exception) {}
                 kotlinx.coroutines.delay(3000)
             }
@@ -954,20 +730,15 @@ fun ThisDeviceSection(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-        ),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outlineVariant
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
                 text = "This Device",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(4.dp))
@@ -982,7 +753,7 @@ fun ThisDeviceSection(
             if (syncConflictsCount > 0) {
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = MaterialTheme.shapes.small,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 12.dp)
@@ -999,7 +770,7 @@ fun ThisDeviceSection(
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Info,
+                                imageVector = SynapseIcons.Info,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.error,
                                 modifier = Modifier.size(16.dp)
@@ -1021,32 +792,6 @@ fun ThisDeviceSection(
                 }
             }
 
-            // Side-by-Side Speed Graphs
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                SpeedGraph(
-                    label = "Download",
-                    currentSpeed = statusState.downloadSpeed,
-                    totalBytes = statusState.totalDownload,
-                    color = SynapseStatusColors.Connected, // Emerald
-                    modifier = Modifier.weight(1f)
-                )
-                SpeedGraph(
-                    label = "Upload",
-                    currentSpeed = statusState.uploadSpeed,
-                    totalBytes = statusState.totalUpload,
-                    color = Color(0xFF3B82F6), // Blue
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            HorizontalDivider(
-                color = MaterialTheme.colorScheme.outlineVariant,
-                modifier = Modifier.padding(vertical = 12.dp)
-            )
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1060,14 +805,9 @@ fun ThisDeviceSection(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        val downloadRateText = "${formatRate(animatedDownloadSpeed.toLong() * 8)} (${formatBinaryBytes(animatedTotalDownload.toLong())})"
-                        val uploadRateText = "${formatRate(animatedUploadSpeed.toLong() * 8)} (${formatBinaryBytes(animatedTotalUpload.toLong())})"
                         val localStateText = "${animatedLocalFiles.toLong()}  ${animatedLocalDirs.toLong()}  ~${formatBinaryBytes(animatedLocalBytes.toLong())}"
 
-                        ThisDeviceStatRow("Download Rate", downloadRateText)
-                        ThisDeviceStatRow("Upload Rate", uploadRateText)
                         ThisDeviceStatRow("Local State (Total)", localStateText)
-                        ThisDeviceStatRow("Synced Storage Volume", "~${formatBinaryBytes(animatedLocalBytes.toLong())}")
                     }
                     Column(
                         modifier = Modifier.weight(1f),
@@ -1094,7 +834,7 @@ fun ThisDeviceSection(
                             Text(
                                 text = "Identification",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1110,7 +850,7 @@ fun ThisDeviceSection(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Icon(
-                                    imageVector = if (copiedIdFeedback == myId) Icons.Default.Check else CopyIcon,
+                                    imageVector = if (copiedIdFeedback == myId) SynapseIcons.Check else CopyIcon,
                                     contentDescription = "Copy ID",
                                     tint = if (copiedIdFeedback == myId) SynapseStatusColors.Connected else MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(16.dp)
@@ -1118,14 +858,10 @@ fun ThisDeviceSection(
                             }
                         }
                         
-                        val osName = System.getProperty("os.name") ?: "Windows"
-                        val osArch = System.getProperty("os.arch") ?: "64-bit"
-                        val osLabel = if (osName.contains("Windows", ignoreCase = true)) {
-                            "Windows (64-bit Intel/AMD)"
-                        } else {
-                            "$osName ($osArch)"
-                        }
-                        val verStr = statusState.version.ifEmpty { "v2.1.1" }
+                        val osName = System.getProperty("os.name") ?: "Unknown OS"
+                        val osArch = System.getProperty("os.arch") ?: "unknown arch"
+                        val osLabel = "$osName ($osArch)"
+                        val verStr = statusState.version.ifEmpty { "Unknown" }
                         val versionText = "$verStr, $osLabel"
 
                         ThisDeviceStatRow("Version", versionText)
@@ -1139,20 +875,32 @@ fun ThisDeviceSection(
                     modifier = Modifier.padding(start = 24.dp)
                 ) {
                     val isRunning = statusState.isRunning
-                    val activeColor = SynapseStatusColors.Connected // Connected Emerald
-                    val inactiveColor = SynapseStatusColors.Disconnected // Disconnected Crimson
-                    
+                    // Real figures instead of the old hardcoded Listeners 3/3 and Discovery 3/5.
+                    val remoteDevices = devices.filter { it.id.normalizeDeviceId() != myId.normalizeDeviceId() }
+                    val devicesOnline = if (isRunning) remoteDevices.count { it.connected && !it.paused } else 0
+                    val foldersActive = if (isRunning) folders.count { !it.paused } else 0
+
+                    // Status palette: green when there is activity, amber when some are idle,
+                    // red when nothing is up, and neutral outline when there is nothing to show.
+                    @Composable
+                    fun chartColor(value: Int, max: Int) = when {
+                        max == 0 -> MaterialTheme.colorScheme.outline
+                        value == max -> SynapseStatusColors.Connected
+                        value > 0 -> SynapseStatusColors.Paused
+                        else -> SynapseStatusColors.Disconnected
+                    }
+
                     DonutChart(
-                        label = "Listeners",
-                        value = if (isRunning) 3 else 0,
-                        max = 3,
-                        color = if (isRunning) activeColor else inactiveColor
+                        label = "Devices online",
+                        value = devicesOnline,
+                        max = remoteDevices.size,
+                        color = chartColor(devicesOnline, remoteDevices.size)
                     )
                     DonutChart(
-                        label = "Discovery",
-                        value = if (isRunning) 3 else 0,
-                        max = 5,
-                        color = if (isRunning) activeColor else inactiveColor
+                        label = "Folders active",
+                        value = foldersActive,
+                        max = folders.size,
+                        color = chartColor(foldersActive, folders.size)
                     )
                 }
             }
@@ -1166,7 +914,7 @@ fun ThisDeviceStatRow(label: String, value: String) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = value,
@@ -1187,7 +935,7 @@ fun RemoteDevicesSection(
     onDeviceClick: (String) -> Unit,
     onAddDeviceClick: () -> Unit,
     deviceViewModel: DeviceViewModel,
-    apiClient: SyncthingApiClient
+    apiClient: SynapseApiClient
 ) {
     val myId = statusState.myId
     val remoteDevices = remember(devices, myId) {
@@ -1199,66 +947,33 @@ fun RemoteDevicesSection(
     val coroutineScope = rememberCoroutineScope()
     var deviceToDelete by remember { mutableStateOf<DeviceUiModel?>(null) }
 
-    // Device connection status and rate tracking states
+    // Live connection details (address / connection type) for the expanded device
     var deviceConnectionState by remember { mutableStateOf<com.arcadelabs.synapse.core.domain.models.DeviceConnection?>(null) }
-    var downloadRateState by remember { mutableStateOf(0L) }
-    var uploadRateState by remember { mutableStateOf(0L) }
 
     LaunchedEffect(expandedDeviceId) {
         if (expandedDeviceId != null) {
-            var prevInBytes: Long? = null
-            var prevOutBytes: Long? = null
-            var lastTime = System.currentTimeMillis()
-            
             while (isActive) {
                 try {
                     val connResp = apiClient.systemConnections()
-                    val conn = connResp.connections[expandedDeviceId]
-                    if (conn != null) {
-                        deviceConnectionState = conn
-                        val now = System.currentTimeMillis()
-                        val elapsedSec = (now - lastTime) / 1000.0
-                        if (elapsedSec > 0.5) {
-                            if (prevInBytes != null) {
-                                val diffIn = conn.inBytesTotal - prevInBytes
-                                val rateIn = (diffIn / elapsedSec).toLong()
-                                downloadRateState = rateIn * 8 // bits per second
-                            }
-                            if (prevOutBytes != null) {
-                                val diffOut = conn.outBytesTotal - prevOutBytes
-                                val rateOut = (diffOut / elapsedSec).toLong()
-                                uploadRateState = rateOut * 8 // bits per second
-                            }
-                        }
-                        prevInBytes = conn.inBytesTotal
-                        prevOutBytes = conn.outBytesTotal
-                        lastTime = now
-                    } else {
-                        deviceConnectionState = null
-                        downloadRateState = 0L
-                        uploadRateState = 0L
-                    }
+                    deviceConnectionState = connResp.connections[expandedDeviceId]
                 } catch (_: Exception) {}
                 kotlinx.coroutines.delay(2000)
             }
         } else {
             deviceConnectionState = null
-            downloadRateState = 0L
-            uploadRateState = 0L
         }
     }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
                 text = "Remote Devices (${remoteDevices.size})",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(bottom = 12.dp)
             )
 
@@ -1272,7 +987,7 @@ fun RemoteDevicesSection(
                     Text(
                         text = "No remote devices configured.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             } else {
@@ -1283,12 +998,8 @@ fun RemoteDevicesSection(
                             folder.devices.any { it.deviceID.normalizeDeviceId() == device.id.normalizeDeviceId() }
                         }.map { it.label.ifEmpty { it.id } }
                     }
-                    val downloadRateText = "${formatRate(downloadRateState)} (${formatBytes(deviceConnectionState?.inBytesTotal ?: device.inBytesTotal)})"
-                    val uploadRateText = "${formatRate(uploadRateState)} (${formatBytes(deviceConnectionState?.outBytesTotal ?: device.outBytesTotal)})"
                     val addressText = deviceConnectionState?.address?.ifEmpty { null } ?: device.addressConnected.ifEmpty { null } ?: device.addresses.firstOrNull() ?: "Dynamic"
                     val connectionTypeText = deviceConnectionState?.type?.ifEmpty { null } ?: device.connectionType.ifEmpty { null } ?: "Unknown"
-                    val connectionsText = if (device.connected) "1 + 1" else "0"
-                    val versionText = deviceConnectionState?.clientVersion?.ifEmpty { null } ?: device.clientVersion.ifEmpty { null } ?: "v2.1.2"
                     val foldersText = sharedFolders.joinToString(", ").ifEmpty { "None" }
 
                     Column(
@@ -1296,7 +1007,7 @@ fun RemoteDevicesSection(
                             .fillMaxWidth()
                             .animateContentSize()
                     ) {
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        HorizontalDivider()
 
                         // Device Item Row
                         Row(
@@ -1342,28 +1053,18 @@ fun RemoteDevicesSection(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .background(
-                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                                        RoundedCornerShape(8.dp)
+                                        MaterialTheme.colorScheme.surfaceContainerLow,
+                                        MaterialTheme.shapes.small
                                     )
                                     .padding(horizontal = 12.dp, vertical = 10.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                // Download Rate
-                                FolderInfoRow(label = "Download Rate", value = downloadRateText)
-                                // Upload Rate
-                                FolderInfoRow(label = "Upload Rate", value = uploadRateText)
                                 // Address
                                 FolderInfoRow(label = "Address", value = addressText)
                                 // Connection Type
                                 FolderInfoRow(label = "Connection Type", value = connectionTypeText)
-                                // Number of Connections
-                                FolderInfoRow(label = "Number of Connections", value = connectionsText)
-                                // Compression
-                                FolderInfoRow(label = "Compression", value = "Metadata Only")
                                 // Identification
                                 FolderInfoRow(label = "Identification", value = device.id.take(7))
-                                // Version
-                                FolderInfoRow(label = "Version", value = versionText)
                                 // Folders
                                 FolderInfoRow(label = "Folders", value = foldersText)
 
@@ -1372,28 +1073,21 @@ fun RemoteDevicesSection(
                                     modifier = Modifier.padding(top = 8.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Button(
+                                    FilledTonalButton(
                                         onClick = {
                                             deviceViewModel.toggleDevicePause(device.id, device.paused)
-                                        },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                                            contentColor = MaterialTheme.colorScheme.primary
-                                        )
+                                        }
                                     ) {
                                         Text(if (device.paused) "Resume" else "Pause")
                                     }
 
-                                    Button(
+                                    OutlinedButton(
                                         onClick = {
                                             deviceToDelete = device
                                         },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
-                                            contentColor = MaterialTheme.colorScheme.error
-                                        )
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
                                     ) {
-                                        Text("Delete")
+                                        Text("Remove")
                                     }
                                 }
                             }
@@ -1402,7 +1096,7 @@ fun RemoteDevicesSection(
                 }
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            HorizontalDivider()
             Spacer(modifier = Modifier.height(16.dp))
 
             // Action Buttons
@@ -1433,7 +1127,7 @@ fun RemoteDevicesSection(
                     onClick = onAddDeviceClick,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(SynapseIcons.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Add Device")
                 }
@@ -1442,39 +1136,17 @@ fun RemoteDevicesSection(
 
         // Delete Confirmation Dialog
         deviceToDelete?.let { device ->
-            AlertDialog(
-                onDismissRequest = { deviceToDelete = null },
-                shape = SynapseDialogShape,
-                title = { Text("Delete Device?", style = MaterialTheme.typography.titleLarge) },
-                text = {
-                    Text(
-                        "Are you sure you want to delete ${device.name.ifEmpty { "this device" }}?\n\nID: ${device.id.chunked(4).joinToString(" ")}",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+            com.arcadelabs.synapse.ui.ConfirmDialog(
+                icon = SynapseIcons.Delete,
+                title = "Remove ${device.name.ifEmpty { "this device" }}?",
+                text = "Folders stop syncing with this device. You can add it again later.\n\n${device.id.formatDeviceId()}",
+                confirmLabel = "Remove",
+                destructive = true,
+                onConfirm = {
+                    deviceViewModel.deleteDevice(device.id)
+                    deviceToDelete = null
                 },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            deviceViewModel.deleteDevice(device.id)
-                            deviceToDelete = null
-                        },
-                        shape = SynapsePillShape,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error,
-                            contentColor = MaterialTheme.colorScheme.onError
-                        )
-                    ) {
-                        Text("Delete")
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = { deviceToDelete = null },
-                        shape = SynapsePillShape
-                    ) {
-                        Text("Cancel")
-                    }
-                }
+                onDismiss = { deviceToDelete = null }
             )
         }
     }
@@ -1493,19 +1165,6 @@ private fun formatUptime(seconds: Long): String {
     }
 }
 
-private fun formatBytes(bytes: Long): String {
-    if (bytes <= 0) return "0 B"
-    val kb = bytes.toDouble() / 1024.0
-    val mb = kb / 1024.0
-    val gb = mb / 1024.0
-    return when {
-        gb >= 1.0 -> "${(gb * 10).toLong() / 10.0} GB"
-        mb >= 1.0 -> "${(mb * 10).toLong() / 10.0} MB"
-        kb >= 1.0 -> "${(kb * 10).toLong() / 10.0} KB"
-        else -> "$bytes B"
-    }
-}
-
 private fun formatBinaryBytes(bytes: Long): String {
     if (bytes <= 0) return "0 B"
     val kb = bytes.toDouble() / 1024.0
@@ -1519,14 +1178,3 @@ private fun formatBinaryBytes(bytes: Long): String {
     }
 }
 
-private fun formatRate(bitsPerSec: Long): String {
-    if (bitsPerSec < 1000) return "$bitsPerSec bps"
-    val kbps = bitsPerSec / 1000.0
-    if (kbps < 1000) return "${(kbps * 10).toLong() / 10.0} Kbps"
-    val mbps = kbps / 1000.0
-    return "${(mbps * 10).toLong() / 10.0} Mbps"
-}
-
-private fun formatSpeed(bytesPerSec: Long): String {
-    return "${formatBytes(bytesPerSec)}/s"
-}

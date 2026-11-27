@@ -9,7 +9,7 @@ import androidx.compose.ui.unit.dp
 fun borderForTheme(): BorderStroke {
     return BorderStroke(
         width = 1.dp,
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+        color = MaterialTheme.colorScheme.outlineVariant
     )
 }
 
@@ -23,10 +23,6 @@ fun formatBytesKmp(bytes: Long): String {
         kb >= 1.0 -> "${((kb * 100).toLong() / 100.0)} KiB"
         else -> "$bytes B"
     }
-}
-
-fun formatSpeedKmp(bytesPerSec: Long): String {
-    return "${formatBytesKmp(bytesPerSec)}/s"
 }
 
 fun formatUptime(seconds: Long): String {

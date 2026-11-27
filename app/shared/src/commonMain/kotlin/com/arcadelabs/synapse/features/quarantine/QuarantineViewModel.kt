@@ -6,7 +6,7 @@ import com.arcadelabs.synapse.core.domain.models.CoreDiffResponse
 import com.arcadelabs.synapse.core.domain.models.CoreQuarantineConflict
 import com.arcadelabs.synapse.core.domain.models.CoreResolveAction
 import com.arcadelabs.synapse.core.domain.models.CoreResolveRequest
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.network.SynapseApiClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,7 +23,7 @@ data class QuarantineUiState(
 )
 
 class QuarantineViewModel(
-    private val apiClient: SyncthingApiClient
+    private val apiClient: SynapseApiClient
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(QuarantineUiState())
@@ -132,33 +132,6 @@ class QuarantineViewModel(
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
                     error = e.message ?: "Failed to ignore conflict"
-                )
-            }
-        }
-    }
-
-    fun reopen(conflictId: String) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
-            try {
-                val success = apiClient.reopenConflict(conflictId)
-                if (success) {
-                    _uiState.value = _uiState.value.copy(
-                        successMessage = "Reopened conflict $conflictId",
-                        selectedConflictId = null,
-                        selectedDiff = null
-                    )
-                    loadConflicts()
-                } else {
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        error = "Server could not reopen conflict $conflictId"
-                    )
-                }
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    error = e.message ?: "Failed to reopen conflict"
                 )
             }
         }

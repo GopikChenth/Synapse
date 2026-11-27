@@ -245,7 +245,7 @@ jobs:
           sed -i "s/pkgver=1.0.0/pkgver=${RAW_VER}/g" packaging/arch/PKGBUILD
           sed -i "s/pkgver=1.0.0/pkgver=${RAW_VER}/g" packaging/cachyos/PKGBUILD
           docker run --rm -v ${{ github.workspace }}:/workspace archlinux:latest bash -c "
-            pacman -Sy --noconfirm base-devel java-runtime-headless syncthing hicolor-icon-theme git &&
+            pacman -Sy --noconfirm base-devel java-runtime-headless hicolor-icon-theme git &&
             useradd -m builder &&
             git config --global --add safe.directory '*' &&
             cp -r /workspace /tmp/pkgbuild &&
@@ -255,7 +255,7 @@ jobs:
             cp *.pkg.tar.zst /workspace/arch-artifacts/
           "
           docker run --rm -v ${{ github.workspace }}:/workspace archlinux:latest bash -c "
-            pacman -Sy --noconfirm base-devel java-runtime-headless syncthing hicolor-icon-theme git &&
+            pacman -Sy --noconfirm base-devel java-runtime-headless hicolor-icon-theme git &&
             useradd -m builder &&
             git config --global --add safe.directory '*' &&
             cp -r /workspace /tmp/pkgbuild &&

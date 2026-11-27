@@ -1,25 +1,27 @@
 package com.arcadelabs.synapse.core.designsystem
 
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes
 import androidx.compose.ui.unit.dp
 
 /**
- * Synapse Design Specification Corner Shapes & Elevation
- * Conforms strictly to design.md Section 4:
- * - Cards & List Containers: RoundedCornerShape(12.dp)
- * - Overlays / Bottom Sheets / Dialogs: RoundedCornerShape(28.dp)
- * - Buttons / Segmented Active: Fully rounded pill shape (24.dp / 50%)
+ * The unmodified Material 3 shape scale
+ * (extraSmall 4, small 8, medium 12, large 16, extraLarge 28).
+ *
+ * Prefer `MaterialTheme.shapes.*` or a component's default shape. The
+ * aliases below exist for non-composable call sites and map 1:1 to tokens.
  */
-val SynapseShapes = Shapes(
-    extraSmall = RoundedCornerShape(4.dp),
-    small = RoundedCornerShape(8.dp),
-    medium = RoundedCornerShape(12.dp),      // Cards & List Containers
-    large = RoundedCornerShape(16.dp),
-    extraLarge = RoundedCornerShape(28.dp)   // Overlays / Bottom Sheets / Dialogs
-)
+val SynapseShapes = Shapes()
 
+/** = MaterialTheme.shapes.medium — cards and list containers. */
 val SynapseCardShape = RoundedCornerShape(12.dp)
+
+/** = MaterialTheme.shapes.extraLarge — dialogs (already the AlertDialog default). */
 val SynapseDialogShape = RoundedCornerShape(28.dp)
-val SynapsePillShape = RoundedCornerShape(24.dp)
+
+/** = ShapeDefaults "full" — buttons, chips, segmented indicators (already the Button default). */
+val SynapsePillShape = CircleShape
+
+/** = extraLarge, top corners only — bottom sheets. */
 val SynapseBottomSheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)

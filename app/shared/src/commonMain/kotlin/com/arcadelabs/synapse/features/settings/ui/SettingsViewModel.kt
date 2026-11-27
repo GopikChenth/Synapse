@@ -4,8 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arcadelabs.synapse.core.domain.models.ConfigOptions
 import com.arcadelabs.synapse.core.domain.models.GuiConfig
+import com.arcadelabs.synapse.core.domain.models.isSynapseCore
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.network.SynapseApiClient
 import com.arcadelabs.synapse.core.prefs.PreferencesHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +20,10 @@ data class SettingsUiState(
 
     val isLoading: Boolean = true,
     val error: String? = null,
+
+    // True only when connected to the legacy engine. Synapse Core has no options or GUI
+    // config API and ignores renaming this device, so those settings are hidden for it.
+    val isLegacyEngine: Boolean = false,
 
     // Device identity
     val deviceName: String = "",
@@ -64,7 +69,7 @@ data class SettingsUiState(
 )
 
 class SettingsViewModel(
-    private val apiClient: SyncthingApiClient,
+    private val apiClient: SynapseApiClient,
     private val preferencesHelper: PreferencesHelper
 ) : ViewModel() {
 
@@ -88,8 +93,10 @@ class SettingsViewModel(
                 )
             }
             try {
-                val options = apiClient.getConfigOptions()
-                val gui = apiClient.getConfigGui()
+                val isLegacyEngine = !apiClient.systemVersion().isSynapseCore()
+                // Only the legacy engine serves these; skip the calls for Synapse Core.
+                val options = if (isLegacyEngine) apiClient.getConfigOptions() else ConfigOptions()
+                val gui = if (isLegacyEngine) apiClient.getConfigGui() else GuiConfig()
                 val status = apiClient.systemStatus()
                 val config = apiClient.systemConfig()
 
@@ -102,6 +109,7 @@ class SettingsViewModel(
                         loadState = FormLoadState.Ready,
                         isLoading = false,
                         error = null,
+                        isLegacyEngine = isLegacyEngine,
                         deviceName = localDevice?.name ?: "",
                         deviceId = status.myID,
                         // Options
@@ -192,6 +200,12 @@ class SettingsViewModel(
             _uiState.update { it.copy(saveState = FormSaveState.Saving, isSaving = true, saveSuccess = false, saveError = null) }
             try {
                 val state = _uiState.value
+                if (!state.isLegacyEngine) {
+                    // Nothing on Synapse Core is saved through this form; appearance and
+                    // start-on-boot are stored the moment they change.
+                    _uiState.update { it.copy(saveState = FormSaveState.Idle, isSaving = false) }
+                    return@launch
+                }
                 val baseOptions = state.originalOptions ?: ConfigOptions()
 
                 // Parse list fields

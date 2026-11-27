@@ -10,16 +10,16 @@ package com.arcadelabs.synapse.core.prefs
  *   - Web      → localStorage
  */
 interface PreferencesHelper {
-    /** Base URL of the Syncthing REST API, e.g. "http://localhost:8384" */
+    /** Base URL of the Synapse REST API, e.g. "http://localhost:8384" */
     var apiBaseUrl: String
 
-    /** Syncthing X-API-Key header value */
+    /** Synapse X-API-Key header value */
     var apiKey: String
 
     /** Whether to accept incoming folder shares automatically */
     var autoAcceptFolders: Boolean
 
-    /** Path to Syncthing's config.xml file on disk (platform-dependent) */
+    /** Path to the engine's config.xml file on disk (platform-dependent) */
     var configFilePath: String
 
     /** Selected app UI theme */

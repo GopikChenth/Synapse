@@ -13,7 +13,7 @@ The Synapse Core local control plane exposes an embedded HTTP REST and WebSocket
 
 ### Two API Planes:
 1. **Native Synapse API (`/api/v1/*`):** Rich, typed API designed for modern peer-to-peer file synchronization, FastCDC content-defined chunking, Merkle Revision DAG causality, and 3-Way interactive conflict resolution.
-2. **Syncthing Compatibility Layer (`/rest/*`):** Drop-in route aliases and query mappings matching the Syncthing REST API standard. Allows existing Syncthing-compatible GUI frontends, CLI tools, and scripts to control Synapse Core seamlessly.
+2. **REST Layer (`/rest/*`):** Route aliases with query-parameter forms (`?folder=`, `?device=`) and a full-configuration endpoint (`/rest/system/config`). The Synapse apps' REST client uses these; they map onto the same handlers as `/api/v1/*`.
 
 ---
 
@@ -26,7 +26,7 @@ Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
-`X-API-Key: <token>` is also accepted (Syncthing-style clients). Because browsers cannot set headers on a WebSocket upgrade, the event stream (`/api/v1/events`, `/rest/events`) additionally accepts `?token=<token>`. No other route accepts the token in the URL.
+`X-API-Key: <token>` is also accepted. Because browsers cannot set headers on a WebSocket upgrade, the event stream (`/api/v1/events`, `/rest/events`) additionally accepts `?token=<token>`. No other route accepts the token in the URL.
 
 **Where the token comes from:** pass `--token <token>` (or `SYNAPSE_TOKEN`). If none is given, the daemon creates a random 256-bit hex token on first start and stores it in `<SYNAPSE_HOME>/api.token` (file mode `0600` on Unix). UI clients and the CLI read it from there. The API never runs without a token.
 
@@ -41,7 +41,7 @@ Returns daemon uptime, memory footprint, active peer count, and synchronization 
 
 * **Endpoints:**
   * Native: `GET /api/v1/system/status`
-  * Syncthing Alias: `GET /rest/system/status`
+  * REST alias: `GET /rest/system/status`
 * **Response:** `200 OK`
 ```json
 {
@@ -59,7 +59,7 @@ Returns daemon uptime, memory footprint, active peer count, and synchronization 
 ### 3.2 Get Engine Version
 * **Endpoints:**
   * Native: `GET /api/v1/system/version`
-  * Syncthing Alias: `GET /rest/system/version`
+  * REST alias: `GET /rest/system/version`
 * **Response:** `200 OK`
 ```json
 {
@@ -73,7 +73,7 @@ Returns daemon uptime, memory footprint, active peer count, and synchronization 
 ### 3.3 Health Ping
 * **Endpoints:**
   * Native: `GET /api/v1/system/ping`
-  * Syncthing Alias: `GET /rest/system/ping`
+  * REST alias: `GET /rest/system/ping`
 * **Response:** `200 OK`
 ```json
 {
@@ -91,7 +91,7 @@ Retrieves real-time throughput, latency, and connection states for all cluster p
 
 * **Endpoints:**
   * Native: `GET /api/v1/connections`
-  * Syncthing Alias: `GET /rest/system/connections`
+  * REST alias: `GET /rest/system/connections`
 * **Response:** `200 OK`
 ```json
 {
@@ -116,7 +116,7 @@ Retrieves real-time throughput, latency, and connection states for all cluster p
 ### 4.1 List Configured Folders
 * **Endpoints:**
   * Native: `GET /api/v1/folders`
-  * Syncthing Alias: `GET /rest/system/folders`
+  * REST alias: `GET /rest/system/folders`
 * **Response:** `200 OK`
 ```json
 [
@@ -140,7 +140,7 @@ Registers a directory for continuous synchronization and starts the inotify/cros
 
 * **Endpoints:**
   * Native: `POST /api/v1/folders`
-  * Syncthing Alias: `POST /rest/system/folders`
+  * REST alias: `POST /rest/system/folders`
 * **Request Body:**
 ```json
 {
@@ -171,16 +171,16 @@ Registers a directory for continuous synchronization and starts the inotify/cros
 ### 4.5 Rescan Folder (Trigger Index Scan)
 * **Endpoints:**
   * Native: `POST /api/v1/folders/:id/rescan`
-  * Syncthing Alias: `POST /rest/db/scan?folder=:id`
+  * REST alias: `POST /rest/db/scan?folder=:id`
 * **Response:** `200 OK`
 
 ### 4.6 Folder Status & Completion
 * **Status:**
   * Native: `GET /api/v1/folders/:id/status`
-  * Syncthing Alias: `GET /rest/db/status?folder=:id`
+  * REST alias: `GET /rest/db/status?folder=:id`
 * **Completion:**
   * Native: `GET /api/v1/folders/:id/completion`
-  * Syncthing Alias: `GET /rest/db/completion?folder=:id&device=:device_id`
+  * REST alias: `GET /rest/db/completion?folder=:id&device=:device_id`
 
 ```json
 {
@@ -201,10 +201,10 @@ Registers a directory for continuous synchronization and starts the inotify/cros
 ### 4.8 Folder Ignore Rules
 * **Fetch Patterns:**
   * Native: `GET /api/v1/folders/:id/ignores`
-  * Syncthing Alias: `GET /rest/db/ignores?folder=:id`
+  * REST alias: `GET /rest/db/ignores?folder=:id`
 * **Save Patterns:**
   * Native: `POST /api/v1/folders/:id/ignores`
-  * Syncthing Alias: `POST /rest/db/ignores?folder=:id`
+  * REST alias: `POST /rest/db/ignores?folder=:id`
 * **Payload:**
 ```json
 {
@@ -224,7 +224,7 @@ Registers a directory for continuous synchronization and starts the inotify/cros
 ### 5.1 List Configured Devices
 * **Endpoints:**
   * Native: `GET /api/v1/devices`
-  * Syncthing Alias: `GET /rest/system/devices`
+  * REST alias: `GET /rest/system/devices`
 * **Response:** `200 OK`
 ```json
 [
@@ -243,7 +243,7 @@ Registers a directory for continuous synchronization and starts the inotify/cros
 ### 5.2 Add / Register Device
 * **Endpoints:**
   * Native: `POST /api/v1/devices`
-  * Syncthing Alias: `POST /rest/system/devices`
+  * REST alias: `POST /rest/system/devices`
 * **Request Body:**
 ```json
 {
@@ -390,7 +390,7 @@ Clients connect to stream live notifications and daemon state events.
 
 * **Endpoints:**
   * Native: `ws://127.0.0.1:9090/api/v1/events`
-  * Syncthing Alias: `ws://127.0.0.1:9090/rest/events`
+  * REST alias: `ws://127.0.0.1:9090/rest/events`
 
 ### 8.1 Event Types & Payloads
 

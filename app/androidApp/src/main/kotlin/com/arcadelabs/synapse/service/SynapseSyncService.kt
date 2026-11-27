@@ -19,19 +19,19 @@ import com.arcadelabs.synapse.MainActivity
 import com.arcadelabs.synapse.R
 import kotlinx.coroutines.*
 
-class SyncthingService : Service() {
+class SynapseSyncService : Service() {
 
-    private val binder = SyncthingBinder()
+    private val binder = SynapseSyncBinder()
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    private var runnable: SyncthingRunnable? = null
+    private var runnable: EngineRunnable? = null
     
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiMulticastLock: WifiManager.MulticastLock? = null
     private var runConditionMonitor: RunConditionMonitor? = null
     private var widgetPollingJob: Job? = null
 
-    inner class SyncthingBinder : Binder() {
-        fun getService(): SyncthingService = this@SyncthingService
+    inner class SynapseSyncBinder : Binder() {
+        fun getService(): SynapseSyncService = this@SynapseSyncService
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -49,9 +49,9 @@ class SyncthingService : Service() {
             val behaviorStr = prefs.getString("run_behavior", "FOLLOW")
             if (behaviorStr == "FOLLOW") {
                 if (isMet) {
-                    startSyncthingProcessOnly()
+                    startEngineProcessOnly()
                 } else {
-                    stopSyncthingProcessOnly()
+                    stopEngineProcessOnly()
                 }
             }
         }
@@ -65,11 +65,11 @@ class SyncthingService : Service() {
             val behaviorStr = prefs.getString("run_behavior", "FOLLOW")
             when (behaviorStr) {
                 "FORCE_START" -> {
-                    updateNotification("Syncthing is running")
-                    startSyncthingProcessOnly()
+                    updateNotification("Synapse is running")
+                    startEngineProcessOnly()
                 }
                 "FORCE_STOP" -> {
-                    stopSyncthing()
+                    stopEngine()
                 }
                 else -> { // FOLLOW
                     val isWifiConnected = runConditionMonitor?.let { monitor ->
@@ -80,16 +80,16 @@ class SyncthingService : Service() {
                     } ?: false
                     
                     if (isWifiConnected) {
-                        updateNotification("Syncthing is running")
-                        startSyncthingProcessOnly()
+                        updateNotification("Synapse is running")
+                        startEngineProcessOnly()
                     } else {
-                        updateNotification("Syncthing is waiting for run conditions")
-                        stopSyncthingProcessOnly()
+                        updateNotification("Synapse is waiting for run conditions")
+                        stopEngineProcessOnly()
                     }
                 }
             }
         } else if (action == ACTION_STOP) {
-            stopSyncthing()
+            stopEngine()
         }
         return START_NOT_STICKY
     }
@@ -99,13 +99,13 @@ class SyncthingService : Service() {
         manager.notify(NOTIFICATION_ID, createNotification(content, progressPercent))
     }
 
-    private fun startSyncthingProcessOnly() {
+    private fun startEngineProcessOnly() {
         if (runnable != null) return
 
         _serviceState.value = ServiceLifecycleState.Starting
         updateNotification("Synapse is running")
 
-        runnable = SyncthingRunnable(this, SyncthingRunnable.CommandType.SERVE).apply {
+        runnable = EngineRunnable(this, EngineRunnable.CommandType.SERVE).apply {
             start { exitCode ->
                 Log.i(TAG, "Runnable exited with code $exitCode")
                 runnable?.stop()
@@ -113,7 +113,7 @@ class SyncthingService : Service() {
                 stopWidgetPolling()
                 stopDynamicIsland()
                 if (exitCode == 3) {
-                    startSyncthingProcessOnly()
+                    startEngineProcessOnly()
                 } else if (exitCode != 0) {
                     _serviceState.value = ServiceLifecycleState.Error("Process exited with code $exitCode", exitCode)
                 } else {
@@ -126,7 +126,7 @@ class SyncthingService : Service() {
         startDynamicIsland()
     }
 
-    private fun stopSyncthingProcessOnly() {
+    private fun stopEngineProcessOnly() {
         runnable?.stop()
         runnable = null
         stopWidgetPolling()
@@ -135,7 +135,7 @@ class SyncthingService : Service() {
         updateNotification("Synapse is waiting for run conditions")
     }
 
-    private fun stopSyncthing() {
+    private fun stopEngine() {
         runnable?.stop()
         runnable = null
         stopWidgetPolling()
@@ -148,126 +148,41 @@ class SyncthingService : Service() {
     private fun startWidgetPolling() {
         if (widgetPollingJob != null) return
         widgetPollingJob = serviceScope.launch {
-            var lastInBytes = 0L
-            var lastOutBytes = 0L
-            var lastTime = System.currentTimeMillis()
-            
-            val downloadHistory = mutableListOf<Long>()
-            val uploadHistory = mutableListOf<Long>()
-
             val koin = org.koin.core.context.GlobalContext.get()
-            val apiClient = koin.get<com.arcadelabs.synapse.core.network.SyncthingApiClient>()
+            val apiClient = koin.get<com.arcadelabs.synapse.core.network.SynapseApiClient>()
+            // Only push widget/notification updates when the shown state actually changes.
+            var lastText: String? = null
 
             while (isActive) {
-                try {
-                    val status = apiClient.systemStatus()
-                    val connections = apiClient.systemConnections()
-                    val config = apiClient.systemConfig()
+                // The engine answering /rest/system/status is the only thing we can state for certain.
+                // (No sync percentage: the engine does not report real completion.)
+                val engineUp = try {
+                    apiClient.systemStatus()
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+                val text = if (engineUp) "Synapse is running" else "Starting..."
 
-                    val dbStatuses = coroutineScope {
-                        config.folders.map { folder ->
-                            async {
-                                try {
-                                    apiClient.dbStatus(folder.id)
-                                } catch (_: Exception) {
-                                    null
-                                }
-                            }
-                        }.awaitAll()
-                    }
-
-                    var totalBytes = 0L
-                    var totalInSyncBytes = 0L
-                    var totalGlobalBytes = 0L
-
-                    dbStatuses.filterNotNull().forEach { dbStatus ->
-                        totalBytes += dbStatus.localBytes
-                        totalInSyncBytes += dbStatus.inSyncBytes
-                        totalGlobalBytes += dbStatus.globalBytes
-                    }
-
-                    val progressPercent = if (totalGlobalBytes > 0L) {
-                        ((totalInSyncBytes.toDouble() / totalGlobalBytes.toDouble()) * 100.0).toInt().coerceIn(0, 100)
-                    } else {
-                        100
-                    }
-
-                    val now = System.currentTimeMillis()
-                    val elapsedSec = (now - lastTime).toDouble() / 1000.0
-                    lastTime = now
-
-                    val currentIn = connections.total.inBytesTotal
-                    val currentOut = connections.total.outBytesTotal
-
-                    val dlSpeed = if (lastInBytes > 0 && elapsedSec > 0) {
-                        ((currentIn - lastInBytes) / elapsedSec).toLong().coerceAtLeast(0)
-                    } else 0L
-                    val ulSpeed = if (lastOutBytes > 0 && elapsedSec > 0) {
-                        ((currentOut - lastOutBytes) / elapsedSec).toLong().coerceAtLeast(0)
-                    } else 0L
-
-                    lastInBytes = currentIn
-                    lastOutBytes = currentOut
-
-                    // Add to history
-                    downloadHistory.add(dlSpeed)
-                    uploadHistory.add(ulSpeed)
-                    if (downloadHistory.size > 15) downloadHistory.removeAt(0)
-                    if (uploadHistory.size > 15) uploadHistory.removeAt(0)
-
-                    val peersCount = connections.connections.values.count { it.connected }
-
-                    val chartBitmap = com.arcadelabs.synapse.widget.SynapseWidgetProvider.drawSpeedChart(
-                        context = this@SyncthingService,
-                        downloadHistory = downloadHistory,
-                        uploadHistory = uploadHistory
-                    )
-
-                    val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(this@SyncthingService)
-                    val thisWidget = android.content.ComponentName(this@SyncthingService, com.arcadelabs.synapse.widget.SynapseWidgetProvider::class.java)
-                    val appWidgetIds = appWidgetManager.getAppWidgetIds(thisWidget)
-
-                    if (appWidgetIds.isNotEmpty()) {
-                        com.arcadelabs.synapse.widget.SynapseWidgetProvider.updateWidgetState(
-                            context = this@SyncthingService,
-                            appWidgetManager = appWidgetManager,
-                            appWidgetIds = appWidgetIds,
-                            isRunning = true,
-                            peersCount = peersCount,
-                            progressText = "$progressPercent% synced",
-                            progressPercent = progressPercent,
-                            chartBitmap = chartBitmap
-                        )
-                    }
-
-                    // Custom Dynamic Island updates removed
-
-                    // Update ongoing/status bar notification with active sync progress
-                    updateNotification("$progressPercent% synced", progressPercent)
-                } catch (e: Exception) {
-                    // REST API not ready yet or offline, update widget with starting state
+                if (text != lastText) {
+                    lastText = text
                     try {
-                        val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(this@SyncthingService)
-                        val thisWidget = android.content.ComponentName(this@SyncthingService, com.arcadelabs.synapse.widget.SynapseWidgetProvider::class.java)
+                        val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(this@SynapseSyncService)
+                        val thisWidget = android.content.ComponentName(this@SynapseSyncService, com.arcadelabs.synapse.widget.SynapseWidgetProvider::class.java)
                         val appWidgetIds = appWidgetManager.getAppWidgetIds(thisWidget)
                         if (appWidgetIds.isNotEmpty()) {
                             com.arcadelabs.synapse.widget.SynapseWidgetProvider.updateWidgetState(
-                                context = this@SyncthingService,
+                                context = this@SynapseSyncService,
                                 appWidgetManager = appWidgetManager,
                                 appWidgetIds = appWidgetIds,
                                 isRunning = true,
-                                peersCount = 0,
-                                progressText = "Starting...",
-                                progressPercent = 0,
-                                chartBitmap = null
+                                progressText = if (engineUp) "Running" else "Starting..."
                             )
                         }
                     } catch (_: Exception) {}
 
-                    // Custom Dynamic Island updates removed
-
-                    // Update ongoing notification
-                    updateNotification("Starting...", 0)
+                    // Ongoing notification: indeterminate progress only while starting.
+                    if (engineUp) updateNotification(text) else updateNotification(text, 0)
                 }
 
                 delay(5000)
@@ -289,10 +204,7 @@ class SyncthingService : Service() {
                     appWidgetManager = appWidgetManager,
                     appWidgetIds = appWidgetIds,
                     isRunning = false,
-                    peersCount = 0,
-                    progressText = "Stopped",
-                    progressPercent = 0,
-                    chartBitmap = null
+                    progressText = "Stopped"
                 )
             }
 
@@ -306,7 +218,7 @@ class SyncthingService : Service() {
 
     private fun acquireLocks() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        // Use indefinite acquire() — Syncthing is a long-running daemon and the
+        // Use indefinite acquire() — Synapse is a long-running daemon and the
         // 10-minute cap would let the device sleep mid-sync. The lock is released
         // explicitly in releaseLocks() called from onDestroy().
         @Suppress("WakelockTimeout")
@@ -334,7 +246,7 @@ class SyncthingService : Service() {
         isInstanceRunning = false
         super.onDestroy()
         runConditionMonitor?.stop()
-        stopSyncthing()
+        stopEngine()
         releaseLocks()
         serviceScope.cancel()
     }
@@ -378,7 +290,7 @@ class SyncthingService : Service() {
                 .setProgressIndeterminate(progressPercent == 0 || progressPercent == 100)
 
             return Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("Syncing")
+                .setContentTitle("Synapse")
                 .setContentText(content)
                 .setSmallIcon(smallIconRes)
                 .setColor(statusColor)
@@ -394,7 +306,7 @@ class SyncthingService : Service() {
         }
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Syncing")
+            .setContentTitle("Synapse")
             .setContentText(content)
             .setSmallIcon(smallIconRes)
             .setColor(statusColor)
@@ -431,7 +343,7 @@ class SyncthingService : Service() {
     }
 
     companion object {
-        private const val TAG = "SyncthingService"
+        private const val TAG = "SynapseSyncService"
         private const val CHANNEL_ID = "synapse_service_channel"
         private const val NOTIFICATION_ID = 1001
 

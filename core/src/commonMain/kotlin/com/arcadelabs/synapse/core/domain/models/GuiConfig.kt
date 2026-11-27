@@ -4,7 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * Models the `gui` section of the Syncthing configuration.
+ * Models the `gui` section of the Synapse configuration.
  * Corresponds to the JSON returned by `GET /rest/config/gui`.
  */
 @Serializable

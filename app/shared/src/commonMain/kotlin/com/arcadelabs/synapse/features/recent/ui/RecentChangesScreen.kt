@@ -1,248 +1,145 @@
 package com.arcadelabs.synapse.features.recent.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.arcadelabs.synapse.core.designsystem.SynapseIcons
+import com.arcadelabs.synapse.core.designsystem.components.EmptyState
+import com.arcadelabs.synapse.core.designsystem.components.ErrorState
+import com.arcadelabs.synapse.core.designsystem.components.StatusBadge
+import com.arcadelabs.synapse.core.designsystem.components.SyncState
+import com.arcadelabs.synapse.core.designsystem.components.colors
 import com.arcadelabs.synapse.core.domain.state.AsyncResource
 import org.koin.compose.viewmodel.koinViewModel
 
+/**
+ * Recent changes. On mobile it is a full-screen page with a close action;
+ * with [embedded] = true (desktop navigation destination) it shows a page
+ * headline instead of a top app bar.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecentChangesScreen(
     onCloseClick: () -> Unit,
+    embedded: Boolean = false,
     viewModel: RecentChangesViewModel = koinViewModel()
 ) {
     val state by viewModel.state.collectAsState()
-    val changes = state.changes
     val isLoading = state.isLoading
-    val error = state.error
 
     LaunchedEffect(Unit) {
         viewModel.loadRecentChanges()
     }
 
+    if (embedded) {
+        com.arcadelabs.synapse.core.designsystem.components.DesktopPage(
+            title = "Recent changes",
+            actions = {
+                IconButton(onClick = { viewModel.loadRecentChanges() }, enabled = !isLoading) {
+                    Icon(SynapseIcons.Refresh, contentDescription = "Refresh")
+                }
+            }
+        ) {
+            RecentChangesBody(state = state, onRetry = { viewModel.loadRecentChanges() })
+        }
+        return
+    }
+
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
-                title = { Text("Recent Changes", style = MaterialTheme.typography.titleMedium) },
+                title = { Text("Recent changes") },
                 navigationIcon = {
                     IconButton(onClick = onCloseClick) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
+                        Icon(SynapseIcons.Close, contentDescription = "Close")
                     }
                 },
                 actions = {
-                    IconButton(
-                        onClick = { viewModel.loadRecentChanges() },
-                        enabled = !isLoading
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    IconButton(onClick = { viewModel.loadRecentChanges() }, enabled = !isLoading) {
+                        Icon(SynapseIcons.Refresh, contentDescription = "Refresh")
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                )
+                scrollBehavior = scrollBehavior
             )
         }
     ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .background(MaterialTheme.colorScheme.background)
-        ) {
-            when (val res = state.resource) {
-                is AsyncResource.Loading -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-                is AsyncResource.Error -> {
-                    if (changes.isEmpty()) {
-                        Column(
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = res.message.ifEmpty { error ?: "An error occurred" },
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Button(onClick = { viewModel.loadRecentChanges() }) {
-                                Text("Retry")
-                            }
-                        }
-                    } else {
-                        LazyColumn(
-                            contentPadding = PaddingValues(vertical = 8.dp),
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            items(changes) { change ->
-                                RecentChangeItemCard(change = change)
-                            }
-                        }
-                    }
-                }
-                is AsyncResource.Empty -> {
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "No recent changes detected.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Recent synchronization activities will appear here once files are updated.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        )
-                    }
-                }
-                is AsyncResource.Success, is AsyncResource.Idle -> {
-                    if (changes.isEmpty()) {
-                        Column(
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = "No recent changes detected.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "Recent synchronization activities will appear here once files are updated.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp)
-                            )
-                        }
-                    } else {
-                        LazyColumn(
-                            contentPadding = PaddingValues(vertical = 8.dp),
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            items(changes) { change ->
-                                RecentChangeItemCard(change = change)
-                            }
-                        }
-                    }
-                }
-            }
+        Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
+            RecentChangesBody(state = state, onRetry = { viewModel.loadRecentChanges() })
         }
     }
 }
 
 @Composable
+private fun RecentChangesBody(
+    state: RecentChangesState,
+    onRetry: () -> Unit
+) {
+    val changes = state.changes
+    Box(modifier = Modifier.fillMaxSize()) {
+        val res = state.resource
+        when {
+            res is AsyncResource.Loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            res is AsyncResource.Error && changes.isEmpty() -> ErrorState(
+                message = res.message.ifEmpty { state.error ?: "Couldn't load recent changes" },
+                onRetry = onRetry,
+                modifier = Modifier.align(Alignment.Center)
+            )
+            changes.isEmpty() -> EmptyState(
+                icon = SynapseIcons.History,
+                title = "No recent changes",
+                body = "Files that sync will show up here.",
+                modifier = Modifier.align(Alignment.Center)
+            )
+            else -> LazyColumn(
+                contentPadding = PaddingValues(vertical = 8.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(changes, key = { it.id }) { change -> RecentChangeItemCard(change = change) }
+            }
+        }
+    }
+}
+
+/** One change: M3 list item with a colored action badge. */
+@Composable
 fun RecentChangeItemCard(change: RecentChangeUiModel) {
     val actionText = change.action.replaceFirstChar { it.uppercase() }
-    
-    // Choose status color based on action type
-    val (statusColor, statusBgColor) = when (change.action.lowercase()) {
-        "update" -> com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected to com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected.copy(alpha = 0.15f)
-        "delete" -> com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Disconnected to com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Disconnected.copy(alpha = 0.15f)
-        else -> com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Paused to com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Paused.copy(alpha = 0.15f)
+    val actionColors = when (change.action.lowercase()) {
+        "update" -> SyncState.Connected.colors()
+        "delete" -> SyncState.Disconnected.colors()
+        else -> SyncState.Paused.colors()
     }
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = change.itemName,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                
-                Spacer(modifier = Modifier.height(4.dp))
-                
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Folder: ${change.folderId}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    
-                    Text(
-                        text = "•",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    
-                    Text(
-                        text = change.time,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
+    ListItem(
+        headlineContent = {
+            Text(change.itemName, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        },
+        supportingContent = {
+            Column {
+                Text("${change.folderId} · ${change.time}", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (change.error != null) {
-                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Error: ${change.error}",
-                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.error
                     )
                 }
             }
-
-            Spacer(modifier = Modifier.width(16.dp))
-
-            // Action tag (badge)
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = statusBgColor,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-            ) {
-                Text(
-                    text = actionText,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = statusColor,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                )
-            }
+        },
+        trailingContent = {
+            StatusBadge(
+                text = actionText,
+                containerColor = actionColors.container,
+                contentColor = actionColors.onContainer
+            )
         }
-    }
+    )
 }

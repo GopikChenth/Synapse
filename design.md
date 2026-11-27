@@ -1,82 +1,145 @@
-# Synapse Design Specification
+# Synapse Design Specification — Material 3
 
-This document details the core design system, typography tokens, color palette, dimensions, shapes, and animation specifications used throughout the Synapse application to ensure visual coherence, modern responsiveness, and premium aesthetics.
+Synapse uses **Material 3 only**: M3 components, the M3 color system, the
+unmodified M3 type and shape scales, Material Symbols icons, and M3 motion
+tokens. There is no Material 2 code or dependency in the shared UI.
 
----
-
-## 1. Typography System
-
-All text elements in the application must use standard Material 3 typography definitions. Avoid ad-hoc font sizes or hardcoded custom fonts unless defined below.
-
-| Typography Token | Role / Use Case | Weight | Font Size | Line Height |
-| :--- | :--- | :--- | :--- | :--- |
-| `typography.titleLarge` | TopAppBar title, major dialog header | Bold | 22 sp | 28 sp |
-| `typography.titleMedium` | Cards title, section header, drawer app title | Bold | 16 sp | 24 sp |
-| `typography.bodyMedium` | General form labels, main settings text, input fields | Medium / Regular | 14 sp | 20 sp |
-| `typography.bodySmall` | Secondary list labels, file paths, status details, timestamps | Regular | 12 sp | 16 sp |
-| `typography.labelSmall` | Input field helper labels, tiny categories | Medium | 11 sp | 16 sp |
+Everything below lives in `app/shared/src/commonMain/.../core/designsystem/`.
 
 ---
 
-## 2. Color Palette (Material 3 Theme Synchronized)
+## 1. Color
 
-Do not hardcode specific hexadecimal colors inside UI layouts. Colors must be resolved dynamically from the `MaterialTheme.colorScheme` to support light/dark theme switching seamlessly.
+All UI colors come from `MaterialTheme.colorScheme` (plus the status roles
+below). **No hex colors or alpha-tinted colors in UI code.**
 
-*   **Primary / Accent**: `colorScheme.primary` (FABs, primary active actions).
-*   **Secondary / Status**:
-    *   `Connected`: Safe emerald tint (`Color(0xFF10B981)`)
-    *   `Paused`: Warning amber tint (`Color(0xFFF59E0B)`)
-    *   `Disconnected`: Alert crimson tint (`Color(0xFFEF4444)`)
-*   **Text / Foreground**:
-    *   Primary content: `colorScheme.onSurface`
-    *   Secondary details (subtitles, metadata): `colorScheme.onSurfaceVariant`
-*   **Backgrounds / Surfaces**:
-    *   Main scaffold container: `colorScheme.background`
-    *   Navigation Drawer sheet background: `colorScheme.surface`
-    *   TopAppBar container: `colorScheme.surfaceVariant`
-*   **Dividers / Borders**:
-    *   Separators & section borders: `colorScheme.outlineVariant`
+### Themes (`Theme.kt`)
+
+Every scheme is generated with the Material Color Utilities algorithm (the
+engine behind Material Theme Builder and Android dynamic color), so all M3
+roles — including `surfaceContainerLowest…Highest`, `surfaceDim/Bright`,
+`inverse*` and `outlineVariant` — exist for light **and** dark.
+
+| Key | Name in Settings | Seed | Variant |
+| :-- | :-- | :-- | :-- |
+| `Dynamic` | Dynamic color (wallpaper) | wallpaper | Android 12+ only |
+| `Default` | Synapse Purple | `#6750A4` | Tonal spot (M3 baseline) |
+| `MidnightGreen` | Midnight Green | `#52A435` | Fidelity |
+| `DeepSpace` | Deep Space | `#00E5FF` | Fidelity |
+| `TacticalHUD` | Tactical HUD | `#24FCDE` | Fidelity |
+
+All themes support Light, Dark and System. To change a theme, change its seed
+and regenerate with `docs/material3/genscheme.py` — don't hand-edit
+individual roles.
+
+### Common role usage
+
+| Use | Role |
+| :-- | :-- |
+| Screen / scaffold background | `surface` (= `background`) |
+| Top app bar | default (`surface`, `surfaceContainer` when scrolled) |
+| Navigation bar / rail / drawer | component defaults |
+| Filled card | default (`surfaceContainerHighest`); dashboard tiles use `surfaceContainer` |
+| Dialog container | `surfaceContainerHigh` (AlertDialog default) |
+| Primary text / secondary text | `onSurface` / `onSurfaceVariant` |
+| Dividers, outlines on cards | `outlineVariant` |
+| List leading icon | `secondaryContainer` / `onSecondaryContainer` |
+| Destructive action text | `error` |
+
+### Status colors (`Color.kt`, `components/CommonComponents.kt`)
+
+M3 has no success/warning roles, so Synapse defines them as **M3 custom
+colors**: the brand hues (emerald `#10B981`, amber `#F59E0B`) are harmonized
+toward each theme's seed and expanded into the standard four tones.
+
+| State | Color | Container / on-container |
+| :-- | :-- | :-- |
+| Connected / synced | `SynapseStatusColors.Connected` | `ConnectedContainer` / `OnConnectedContainer` |
+| Paused | `SynapseStatusColors.Paused` | `PausedContainer` / `OnPausedContainer` |
+| Disconnected / error | `SynapseStatusColors.Disconnected` (= `error`) | `errorContainer` / `onErrorContainer` |
+
+Use `SyncStateBadge(SyncState.X)` or `StatusBadge(...)` for status labels.
+The one intentional exception to theme colors is QR codes, which are always
+black on white so they scan reliably.
 
 ---
 
-## 3. Layout & Dimension Guidelines
+## 2. Typography (`Typography.kt`)
 
-*   **Paddings / Spacing**: Use a standard 4dp grid hierarchy.
-    *   `16.dp`: Standard page margins, inner dialog paddings.
-    *   `12.dp`: Vertical list item paddings, horizontal card inner items.
-    *   `8.dp`: Spacing between stacked controls, item separators.
-    *   `4.dp`: Tiny layout offsets.
-*   **Compact Navigation Drawer**:
-    *   Width: Set to **`65%`** of the screen width (`modifier = Modifier.fillMaxWidth(0.65f)`) for a natural, responsive layout.
-    *   Drawer Item Spacing: `12.dp` horizontal padding, transparent container backgrounds for unselected items.
-*   **Lists**:
-    *   List Items (Folders, Devices) are styled as flat, clean clickable rows without heavy card elevation outlines to promote a smooth, modern UI.
+The **default M3 type scale** (`Typography()`), unmodified. Never set
+`fontSize` in UI code.
 
----
-
-## 4. Corner Shapes & Elevation
-
-*   **FAB (Floating Action Button)**:
-    *   Shape: `FloatingActionButtonDefaults.extendedFabShape`
-    *   Elevation: Dynamic (0.dp during transitions to prevent shadow lag, 6.dp when static).
-*   **Buttons**:
-    *   Shape: Fully rounded capsule / pill shape.
-*   **Cards & List Containers**:
-    *   Shape: `RoundedCornerShape(12.dp)`
-*   **Overlays / Bottom Sheets / Dialogs**:
-    *   Shape: `RoundedCornerShape(28.dp)`
+| Role | Used for |
+| :-- | :-- |
+| `headlineMedium` | Desktop page titles |
+| `headlineSmall` | Dialog headlines (AlertDialog default) |
+| `titleLarge` | Top app bar titles (default) |
+| `titleMedium` | Card titles |
+| `titleSmall` (in `primary`) | Section headers / list subheaders |
+| `bodyLarge` | List-item headlines, control labels |
+| `bodyMedium` | Supporting text, dialog body |
+| `bodySmall` | Paths, timestamps, metadata |
+| `labelLarge` | Buttons (default) |
+| `labelSmall` | Badges |
 
 ---
 
-## 5. Animation Specification (Fast Spatial Motion)
+## 3. Shape (`Shapes.kt`)
 
-*   **FAB Scaling Transitions**:
-    *   `enter`: Snappy spring scale-in with a playful bounce.
-    *   `exit`: Snappy spring scale-out.
-    *   **Spring Spec**: `spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)`
-*   **Page Swiping / Horizontal Pager**:
-    *   Uses fast, responsive spatial scrolling with physics-based drag-to-settle.
-*   **Expressive Segmented Buttons**:
-    *   **Shape Morphing**: Animates corners from default segment boundaries (outer curves, flat inner borders) to fully rounded pill shape (`24.dp`) when active.
-    *   **Layout Weight Morphing**: Dynamically animates button weights (`1.6f` selected vs `0.7f` unselected) and toggles text visibility inside `AnimatedVisibility` so active selection expands smoothly while unselected options contract.
-    *   **Spring Spec**: Synchronized using `spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)`.
+The **default M3 shape scale**: extraSmall 4dp, small 8dp, medium 12dp,
+large 16dp, extraLarge 28dp. Use `MaterialTheme.shapes.*` or the component
+default. Buttons, chips and badges are fully rounded (component defaults).
+
+---
+
+## 4. Layout
+
+- 4dp grid. 16dp page margins on mobile, 24dp on desktop.
+- Lists are M3 `ListItem`s (leading icon, headline, supporting text,
+  trailing badge/menu) — not cards.
+- Settings rows are `ListItem`s with a trailing `Switch`; the whole row toggles.
+- Multi-select (share folder with devices, share device with folders) uses
+  `Checkbox`.
+- Desktop pages use `DesktopPage`: headline + actions, content capped at
+  840–960dp wide and centered.
+- Navigation: mobile uses a `NavigationBar` + `ModalNavigationDrawer`;
+  desktop uses a `NavigationRail` with labels. Selected destinations show the
+  filled icon, others the outlined icon.
+- Extended FAB for the primary action on Folders / Devices; list content has
+  88dp bottom padding so the last row clears it.
+
+---
+
+## 5. Components (`components/`)
+
+| Component | Purpose |
+| :-- | :-- |
+| `SettingsGroup`, `SettingsSectionHeader`, `SettingsSwitchItem`, `SettingsTextField`, `SettingsThemeItem`, `SettingsThemeModeItem` | Settings screens (mobile + desktop) |
+| `StatusBadge`, `SyncStateBadge`, `StatusDot`, `LeadingIcon` | Status and list decoration |
+| `EmptyState`, `ErrorState` | Empty / error screens with an action |
+| `DesktopPage` | Desktop page layout |
+| `FullScreenOverlay` | M3 full-screen dialog container + motion |
+| `ConfirmDialog`, `PairingRequestDialog`, `FolderOfferDialog` (`ui/SystemDialogs.kt`) | M3 basic dialogs with icon, text-button actions |
+
+Dialogs: actions are text buttons (dismiss left, confirm right); destructive
+confirms use `error` text color, never a filled red button.
+
+---
+
+## 6. Icons (`Icons.kt`)
+
+Material Symbols, Outlined, weight 400, 24dp (`SynapseIcons.*`), generated
+from `@material-symbols/svg-400`. Navigation destinations have a `*Filled`
+variant for the selected state.
+
+---
+
+## 7. Motion (`Motion.kt`)
+
+M3 easing and duration tokens (`SynapseMotion`):
+
+- Full-screen dialogs/pages: enter = slide up 10% + fade, 400ms emphasized
+  decelerate; exit = 200ms emphasized accelerate.
+- FAB show/hide: scale + fade, 300ms / 200ms.
+- Everything else uses component defaults (ripples, switch thumbs, segmented
+  buttons, menus).

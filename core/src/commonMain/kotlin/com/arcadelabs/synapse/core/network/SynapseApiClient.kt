@@ -11,32 +11,32 @@ import io.ktor.http.*
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 
-open class SyncthingException(message: String, cause: Throwable? = null) : Exception(message, cause)
-class ApiKeyNotConfiguredException(message: String) : SyncthingException(message)
-class SyncthingUnauthorizedException(message: String, cause: Throwable? = null) : SyncthingException(message, cause)
-class SyncthingNotFoundException(message: String, cause: Throwable? = null) : SyncthingException(message, cause)
-class SyncthingApiException(message: String, cause: Throwable? = null) : SyncthingException(message, cause)
-class SyncthingTimeoutException(message: String, cause: Throwable? = null) : SyncthingException(message, cause)
+open class SynapseException(message: String, cause: Throwable? = null) : Exception(message, cause)
+class ApiKeyNotConfiguredException(message: String) : SynapseException(message)
+class SynapseUnauthorizedException(message: String, cause: Throwable? = null) : SynapseException(message, cause)
+class SynapseNotFoundException(message: String, cause: Throwable? = null) : SynapseException(message, cause)
+class SynapseApiException(message: String, cause: Throwable? = null) : SynapseException(message, cause)
+class SynapseTimeoutException(message: String, cause: Throwable? = null) : SynapseException(message, cause)
 
 /**
- * Thread-safe API client interface for Syncthing.
+ * Thread-safe API client interface for Synapse.
  * All functions are non-blocking and safe to be called from any coroutine context (including the Main dispatcher).
  */
-interface SyncthingApiClient {
+interface SynapseApiClient {
     /**
      * Retrieves the current system status and resource usage.
      */
     suspend fun systemStatus(): SystemStatus
 
     /**
-     * Retrieves the running Syncthing version information.
+     * Retrieves the running Synapse version information.
      */
     suspend fun systemVersion(): SystemVersion
 
     /**
-     * Retrieves the entire current Syncthing configuration.
+     * Retrieves the entire current Synapse configuration.
      */
-    suspend fun systemConfig(): SyncthingConfig
+    suspend fun systemConfig(): EngineConfig
 
     /**
      * Retrieves the raw JSON configuration as a string.
@@ -49,10 +49,10 @@ interface SyncthingApiClient {
     suspend fun updateRawSystemConfig(configJson: String)
 
     /**
-     * Updates the Syncthing configuration with the fields modeled in [SyncthingConfig].
+     * Updates the Synapse configuration with the fields modeled in [EngineConfig].
      * Preserves unmodeled fields from the current server configuration.
      */
-    suspend fun updateSystemConfig(config: SyncthingConfig)
+    suspend fun updateSystemConfig(config: EngineConfig)
 
     /**
      * Retrieves database status metrics for the specified folder.
@@ -90,41 +90,49 @@ interface SyncthingApiClient {
      * Pauses or resumes synchronization for the specified folder.
      * Uses PATCH /rest/config/folders/{id} — the ONLY correct folder endpoint.
      * NOTE: /rest/system/pause and /rest/system/resume are DEVICE-ONLY endpoints;
-     * passing a 'folder' param to them is silently ignored by Syncthing.
+     * passing a 'folder' param to them is silently ignored by Synapse.
      * @param paused true to pause, false to resume.
      */
     suspend fun setFolderPaused(folderId: String, paused: Boolean): HttpResponse
 
     /**
-     * Restarts the Syncthing daemon.
+     * Restarts the Synapse daemon.
      * @return the [HttpResponse] from the server.
      */
     suspend fun restart(): HttpResponse
 
     /**
-     * Shuts down the Syncthing daemon.
+     * Shuts down the Synapse daemon.
      * @return the [HttpResponse] from the server.
      */
     suspend fun shutdown(): HttpResponse
 
     /**
-     * Rescans the specified folder, or all folders if null.
+     * Rescans the specified folder, or every configured folder if null
+     * (one POST /rest/db/scan?folder=<id> per folder; the engine rejects a scan without a folder).
      */
     suspend fun scan(folderId: String? = null): HttpResponse
 
     /**
-     * Retrieves recent events from the Syncthing daemon.
+     * Retrieves recent events from the Synapse daemon.
      */
     suspend fun getEvents(since: Int = 0, limit: Int = 100): List<Event>
 
     /**
-     * Removes a single folder from the Syncthing configuration by ID.
+     * Registers a new folder through the engine's create route (POST /rest/system/folders),
+     * which also indexes it and starts watching it. Returns false if the engine does not
+     * offer that route (legacy engine) or rejects the request.
+     */
+    suspend fun registerFolder(folderId: String, path: String): Boolean
+
+    /**
+     * Removes a single folder from the Synapse configuration by ID.
      * Uses DELETE /rest/config/folders/{id} — no restart required.
      */
     suspend fun deleteFolder(folderId: String)
 
     /**
-     * Removes a single device from the Syncthing configuration by ID.
+     * Removes a single device from the Synapse configuration by ID.
      * Uses DELETE /rest/config/devices/{id} — no restart required.
      */
     suspend fun deleteDevice(deviceId: String)
@@ -190,27 +198,27 @@ interface SyncthingApiClient {
     suspend fun reopenConflict(conflictId: String): Boolean
 
     /**
-     * Retrieves the Syncthing daemon options configuration.
+     * Retrieves the Synapse daemon options configuration.
      */
     suspend fun getConfigOptions(): ConfigOptions
 
     /**
-     * Replaces the Syncthing daemon options configuration.
+     * Replaces the Synapse daemon options configuration.
      */
     suspend fun updateConfigOptions(options: ConfigOptions)
 
     /**
-     * Retrieves the Syncthing GUI configuration.
+     * Retrieves the Synapse GUI configuration.
      */
     suspend fun getConfigGui(): GuiConfig
 
     /**
-     * Replaces the Syncthing GUI configuration.
+     * Replaces the Synapse GUI configuration.
      */
     suspend fun updateConfigGui(gui: GuiConfig)
 }
 
-internal class SyncthingApiClientImpl(
+internal class SynapseApiClientImpl(
     private val client: HttpClient,
     private val apiKeyProvider: ApiKeyProvider,
     private val preferencesHelper: PreferencesHelper,
@@ -219,7 +227,7 @@ internal class SyncthingApiClientImpl(
         baseUrlProvider = { preferencesHelper.apiBaseUrl },
         tokenProvider = { preferencesHelper.apiKey }
     )
-) : SyncthingApiClient {
+) : SynapseApiClient {
     private val baseUrl: String
         get() {
             val url = preferencesHelper.apiBaseUrl.trim()
@@ -270,7 +278,7 @@ internal class SyncthingApiClientImpl(
         }.body()
     }
 
-    override suspend fun systemConfig(): SyncthingConfig {
+    override suspend fun systemConfig(): EngineConfig {
         val key = getOrResolveApiKey()
         return client.get("$baseUrl/rest/system/config") {
             authHeaders(key)
@@ -292,12 +300,12 @@ internal class SyncthingApiClientImpl(
             setBody(configJson)
         }
         if (!response.status.isSuccess()) {
-            throw SyncthingApiException("Failed to update configuration: HTTP ${response.status.value}")
+            throw SynapseApiException("Failed to update configuration: HTTP ${response.status.value}")
         }
     }
 
-    override suspend fun updateSystemConfig(config: SyncthingConfig) {
-        val jsonText = json.encodeToString(SyncthingConfig.serializer(), config)
+    override suspend fun updateSystemConfig(config: EngineConfig) {
+        val jsonText = json.encodeToString(EngineConfig.serializer(), config)
         updateRawSystemConfig(jsonText)
     }
     
@@ -321,7 +329,7 @@ internal class SyncthingApiClientImpl(
                     totalIn += m.totalInBytes
                     totalOut += m.totalOutBytes
                     val connType = if (m.clientType.contains("bep", ignoreCase = true) || m.clientType.contains("syncthing", ignoreCase = true)) {
-                        "BEP v1 (Syncthing TLS)"
+                        "BEP v1 (TLS)"
                     } else {
                         "Synapse QUIC (FastCDC)"
                     }
@@ -433,17 +441,43 @@ internal class SyncthingApiClientImpl(
     }
 
     override suspend fun scan(folderId: String?): HttpResponse {
+        if (folderId != null) return scanFolder(folderId)
+        // The engine requires a folder parameter, so "rescan all" scans each configured folder.
+        val folderIds = systemConfig().folders.map { it.id }
+        if (folderIds.isEmpty()) {
+            throw SynapseApiException("Failed to scan: no folders configured")
+        }
+        var last: HttpResponse? = null
+        for (id in folderIds) {
+            last = scanFolder(id)
+        }
+        return last!!
+    }
+
+    private suspend fun scanFolder(folderId: String): HttpResponse {
         val key = getOrResolveApiKey()
         val response = client.post("$baseUrl/rest/db/scan") {
             authHeaders(key)
-            if (folderId != null) {
-                parameter("folder", folderId)
-            }
+            parameter("folder", folderId)
         }
         if (!response.status.isSuccess()) {
-            throw SyncthingApiException("Failed to scan: HTTP ${response.status.value}")
+            throw SynapseApiException("Failed to scan: HTTP ${response.status.value}")
         }
         return response
+    }
+
+    override suspend fun registerFolder(folderId: String, path: String): Boolean {
+        val key = getOrResolveApiKey()
+        return try {
+            val response = client.post("$baseUrl/rest/system/folders") {
+                authHeaders(key)
+                contentType(ContentType.Application.Json)
+                setBody(CoreRegisterFolderRequest(folderId = folderId, localPath = path))
+            }
+            response.status.isSuccess()
+        } catch (_: Exception) {
+            false
+        }
     }
 
     override suspend fun deleteFolder(folderId: String) {
@@ -452,7 +486,7 @@ internal class SyncthingApiClientImpl(
             authHeaders(key)
         }
         if (!response.status.isSuccess()) {
-            throw SyncthingApiException("Failed to delete folder: HTTP ${response.status.value}")
+            throw SynapseApiException("Failed to delete folder: HTTP ${response.status.value}")
         }
     }
 
@@ -462,7 +496,7 @@ internal class SyncthingApiClientImpl(
             authHeaders(key)
         }
         if (!response.status.isSuccess()) {
-            throw SyncthingApiException("Failed to delete device: HTTP ${response.status.value}")
+            throw SynapseApiException("Failed to delete device: HTTP ${response.status.value}")
         }
     }
 
@@ -507,7 +541,7 @@ internal class SyncthingApiClientImpl(
     }
 
     override suspend fun acceptPendingFolder(folderId: String, localPath: String?): Boolean {
-        return coreClient.acceptPendingFolder(folderId)
+        return coreClient.acceptPendingFolder(folderId, localPath)
     }
 
     override suspend fun getConflicts(): List<CoreQuarantineConflict> = coreClient.getConflicts()
@@ -570,27 +604,11 @@ internal class SyncthingApiClientImpl(
     override suspend fun getEvents(since: Int, limit: Int): List<Event> {
         val key = getOrResolveApiKey()
         return try {
-            val conflicts = coreClient.getConflicts()
-            if (conflicts.isNotEmpty()) {
-                conflicts.mapIndexed { idx, c ->
-                    Event(
-                        id = idx + 1,
-                        globalID = idx + 1,
-                        type = "ItemFinished",
-                        time = "",
-                        data = buildJsonObject {
-                            put("item", "sync-conflict-${c.conflictId}-${c.relativePath}")
-                            put("folder", c.folderId)
-                        }
-                    )
-                }
-            } else {
-                client.get("$baseUrl/rest/events") {
-                    authHeaders(key)
-                    parameter("since", since)
-                    parameter("limit", limit)
-                }.body()
-            }
+            client.get("$baseUrl/rest/events") {
+                authHeaders(key)
+                parameter("since", since)
+                parameter("limit", limit)
+            }.body()
         } catch (_: Exception) {
             emptyList()
         }

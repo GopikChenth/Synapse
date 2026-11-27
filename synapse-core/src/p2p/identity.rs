@@ -1,7 +1,7 @@
 //! Ed25519 Cryptographic Node Identities and Key Management.
 //!
 //! Provides Ed25519 key generation, public key fingerprinting, and
-//! canonical Syncthing-compatible formatted Device IDs with Luhn check digits.
+//! canonical BEP-compatible formatted Device IDs with Luhn check digits.
 
 use std::fs;
 use std::path::Path;
@@ -56,7 +56,7 @@ impl NodeIdentity {
 }
 
 /// Formats 32-byte public key into 8 groups of 7 characters separated by dashes
-/// with Luhn-mod-7 check characters (Syncthing-compatible format).
+/// with Luhn-mod-7 check characters (BEP-compatible format).
 pub fn format_device_id(bytes: &[u8]) -> String {
     let mut b32 = String::new();
     let mut buffer: u64 = 0;
@@ -183,9 +183,85 @@ pub fn normalize_device_id(input: &str) -> Result<String, String> {
     Ok(groups.join("-"))
 }
 
+/// Decodes a grouped device ID produced by [`format_device_id`] (Base32 in groups of six,
+/// each followed by a Luhn check character) back to the 32-byte public key. Returns `None`
+/// for anything that is not exactly such an ID (e.g. a legacy BEP certificate ID).
+pub fn decode_grouped_device_id(grouped: &str) -> Option<[u8; 32]> {
+    let mut b32 = String::new();
+    for group in grouped.trim().split('-') {
+        let group = group.to_ascii_uppercase();
+        if group.len() < 2 || !group.is_ascii() {
+            return None;
+        }
+        let (payload, check) = group.split_at(group.len() - 1);
+        if compute_luhn_char(payload).to_string() != check {
+            return None;
+        }
+        b32.push_str(payload);
+    }
+    let mut bytes = Vec::with_capacity(32);
+    let (mut buffer, mut bits) = (0u64, 0u32);
+    for c in b32.bytes() {
+        let v = BASE32_ALPHABET.iter().position(|&a| a == c)? as u64;
+        buffer = (buffer << 5) | v;
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            bytes.push(((buffer >> bits) & 0xFF) as u8);
+        }
+    }
+    let key: [u8; 32] = bytes.try_into().ok()?;
+    // Strict: only the exact encoding of these bytes (rejects padding-bit tricks).
+    (format_device_id(&key) == grouped.trim().to_ascii_uppercase()).then_some(key)
+}
+
+/// The one form a device ID is stored and compared under. Public-key IDs, whether typed as
+/// hex (any case, with or without dashes) or as grouped Base32, become 64-char lowercase hex,
+/// the form peers prove over mutual TLS. Other valid grouped IDs (e.g. from legacy BEP peers) become
+/// their uppercase grouped form; anything else is only trimmed. Storing one form is what
+/// keeps the same device from being listed twice under different spellings.
+pub fn canonical_device_id(input: &str) -> String {
+    let trimmed = input.trim();
+    match normalize_device_id(trimmed) {
+        Ok(n) if n.len() == 64 && n.chars().all(|c| c.is_ascii_hexdigit()) => n,
+        Ok(n) => match decode_grouped_device_id(&n) {
+            Some(key) => key.iter().map(|b| format!("{:02x}", b)).collect(),
+            None => n,
+        },
+        Err(_) => trimmed.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_canonical_device_id_merges_every_spelling() {
+        let key = [0x6fu8, 0x00, 0x11, 0x9e, 0xb1, 0x94, 0xc8, 0x82, 0xaf, 0xf9, 0x89, 0xbc, 0xcb, 0x5c, 0x60, 0xee,
+                   0x7e, 0xef, 0xa7, 0xe3, 0x90, 0xb6, 0xad, 0xfb, 0x47, 0x7e, 0x7b, 0x81, 0xce, 0xcd, 0x52, 0xce];
+        let hex: String = key.iter().map(|b| format!("{:02x}", b)).collect();
+        let grouped = format_device_id(&key);
+        assert_eq!(decode_grouped_device_id(&grouped), Some(key));
+        for spelling in [
+            hex.clone(),
+            hex.to_uppercase(),
+            format!("  {}  ", hex),
+            hex.as_bytes().chunks(8).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join("-"),
+            grouped.clone(),
+            grouped.to_lowercase(),
+            grouped.replace('-', ""),
+        ] {
+            assert_eq!(canonical_device_id(&spelling), hex, "spelling {:?}", spelling);
+        }
+        // Not a public-key id: left as typed (trimmed), never mangled.
+        assert_eq!(canonical_device_id(" BETA-DEV-002 "), "BETA-DEV-002");
+        assert_eq!(canonical_device_id("peer-1"), "peer-1");
+        // A corrupted check digit is not silently "fixed" into some other key.
+        let mut bad = grouped.clone().into_bytes();
+        bad[6] = if bad[6] == b'A' { b'B' } else { b'A' };
+        assert_eq!(decode_grouped_device_id(std::str::from_utf8(&bad).unwrap()), None);
+    }
 
     #[test]
     fn test_device_id_formatting() {

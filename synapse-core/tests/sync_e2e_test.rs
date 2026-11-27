@@ -227,3 +227,91 @@ async fn test_peer_identity_cannot_be_spoofed() {
     assert_eq!(pending[0].device_id, m.id);
     assert!(m.read("secret.txt").is_none());
 }
+
+/// Regression: removing a connected device must drop its live connection and presence.
+/// Previously the connection stayed open and the device kept being reported online, so
+/// apps showed a deleted device as still connected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_removed_device_is_disconnected_and_forgotten() {
+    let _ = tracing_subscriber::fmt().with_test_writer().with_env_filter("info").try_init();
+    let a = Node::start("alice").await;
+    let b = Node::start("bob").await;
+    a.pair_and_share(&b);
+    b.pair_and_share(&a);
+
+    a.p2p.ensure_connected(&b.id, b.addr).await.unwrap();
+    assert!(a.p2p.is_connected_to(&b.id).await);
+    assert!(a.p2p.list_connected_peers().await.contains_key(&b.id));
+
+    // What DELETE /api/v1/devices/:id does.
+    a.storage.remove_device(&b.id).unwrap();
+    a.p2p.forget_device(&b.id).await;
+
+    assert!(!a.p2p.is_connected_to(&b.id).await, "connection must be closed");
+    assert!(!a.p2p.list_known_peers().await.contains_key(&b.id), "presence must be forgotten");
+    // The presence sweep must not bring it back from a lingering connection.
+    a.p2p.sweep_presence().await;
+    assert!(!a.p2p.list_connected_peers().await.contains_key(&b.id));
+
+    // Bob notices the closed connection.
+    let start = Instant::now();
+    while b.p2p.is_connected_to(&a.id).await {
+        assert!(start.elapsed() < Duration::from_secs(15), "peer should see the connection closed");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Bob still has Alice configured; when he dials again he is only a pairing request.
+    b.p2p.ensure_connected(&a.id, a.addr).await.unwrap();
+    let start = Instant::now();
+    while a.storage.list_pending_devices().unwrap().is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(15), "re-dial should create a pending request");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(a.storage.list_devices().unwrap().is_empty(), "removed device must not be re-added");
+    assert!(!a.p2p.list_connected_peers().await.contains_key(&b.id), "unpaired peer is not online");
+}
+
+/// Regression: sharing a folder must reach the other device as a pending invitation (the
+/// "device X wants to share folder Y" prompt), and accepting it must pull the files.
+/// Previously Hello always carried an empty folder list, so no invitation ever arrived.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_folder_invitation_reaches_peer_and_accepting_syncs_it() {
+    let _ = tracing_subscriber::fmt().with_test_writer().with_env_filter("info").try_init();
+    let a = Node::start("alice").await;
+    let b = Node::start("bob").await;
+    a.pair_and_share(&b);
+    b.pair_and_share(&a);
+    a.p2p.ensure_connected(&b.id, b.addr).await.unwrap();
+
+    // Alice shares a folder Bob does not have, while already connected.
+    let photos = a.home.join("photos");
+    std::fs::create_dir_all(photos.join("2026")).unwrap();
+    std::fs::write(photos.join("2026/beach.txt"), b"sand").unwrap();
+    a.storage.add_folder(&FolderRecord::new("photos", photos.to_string_lossy())).unwrap();
+    a.engine.index_folder("photos").unwrap();
+    a.storage.share_folder_with_device("photos", &b.id).unwrap();
+    a.p2p.announce_folders().await;
+
+    eventually("invitation on bob", || {
+        b.storage.list_pending_folders().unwrap().iter().any(|p| p.folder_id == "photos" && p.device_id == a.id)
+    })
+    .await;
+    // Folders already shared both ways are not offered again.
+    assert!(!b.storage.list_pending_folders().unwrap().iter().any(|p| p.folder_id == "docs"));
+    // Announcing again does not duplicate the invitation.
+    a.p2p.announce_folders().await;
+    assert_eq!(b.storage.list_pending_folders().unwrap().len(), 1);
+
+    // Changes pushed for a folder Bob has not accepted are not applied anywhere.
+    a.storage.share_folder_with_device("photos", &b.id).unwrap();
+    let inbox = b.home.join("photos-in");
+    assert!(!inbox.exists());
+
+    // Bob accepts into his own directory and pulls Alice's files.
+    std::fs::create_dir_all(&inbox).unwrap();
+    b.storage.accept_pending_folder("photos", &a.id, &inbox.to_string_lossy()).unwrap();
+    b.p2p.sync_folder_from(&a.id, "photos").await.unwrap();
+    eventually("photo on bob", || std::fs::read(inbox.join("2026/beach.txt")).ok().as_deref() == Some(b"sand".as_slice()))
+        .await;
+    assert!(b.storage.list_pending_folders().unwrap().is_empty());
+}

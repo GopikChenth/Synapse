@@ -4,7 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * Models the `options` section of the Syncthing configuration.
+ * Models the `options` section of the Synapse configuration.
  * Corresponds to the JSON returned by `GET /rest/config/options`.
  */
 @Serializable

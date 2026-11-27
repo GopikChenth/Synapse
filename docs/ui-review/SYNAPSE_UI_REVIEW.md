@@ -33,7 +33,7 @@ On top of that, the headline feature, **inspecting a conflict diff, crashes the 
 | Data accuracy and trust | **3/10** | Conflict count accumulates, share toggles are wrong, status words are misleading, and the version, Listeners and Discovery values are placeholders. |
 | Stability and error handling | **2/10** | Inspect Diff crashes and the window vanishes, Recent Changes shows a raw exception, and Settings says "Daemon is not running" while connected. |
 | Core flow: conflict resolution | **3/10** | The diff can't be opened. There's no side-by-side or merge editor, no who/when context, and the "Ignore" button is broken. |
-| Copy and terminology | **4/10** | Leftover Syncthing text, internal jargon ("Virtual Quarantine", "zero disk pollution", "Listeners", "Introducer") with no explanations, and folder IDs shown instead of names. |
+| Copy and terminology | **4/10** | Leftover legacy-engine text, internal jargon ("Virtual Quarantine", "zero disk pollution", "Listeners", "Introducer") with no explanations, and folder IDs shown instead of names. |
 | Accessibility (partial check) | **4/10** | Icon-only navigation, small grey captions below WCAG AA contrast, letter-by-letter wrapping. A screen reader wasn't tested. |
 | Desktop fit and responsiveness | **5/10** | The default 800×600 window clips the dashboard. Dialogs are mobile-style full-screen sheets, and there's no width cap on content. |
 | Performance and efficiency | **4/10** | About 8 API requests per second while idle, with one extra request per folder every cycle. |
@@ -48,10 +48,10 @@ On top of that, the headline feature, **inspecting a conflict diff, crashes the 
 | 1 | 🔴 Blocker | **"Inspect Diff" crashes the app**, and the window disappears while the process keeps running | Conflicts | `05-inspect-diff-crash.png`. Compose throws *"Vertically scrollable component was measured with an infinity maximum height constraints"*: a `LazyColumn` or `verticalScroll` nested inside another scrolling container in the conflict dialog. |
 | 2 | 🔴 Blocker | **Edit Folder shows share switches as off for devices it *is* shared with.** Saving would silently unshare the folder. | Edit Folder | `07-edit-folder.png`: "obsidian" is shared with Pixel 8 (Devices screen: *Folders: obsidian*), but the Pixel 8 switch is off. The share switches in Add Device are all off too. |
 | 3 | 🔴 Blocker | **Conflict counter accumulates on every poll** | Dashboard | 2 real conflicts. The dashboard showed **4**, then **22**, then **38** over about 2 minutes (`01-dashboard.png`, `02-pairing-request.png`). The Quarantine dialog correctly says *2 Conflicts*, so the two disagree. Likely `count += new` instead of `count = new`. |
-| 4 | 🟠 Major | **A raw exception is shown to users** | Recent Changes | `09-recent-changes-error.png`: *"Expected response body of the type 'interface java.util.List…' … 400 Bad Request … ktor.io/docs/faq.html"*. The screen calls `GET /rest/events?since=0&limit=1000` (Syncthing long-poll), but Synapse Core serves `/rest/events` as a **WebSocket** only. |
+| 4 | 🟠 Major | **A raw exception is shown to users** | Recent Changes | `09-recent-changes-error.png`: *"Expected response body of the type 'interface java.util.List…' … 400 Bad Request … ktor.io/docs/faq.html"*. The screen calls `GET /rest/events?since=0&limit=1000` (REST long-poll), but Synapse Core serves `/rest/events` as a **WebSocket** only. |
 | 5 | 🟠 Major | **False "Daemon is not running" error.** The device ID is stuck on "Loading…". | Settings | `13-settings-false-daemon-error.png`. It appears whenever the native client has no token (see §7). The dashboard simultaneously says *Connected*. |
 | 6 | 🟠 Major | **Status labels don't reflect reality** | Dashboard, Folders, Devices | All folders say **"Up to Date"** (dashboard) or **"Active"** (Folders screen), two different words for the same thing, while every remote device is offline. Pixel 8 showed **"Connected"** in one run and **"Disconnected"** in another with nothing changed; the answer depends on which API the screen reads. |
-| 7 | 🟠 Major | **Placeholder data shown as fact** | Dashboard | "Version **v2.1.1**" is a hardcoded fallback (the engine is 1.0.0). "Listeners 3/3" and "Discovery 3/5" come from a Syncthing-shaped model that Synapse Core never fills. "Local State (Total) **0 0 ~0 B**" has no labels. |
+| 7 | 🟠 Major | **Placeholder data shown as fact** | Dashboard | "Version **v2.1.1**" is a hardcoded fallback (the engine is 1.0.0). "Listeners 3/3" and "Discovery 3/5" come from a legacy-shaped model that Synapse Core never fills. "Local State (Total) **0 0 ~0 B**" has no labels. |
 | 8 | 🟠 Major | **Polling storm**: about 245 requests per 30 s while idle | All | `/system/status` 40×, `/connections` 35×, `/rest/db/status` 30×, and `/folders/{id}/devices` once per folder every cycle (N+1). The engine already offers a WebSocket event stream; use it and poll rarely. On Android this drains battery. |
 | 9 | 🟡 Minor | **The "Ignore" button wraps one letter per line** | Conflicts | `04-conflicts.png`: *Ig / n / or / e*. The button row doesn't fit the fixed dialog width. |
 | 10 | 🟡 Minor | **The device ID is regrouped incorrectly** in the pairing dialog | Pairing | `02-pairing-request.png`: `7QXJ 2KD- LRMB V4A- …` instead of `7QXJ2KD-LRMBV4A-…`. The ID is split every 4 characters while keeping the dashes. Users compare these IDs visually to verify a device, so this is a security-relevant usability bug. |
@@ -131,12 +131,12 @@ This is Synapse's differentiator, and it's the weakest screen.
 **Works well:** the QR code with Copy ID, the Light/Dark/System segmented control, the theme picker, and section grouping.
 
 **Problems:**
-- **Leftover Syncthing settings that don't apply to Synapse Core:**
-  - "Allow anonymous usage data to be sent to the *Syncthing developers*"
-  - "Send crash reports to help improve *Syncthing*", which is **on by default**
-  - "Open the official *Syncthing* Web GUI"
+- **Leftover legacy-engine settings that don't apply to Synapse Core:**
+  - "Allow anonymous usage data to be sent to the *upstream developers*"
+  - "Send crash reports to help improve *the upstream engine*", which is **on by default**
+  - "Open the official *the upstream engine* Web GUI"
   - "GUI Username / Leave empty for no authentication"
-  - "Raw JSON configuration of your *Syncthing* instance"
+  - "Raw JSON configuration of your *the upstream engine* instance"
 - **Switches that do nothing:** NAT Traversal, Relaying and Global Discovery suggest features the engine doesn't run yet.
 - **Device-name field is blank** although the engine runs as "vm".
 - **The device ID is a 64-character hex hash**, while Add Device expects the `XXXXXXX-XXXXXXX-…` format. Users can't pair by copying this ID into another device.
@@ -211,7 +211,7 @@ This is Synapse's differentiator, and it's the weakest screen.
 These were found while running the app, and they matter for the engine security fix applied the same day (see `SYNAPSE_AUDIT.md` §0).
 
 1. **The API token is hardcoded in the app**: `MANAGED_API_KEY = "synapse-managed-api-key-2025"` in `DesktopDaemonManager` (and in both API clients). The desktop app starts the engine with `--token synapse-managed-api-key-2025`. Anyone can read that string from the jar, so the token protects nothing until it's replaced with a **random per-install token** (for example, let the engine generate `<home>/api.token` and have the app read it).
-2. **The native client doesn't use that token on fresh installs.** In `CoreDiModule`, `SynapseCoreClientImpl` gets its token from `preferencesHelper.getApiKey()`, which is empty until the user saves one. `SyncthingApiClientImpl` correctly uses the `ApiKeyProvider`.
+2. **The native client doesn't use that token on fresh installs.** In `CoreDiModule`, `SynapseCoreClientImpl` gets its token from `preferencesHelper.getApiKey()`, which is empty until the user saves one. `SynapseApiClientImpl` correctly uses the `ApiKeyProvider`.
    - Before the engine fix this didn't matter, because the engine ignored tokens.
    - **With the fix, fresh installs lose conflicts, pairing requests, version and Settings data** (verified: 145 unauthenticated `/api/v1/system/status` calls in 25 s).
    - **Fix** (one line in `CoreDiModule.kt`): build `SynapseCoreClientImpl` with `tokenProvider = { apiKeyProvider.getApiKey() ?: preferencesHelper.getApiKey() }`, using the same source as the other client.
@@ -224,7 +224,7 @@ These were found while running the app, and they matter for the engine security 
 | Phase | Work | Effort |
 |---|---|---|
 | **1. Stop the bleeding** | Fix the diff crash (#1), share-switch state (#2), conflict counter (#3), Recent Changes on WebSocket with a friendly error (#4), the native client token (§7.2), and the Settings false error (#5) | 2–4 days |
-| **2. Make status honest** | One status vocabulary (Up to date / Syncing x% / Out of sync / Paused / Offline / Error). Remove placeholders (version, Listeners, Discovery). Remove Syncthing-only settings. Correct device-ID formatting. | 2–3 days |
+| **2. Make status honest** | One status vocabulary (Up to date / Syncing x% / Out of sync / Paused / Offline / Error). Remove placeholders (version, Listeners, Discovery). Remove legacy-only settings. Correct device-ID formatting. | 2–3 days |
 | **3. Cut the noise** | Event-driven updates via `/api/v1/events`; polls at 10–30 s as a fallback; batch per-folder data. | 2 days |
 | **4. Make conflicts great** | Side-by-side diff, merge editor, who/when context, undo, conflict-policy picker | 1–2 weeks |
 | **5. Desktop polish** | Button emphasis rules, page headers, desktop dialog sizes, content max-width, window size and minimum, nav labels and tooltips, contrast fixes, new logo | 1 week |
@@ -280,6 +280,6 @@ Vertically scrollable component was measured with an infinity maximum height con
 | `08-devices.png` | Devices list |
 | `09-recent-changes-error.png` | Raw exception on Recent Changes |
 | `10-settings.png` | Settings: identity, general |
-| `11-settings-syncthing-leftovers.png` | Settings: Syncthing-specific options |
+| `11-settings-legacy-leftovers.png` | Settings: legacy-engine options |
 | `12-default-window-800x600.png` | Default window size clipping the dashboard |
 | `13-settings-false-daemon-error.png` | "Daemon is not running" while connected |

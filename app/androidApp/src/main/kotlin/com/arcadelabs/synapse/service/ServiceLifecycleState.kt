@@ -1,7 +1,7 @@
 package com.arcadelabs.synapse.service
 
 /**
- * Explicit state machine for Android Syncthing/Synapse foreground service lifecycle.
+ * Explicit state machine for Android Synapse foreground service lifecycle.
  * Replaces scattered boolean flags (isInstanceRunning, null runnable, etc.).
  *
  * UX: Clear notifications with accurate dynamic descriptions and progress.

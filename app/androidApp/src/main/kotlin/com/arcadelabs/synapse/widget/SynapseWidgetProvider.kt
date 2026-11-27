@@ -10,7 +10,7 @@ import android.os.Build
 import android.widget.RemoteViews
 import com.arcadelabs.synapse.MainActivity
 import com.arcadelabs.synapse.R
-import com.arcadelabs.synapse.service.SyncthingService
+import com.arcadelabs.synapse.service.SynapseSyncService
 import kotlinx.coroutines.launch
 
 class SynapseWidgetProvider : AppWidgetProvider() {
@@ -22,18 +22,21 @@ class SynapseWidgetProvider : AppWidgetProvider() {
     ) {
         val prefs = context.getSharedPreferences("${context.packageName}_preferences", Context.MODE_PRIVATE)
         val behaviorStr = prefs.getString("run_behavior", "FOLLOW")
-        val isRunning = behaviorStr == "FORCE_START"
+        // Use the service's real lifecycle state (covers FOLLOW mode too), not just the
+        // saved run behaviour. The service's own polling replaces this text once the engine answers.
+        val serviceState = SynapseSyncService.serviceState.value
+        val isRunning = SynapseSyncService.isInstanceRunning
 
-        // Default display when updating standard widgets without live service running
         updateWidgetState(
             context = context,
             appWidgetManager = appWidgetManager,
             appWidgetIds = appWidgetIds,
             isRunning = isRunning,
-            peersCount = 0,
-            progressText = if (isRunning) "Starting..." else "Stopped",
-            progressPercent = 0,
-            chartBitmap = null
+            progressText = when {
+                isRunning -> "Starting..."
+                behaviorStr == "FOLLOW" && serviceState is com.arcadelabs.synapse.service.ServiceLifecycleState.WaitingForConditions -> "Waiting..."
+                else -> "Stopped"
+            }
         )
     }
 
@@ -53,16 +56,16 @@ class SynapseWidgetProvider : AppWidgetProvider() {
             prefs.edit().putString("run_behavior", newBehavior).apply()
 
             // Trigger service state change
-            val serviceIntent = Intent(context, SyncthingService::class.java)
+            val serviceIntent = Intent(context, SynapseSyncService::class.java)
             if (newBehavior == "FORCE_START" || newBehavior == "FOLLOW") {
-                serviceIntent.action = SyncthingService.ACTION_START
+                serviceIntent.action = SynapseSyncService.ACTION_START
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(serviceIntent)
                 } else {
                     context.startService(serviceIntent)
                 }
             } else {
-                serviceIntent.action = SyncthingService.ACTION_STOP
+                serviceIntent.action = SynapseSyncService.ACTION_STOP
                 context.startService(serviceIntent)
             }
 
@@ -77,19 +80,16 @@ class SynapseWidgetProvider : AppWidgetProvider() {
                 appWidgetManager = appWidgetManager,
                 appWidgetIds = appWidgetIds,
                 isRunning = isRunning,
-                peersCount = 0,
                 progressText = when (newBehavior) {
                     "FORCE_START" -> "Starting..."
                     "FORCE_STOP" -> "Stopping..."
                     else -> "Waiting..."
-                },
-                progressPercent = 0,
-                chartBitmap = null
+                }
             )
         } else if (intent.action == ACTION_WIDGET_SYNC_NOW) {
             val pendingResult = goAsync()
             val koin = org.koin.core.context.GlobalContext.get()
-            val apiClient = koin.get<com.arcadelabs.synapse.core.network.SyncthingApiClient>()
+            val apiClient = koin.get<com.arcadelabs.synapse.core.network.SynapseApiClient>()
 
             // Launch standard coroutine on IO Dispatcher to trigger folder scan
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
@@ -228,10 +228,7 @@ class SynapseWidgetProvider : AppWidgetProvider() {
             appWidgetManager: AppWidgetManager,
             appWidgetIds: IntArray,
             isRunning: Boolean,
-            peersCount: Int,
-            progressText: String,
-            progressPercent: Int,
-            chartBitmap: android.graphics.Bitmap? = null
+            progressText: String
         ) {
             val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -248,7 +245,6 @@ class SynapseWidgetProvider : AppWidgetProvider() {
             }
 
             val palette = getThemePalette(context)
-            val chart = chartBitmap ?: drawSpeedChart(context, emptyList(), emptyList())
 
             for (appWidgetId in appWidgetIds) {
                 val views = RemoteViews(context.packageName, R.layout.widget_glance)
@@ -256,16 +252,14 @@ class SynapseWidgetProvider : AppWidgetProvider() {
                 // Apply dynamic theme colors to texts
                 views.setTextColor(R.id.widget_progress_text, palette.textPrimary)
 
-                // Update text and progress bar values
+                // Update status text
                 views.setTextViewText(R.id.widget_progress_text, progressText)
-                views.setProgressBar(R.id.widget_progress_bar, 100, progressPercent, false)
                 
                 // Swap the button state icon dynamically
                 views.setImageViewResource(R.id.widget_btn_toggle_icon, toggleIconRes)
 
-                // Update status dot and speed chart
+                // Update status dot
                 views.setImageViewResource(R.id.widget_status_dot, if (isRunning) R.drawable.ic_widget_dot_green else R.drawable.ic_widget_dot_red)
-                views.setImageViewBitmap(R.id.widget_speed_chart, chart)
 
                 // Dynamically tint structural backgrounds
                 setViewBackgroundTint(views, R.id.widget_root, palette.bg)
@@ -276,11 +270,6 @@ class SynapseWidgetProvider : AppWidgetProvider() {
                 // Apply icon tints programmatically
                 views.setInt(R.id.widget_btn_toggle_icon, "setColorFilter", palette.iconTint)
                 views.setInt(R.id.widget_btn_scan_icon, "setColorFilter", palette.iconTint)
-
-                // Apply progress bar tint
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    views.setColorStateList(R.id.widget_progress_bar, "setProgressTintList", android.content.res.ColorStateList.valueOf(palette.progressFill))
-                }
 
                 // PendingIntent 1: Toggle button container click
                 val toggleIntent = Intent(context, SynapseWidgetProvider::class.java).apply {
@@ -305,89 +294,6 @@ class SynapseWidgetProvider : AppWidgetProvider() {
 
                 appWidgetManager.updateAppWidget(appWidgetId, views)
             }
-        }
-
-        fun drawSpeedChart(
-            context: Context,
-            downloadHistory: List<Long>,
-            uploadHistory: List<Long>
-        ): android.graphics.Bitmap {
-            val width = 240
-            val height = 70
-            val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
-            val palette = getThemePalette(context)
-            val canvas = android.graphics.Canvas(bitmap)
-            canvas.drawColor(palette.subCardBg)
-
-            // Draw a subtle grid pattern
-            val gridPaint = android.graphics.Paint().apply {
-                color = palette.border
-                alpha = 45 // Subtle opacity
-                strokeWidth = 1f
-                style = android.graphics.Paint.Style.STROKE
-            }
-            // Horizontal lines
-            val numRows = 4
-            for (i in 1 until numRows) {
-                val y = (height.toFloat() / numRows) * i
-                canvas.drawLine(0f, y, width.toFloat(), y, gridPaint)
-            }
-            // Vertical lines
-            val numCols = 6
-            for (i in 1 until numCols) {
-                val x = (width.toFloat() / numCols) * i
-                canvas.drawLine(x, 0f, x, height.toFloat(), gridPaint)
-            }
-
-            if (downloadHistory.isEmpty() && uploadHistory.isEmpty()) {
-                val paint = android.graphics.Paint().apply {
-                    color = palette.border
-                    strokeWidth = 2f
-                    style = android.graphics.Paint.Style.STROKE
-                }
-                canvas.drawLine(0f, height - 6f, width.toFloat(), height - 6f, paint)
-                return bitmap
-            }
-            
-            val maxSpeed = (downloadHistory.maxOrNull() ?: 0L).coerceAtLeast(uploadHistory.maxOrNull() ?: 0L).coerceAtLeast(1024L)
-            val pointsCount = downloadHistory.size.coerceAtLeast(uploadHistory.size).coerceAtLeast(2)
-            val stepX = width.toFloat() / (pointsCount - 1).toFloat()
-            
-            val dlPaint = android.graphics.Paint().apply {
-                color = palette.progressFill
-                strokeWidth = 3f
-                style = android.graphics.Paint.Style.STROKE
-                isAntiAlias = true
-            }
-            
-            val ulPaint = android.graphics.Paint().apply {
-                color = palette.textSecondary
-                strokeWidth = 3f
-                style = android.graphics.Paint.Style.STROKE
-                isAntiAlias = true
-            }
-            
-            if (downloadHistory.size >= 2) {
-                val dlPath = android.graphics.Path()
-                for (i in downloadHistory.indices) {
-                    val x = i * stepX
-                    val y = height - (downloadHistory[i].toFloat() / maxSpeed.toFloat() * (height - 10) + 5)
-                    if (i == 0) dlPath.moveTo(x, y) else dlPath.lineTo(x, y)
-                }
-                canvas.drawPath(dlPath, dlPaint)
-            }
-            
-            if (uploadHistory.size >= 2) {
-                val ulPath = android.graphics.Path()
-                for (i in uploadHistory.indices) {
-                    val x = i * stepX
-                    val y = height - (uploadHistory[i].toFloat() / maxSpeed.toFloat() * (height - 10) + 5)
-                    if (i == 0) ulPath.moveTo(x, y) else ulPath.lineTo(x, y)
-                }
-                canvas.drawPath(ulPath, ulPaint)
-            }
-            
-            return bitmap
         }
     }
 }

@@ -22,7 +22,7 @@ import com.arcadelabs.synapse.features.folders.ui.FolderViewModel
 import com.arcadelabs.synapse.features.status.ui.StatusViewModel
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.compose.koinInject
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.network.SynapseApiClient
 import com.arcadelabs.synapse.core.domain.models.FolderDbStatus
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -41,29 +41,29 @@ fun MobileDashboardScreen(
     folderViewModel: FolderViewModel = koinViewModel(),
     deviceViewModel: DeviceViewModel = koinViewModel(),
     statusViewModel: StatusViewModel = koinViewModel(),
-    apiClient: SyncthingApiClient = koinInject()
+    apiClient: SynapseApiClient = koinInject()
 ) {
     val folders by folderViewModel.foldersState.collectAsState()
     val devices by deviceViewModel.devices.collectAsState()
     val statusState by statusViewModel.statusState.collectAsState()
     
     var totalLocalBytes by remember { mutableStateOf(0L) }
-    var globalCompletionPercentage by remember { mutableStateOf(100.0) }
     var syncActivityCount by remember { mutableStateOf(0) }
     var syncConflictsCount by remember { mutableStateOf(0L) }
     
     val clipboardManager = LocalClipboardManager.current
     var showCopyFeedback by remember { mutableStateOf(false) }
-    
-    // Auto-clear copy feedback toast
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // M3 snackbar confirmation for "copy device ID"
     LaunchedEffect(showCopyFeedback) {
         if (showCopyFeedback) {
-            kotlinx.coroutines.delay(2000)
+            snackbarHostState.showSnackbar("Device ID copied")
             showCopyFeedback = false
         }
     }
 
-    // Refresh folders and devices immediately when Syncthing starts running
+    // Refresh folders and devices immediately when Synapse starts running
     LaunchedEffect(statusState.isRunning) {
         if (statusState.isRunning) {
             folderViewModel.loadFolders()
@@ -86,24 +86,17 @@ fun MobileDashboardScreen(
                     }
 
                     var totalBytes = 0L
-                    var totalInSyncBytes = 0L
-                    var totalGlobalBytes = 0L
-                    var totalConflicts = 0L
 
                     dbStatuses.filterNotNull().forEach { dbStatus ->
                         totalBytes += dbStatus.localBytes
-                        totalInSyncBytes += dbStatus.inSyncBytes
-                        totalGlobalBytes += dbStatus.globalBytes
-                        totalConflicts += dbStatus.pullErrors
                     }
 
                     totalLocalBytes = totalBytes
-                    syncConflictsCount = totalConflicts
-                    globalCompletionPercentage = if (totalGlobalBytes > 0L) {
-                        (totalInSyncBytes.toDouble() / totalGlobalBytes.toDouble() * 100.0).coerceIn(0.0, 100.0)
-                    } else {
-                        100.0
-                    }
+                    // Open conflicts from the engine (the list the Quarantine dialog shows).
+                    // Pull errors are not conflicts, so they no longer feed this counter.
+                    syncConflictsCount = try {
+                        apiClient.getConflicts().count { !it.isTerminal }.toLong()
+                    } catch (_: Exception) { syncConflictsCount }
 
                     try {
                         val events = apiClient.getEvents(since = 0, limit = 100)
@@ -118,11 +111,7 @@ fun MobileDashboardScreen(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -130,12 +119,10 @@ fun MobileDashboardScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. Status & Speeds Header Card
+            // 1. Engine status header card
             HeaderStatusCard(
                 isRunning = statusState.isRunning,
-                uptime = statusState.uptime,
-                downloadSpeed = statusState.downloadSpeed,
-                uploadSpeed = statusState.uploadSpeed
+                uptime = statusState.uptime
             )
             
             // 2. Summary stats cards (Folders & Devices)
@@ -151,10 +138,10 @@ fun MobileDashboardScreen(
                     modifier = Modifier.weight(1f)
                 )
                 
-                val activeDevices = devices.count { !it.paused }
+                val onlineDevices = devices.count { it.connected }
                 DeviceSummaryCard(
                     devicesCount = devices.size,
-                    activeCount = activeDevices,
+                    onlineCount = onlineDevices,
                     onNavigateToDevices = onNavigateToDevices,
                     modifier = Modifier.weight(1f)
                 )
@@ -164,7 +151,6 @@ fun MobileDashboardScreen(
             Text(
                 text = "Sync & System Details",
                 style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(top = 8.dp)
             )
@@ -172,20 +158,10 @@ fun MobileDashboardScreen(
             Column(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    SyncHealthCard(
-                        globalCompletionPercentage = globalCompletionPercentage,
-                        modifier = Modifier.weight(1f)
-                    )
-                    
-                    SyncedVolumeCard(
-                        totalLocalBytes = totalLocalBytes,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                SyncedVolumeCard(
+                    totalLocalBytes = totalLocalBytes,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -220,35 +196,18 @@ fun MobileDashboardScreen(
             if (statusState.version.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Syncthing Engine ${statusState.version}",
+                    text = "Synapse Engine ${statusState.version}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center
                 )
             }
         }
         
-        AnimatedVisibility(
-            visible = showCopyFeedback,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 32.dp)
-        ) {
-            Surface(
-                color = MaterialTheme.colorScheme.inverseSurface,
-                shape = RoundedCornerShape(12.dp),
-                shadowElevation = 6.dp
-            ) {
-                Text(
-                    text = "Device ID copied to clipboard",
-                    color = MaterialTheme.colorScheme.inverseOnSurface,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                )
-            }
-        }
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
     }
 }

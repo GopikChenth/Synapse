@@ -11,6 +11,8 @@ import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 interface SynapseCoreClient {
     suspend fun getStatus(): CoreSystemStatus
@@ -39,7 +41,11 @@ interface SynapseCoreClient {
     suspend fun acceptPendingDevice(deviceId: String): Boolean
     suspend fun rejectPendingDevice(deviceId: String): Boolean
     suspend fun getPendingFolders(): List<CorePendingFolder>
-    suspend fun acceptPendingFolder(folderId: String): Boolean
+    /**
+     * Accepts a pending folder invitation. The engine requires a JSON body with "local_path"
+     * (where the folder will be stored); without a path the request fails and this returns false.
+     */
+    suspend fun acceptPendingFolder(folderId: String, localPath: String? = null): Boolean
     suspend fun rejectPendingFolder(folderId: String): Boolean
     suspend fun getConnections(): Map<String, CorePeerConnectionMetrics>
     suspend fun getConflicts(): List<CoreQuarantineConflict>
@@ -197,11 +203,19 @@ class SynapseCoreClientImpl(
         }.body()
     }
 
-    override suspend fun acceptPendingFolder(folderId: String): Boolean {
-        val resp = httpClient.post("${baseUrl()}/api/v1/cluster/pending/folders/$folderId/accept") {
-            tokenProvider()?.let { header("Authorization", "Bearer $it") }
+    override suspend fun acceptPendingFolder(folderId: String, localPath: String?): Boolean {
+        val path = localPath?.trim().orEmpty()
+        if (path.isEmpty()) return false // engine rejects accept without local_path (400)
+        return try {
+            val resp = httpClient.post("${baseUrl()}/api/v1/cluster/pending/folders/$folderId/accept") {
+                contentType(ContentType.Application.Json)
+                tokenProvider()?.let { header("Authorization", "Bearer $it") }
+                setBody(buildJsonObject { put("local_path", path) }.toString())
+            }
+            resp.status.isSuccess()
+        } catch (_: Exception) {
+            false
         }
-        return resp.status.isSuccess()
     }
 
     override suspend fun rejectPendingFolder(folderId: String): Boolean {

@@ -10,7 +10,7 @@
 
 **Synapse Core** is an embedded, peer-to-peer (P2P) continuous file synchronization engine designed to act as the unified native backend for the Synapse ecosystem (Android, Desktop, and Web).
 
-Unlike existing solutions like Syncthing that rely on opaque binary block synchronization and destructive file-renaming conflict policies (`.sync-conflict-*`), Synapse Core is built around **three foundational pillars**:
+Unlike existing block-based sync tools that rely on opaque binary block synchronization and destructive file-renaming conflict policies (`.sync-conflict-*`), Synapse Core is built around **three foundational pillars**:
 
 1. **Non-Polluting Virtual Quarantine:** Conflicting edits never litter the user's filesystem. Conflicting versions are stored in an internal staging cache until reconciled.
 2. **True 3-Way Semantic Merging:** By maintaining a lightweight revision Merkle DAG (ancestor tree), the engine identifies the Lowest Common Ancestor (LCA) to automatically merge non-overlapping edits in text, Markdown, CSV, JSON, and code.
@@ -297,7 +297,7 @@ flowchart TD
   Synapse/app/androidApp/src/main/jniLibs/arm64-v8a/libsynapse.so
   ```
 * During APK installation, Android extracts the file into the application’s `nativeLibraryDir` with executable rights (`+x`).
-* The Android `SyncthingService` / foreground service spawns it directly via `ProcessBuilder`:
+* The Android `SynapseSyncService` / foreground service spawns it directly via `ProcessBuilder`:
   ```kotlin
   val binary = File(context.applicationInfo.nativeLibraryDir, "libsynapse.so")
   val process = ProcessBuilder(binary.absolutePath, "--home", appDir.absolutePath).start()

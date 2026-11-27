@@ -1,14 +1,12 @@
 @file:Suppress("DEPRECATION")
 package com.arcadelabs.synapse.features.devices.ui
 
+import com.arcadelabs.synapse.core.domain.models.formatDeviceId
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -71,26 +69,21 @@ fun DesktopEditDeviceDialog(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            shape = SynapseDialogShape,
-            title = { Text("Delete Device?", style = MaterialTheme.typography.titleLarge) },
+            title = { Text("Delete device?") },
             text = {
                 Text(
-                    "Are you sure you want to delete ${device.name.ifEmpty { "this device" }}?\n\nID: ${device.id.chunked(4).joinToString(" ")}",
+                    "Are you sure you want to delete ${device.name.ifEmpty { "this device" }}?\n\nID: ${device.id.formatDeviceId()}",
                     style = MaterialTheme.typography.bodyMedium
                 )
             },
             confirmButton = {
-                Button(
+                TextButton(
                     onClick = {
                         viewModel.deleteDevice(device.id)
                         showDeleteConfirm = false
                         onDismiss()
                     },
-                    shape = SynapsePillShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) {
                     Text("Delete")
                 }
@@ -98,7 +91,6 @@ fun DesktopEditDeviceDialog(
             dismissButton = {
                 TextButton(
                     onClick = { showDeleteConfirm = false },
-                    shape = SynapsePillShape
                 ) {
                     Text("Cancel")
                 }
@@ -109,12 +101,10 @@ fun DesktopEditDeviceDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = SynapseDialogShape,
         title = {
             Text(
                 "Edit Device Options",
                 style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
             )
         },
         text = {
@@ -127,7 +117,7 @@ fun DesktopEditDeviceDialog(
                 if (error != null) {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = MaterialTheme.shapes.small,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
@@ -150,7 +140,7 @@ fun DesktopEditDeviceDialog(
                             clipboardManager.setText(AnnotatedString(device.id))
                         }) {
                             Icon(
-                                imageVector = Icons.Default.Share,
+                                imageVector = SynapseIcons.Share,
                                 contentDescription = "Copy ID",
                                 modifier = Modifier.size(20.dp)
                             )
@@ -185,8 +175,7 @@ fun DesktopEditDeviceDialog(
                 // 4. Folders Checklist
                 Text(
                     text = "Shared Folders",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
 
@@ -229,12 +218,11 @@ fun DesktopEditDeviceDialog(
                                         style = MaterialTheme.typography.bodyMedium
                                     )
                                 }
-                                Switch(
+                                Checkbox(
                                     checked = isChecked,
                                     onCheckedChange = { checked ->
                                         selectedFolders[folder.id] = checked
                                     },
-                                    modifier = Modifier.scale(0.75f)
                                 )
                             }
 
@@ -265,13 +253,11 @@ fun DesktopEditDeviceDialog(
                 ) {
                     Text(
                         text = "Introducer",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold
+                        style = MaterialTheme.typography.bodyLarge
                     )
                     Switch(
                         checked = isIntroducer,
                         onCheckedChange = { isIntroducer = it },
-                        modifier = Modifier.scale(0.75f)
                     )
                 }
 
@@ -283,13 +269,11 @@ fun DesktopEditDeviceDialog(
                 ) {
                     Text(
                         text = "Auto Accept",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold
+                        style = MaterialTheme.typography.bodyLarge
                     )
                     Switch(
                         checked = isAutoAccept,
                         onCheckedChange = { isAutoAccept = it },
-                        modifier = Modifier.scale(0.75f)
                     )
                 }
 
@@ -301,13 +285,11 @@ fun DesktopEditDeviceDialog(
                 ) {
                     Text(
                         text = "Pause Device",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold
+                        style = MaterialTheme.typography.bodyLarge
                     )
                     Switch(
                         checked = isPaused,
                         onCheckedChange = { isPaused = it },
-                        modifier = Modifier.scale(0.75f)
                     )
                 }
 
@@ -320,13 +302,11 @@ fun DesktopEditDeviceDialog(
                     ) {
                         Text(
                             text = "Untrusted Device",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold
+                            style = MaterialTheme.typography.bodyLarge
                         )
                         Switch(
                             checked = isUntrusted,
                             onCheckedChange = { isUntrusted = it },
-                            modifier = Modifier.scale(0.75f)
                         )
                     }
                     Spacer(modifier = Modifier.height(2.dp))
@@ -346,13 +326,11 @@ fun DesktopEditDeviceDialog(
                     ) {
                         Text(
                             text = "Custom sync conditions",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold
+                            style = MaterialTheme.typography.bodyLarge
                         )
                         Switch(
                             checked = customSyncConditions,
                             onCheckedChange = { customSyncConditions = it },
-                            modifier = Modifier.scale(0.75f)
                         )
                     }
                     Spacer(modifier = Modifier.height(2.dp))
@@ -364,7 +342,7 @@ fun DesktopEditDeviceDialog(
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Specify sync conditions",
-                        color = if (customSyncConditions) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        color = if (customSyncConditions) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier
@@ -380,15 +358,11 @@ fun DesktopEditDeviceDialog(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Delete Button
-                Button(
+                TextButton(
                     onClick = { showDeleteConfirm = true },
-                    shape = SynapsePillShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) {
-                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(SynapseIcons.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Delete")
                 }
@@ -415,7 +389,6 @@ fun DesktopEditDeviceDialog(
                             onSuccess = onDismiss
                         )
                     },
-                    shape = SynapsePillShape,
                     enabled = !isLoading
                 ) {
                     if (isLoading) {
@@ -429,7 +402,6 @@ fun DesktopEditDeviceDialog(
         dismissButton = {
             TextButton(
                 onClick = onDismiss,
-                shape = SynapsePillShape
             ) {
                 Text("Cancel")
             }

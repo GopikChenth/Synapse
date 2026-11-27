@@ -81,7 +81,7 @@ Files: `src/storage/mod.rs`, `src/p2p/mod.rs`.
 The engine now **rejects requests without the token**, so the app must send it before you ship a rebuilt engine. The app currently uses the prebuilt binaries in `bin/`, `app/desktopApp/bin/` and `jniLibs/`, so nothing changes until those are rebuilt.
 
 1. **Desktop** (`DesktopDaemonManager.kt`, `JvmApiKeyProvider.kt`): either generate a token and launch the engine with `--token <t>` / `SYNAPSE_TOKEN`, or read `<SYNAPSE_HOME>/api.token` after the engine starts. The default home is `~/.synapse`.
-2. **Android** (`SyncthingService.kt` / `SyncthingRunnable.kt`, `AndroidApiKeyProvider.kt`): read `<home_dir>/api.token` from the home directory passed to `synapse_start` or to the process. Wait for the file to exist on first start.
+2. **Android** (`SynapseSyncService.kt` / `EngineRunnable.kt`, `AndroidApiKeyProvider.kt`): read `<home_dir>/api.token` from the home directory passed to `synapse_start` or to the process. Wait for the file to exist on first start.
 3. **HTTP client** (`HttpClientProvider.kt`): add `Authorization: Bearer <token>` to every request (a Ktor `defaultRequest { header(...) }`), and to the WebSocket connection to `/api/v1/events`.
 4. **Web target:** start the engine with `--allow-origin <web UI origin>`, and pass the token as `?token=` on the event-stream URL.
 
@@ -95,7 +95,7 @@ It is not yet shippable, for four reasons:
 
 1. **Anyone can control the engine.** The local control API never checks the auth token and allows requests from any web origin. Any website the user visits, or any app on an Android phone, can add a sync folder, add an attacker's device as trusted, and share the folder with it. **This was confirmed live.**
 2. **Devices can't sync with each other.** The engine never opens an outbound connection to a peer. The index and file-notice messages are dropped, and about 4,700 lines of tested networking code (swarm scheduler, NAT traversal, relay, throttling) are never called at runtime.
-3. **Peers aren't authenticated.** Peer identity is self-asserted. The Syncthing-compatible (BEP) port runs without TLS and matches peers by device *name*, and data chunks are served to anyone who asks.
+3. **Peers aren't authenticated.** Peer identity is self-asserted. The BEP-compatible port runs without TLS and matches peers by device *name*, and data chunks are served to anyone who asks.
 4. **A remote code execution bug is waiting.** A shell command can be set through the open API, and synced file names are spliced into it unescaped. It becomes exploitable as soon as #2 is fixed.
 
 Around these there are release-engineering gaps. Android releases are signed with a debug key, no tests run in CI, and every Gradle test task is disabled. A vulnerable SQLite is bundled, and release builds ship stale prebuilt binaries.
@@ -155,7 +155,7 @@ The Kotlin/Compose source files (`app/shared`, `app/androidApp`, `app/desktopApp
 | H5 | 🟠 High | Dependencies | Vulnerable bundled SQLite (RUSTSEC-2026-0459) | `cargo audit` |
 | H6 | 🟠 High | Android | Manifest: global cleartext, `allowBackup`, broad permissions, exported widget receiver | Confirmed |
 | H7 | 🟠 High | Release | Releases ship committed (stale) prebuilt binaries instead of building | Confirmed |
-| M1 | 🟡 Medium | Product | App still calls itself a Syncthing client throughout | Confirmed |
+| M1 | 🟡 Medium | Product | App still uses legacy-engine naming throughout | Confirmed |
 | M2 | 🟡 Medium | Release | Four different version numbers | Confirmed |
 | M3 | 🟡 Medium | Codebase | Dead/stub modules (Ktor server, iOS, web) | Confirmed |
 | M4 | 🟡 Medium | Kotlin structure | Very large files; duplicated mobile/desktop dialogs; mock client in production source set | From file listing |
@@ -249,7 +249,7 @@ async fn require_token(State(st): State<AppState>, req: Request, next: Next) -> 
 |---|---|
 | `p2p/mod.rs:491` `create_quic_server` | Generates a **fresh self-signed certificate every run** (`rcgen::generate_simple_self_signed`). It's unrelated to the device's Ed25519 identity, and there's no client authentication. |
 | `p2p/mod.rs` `Hello` handler | `device_id` is **self-asserted** and accepted as-is. Device IDs are broadcast in plain text every 5 s on UDP discovery, so any LAN host can learn and impersonate one. |
-| `p2p/bep.rs:771` | The BEP listener is plain `TcpListener` with **no TLS**, although the comments say "TCP/TLS". Real Syncthing nodes require TLS, so this is neither secure nor actually interoperable. |
+| `p2p/bep.rs:771` | The BEP listener is plain `TcpListener` with **no TLS**, although the comments say "TCP/TLS". Real BEP peers require TLS, so this is neither secure nor actually interoperable. |
 | `p2p/mod.rs:540` | BEP peers are matched to paired devices by **device name** (`d.name == hello.device_name`). Anyone announcing the same name is treated as that device. |
 | `p2p/mod.rs:464` `ChunkRequest` | Serves any stored chunk to **any** connected peer, paired or not. |
 | `p2p/mod.rs:471` `ChunkResponse` | Stores whatever data arrives **without checking that `blake3(data) == chunk_hash`**, so a peer can poison the block store. |
@@ -262,7 +262,7 @@ C3 rows 1–5 and 8 are confirmed by reading the code. The path traversal (row 7
 **Impact.** Once C2 is fixed, any host on the same network, or anywhere once relay/NAT is wired, could impersonate a paired device, read the user's chunks, inject corrupted data, and add itself to the cluster.
 
 **Fix**
-1. Derive the TLS certificate from the device's Ed25519 identity key and make it persistent. The device ID becomes the hash of the certificate public key, as in Syncthing.
+1. Derive the TLS certificate from the device's Ed25519 identity key and make it persistent. The device ID becomes the hash of the certificate public key, as in BEP.
 2. Require **mutual TLS** on both QUIC and BEP. After the handshake, compute the peer's device ID from **its certificate**, never from a message field.
 3. Reject every message except `Hello` from peers that aren't paired. Only paired, unpaused peers may request chunks, and only for folders shared with them.
 4. Validate that `chunk_hash` is exactly 64 lowercase hex characters before using it anywhere. On `ChunkResponse`, recompute BLAKE3 and reject mismatches. Only accept responses to chunks you actually requested.
@@ -344,7 +344,7 @@ Also: `tokio` is built with `features = ["full", "test-util"]`. `test-util` belo
 | `CAMERA` | Used for QR pairing, but the app also uses the Play Services code scanner, which needs no camera permission | Remove `CAMERA` if only the code scanner is used |
 | `.widget.SynapseWidgetProvider` `exported="true"` with custom actions `ACTION_WIDGET_TOGGLE_SYNC` / `ACTION_WIDGET_SYNC_NOW` | Any app can broadcast these and toggle sync | Use explicit `PendingIntent`s and keep only `APPWIDGET_UPDATE` in the filter, or check the sender |
 | `BootReceiver` `exported="true"` | Accepts any broadcast matching its filter | Check `intent.action == BOOT_COMPLETED` in code |
-| Foreground-service description | Says it "runs the local Syncthing daemon process" | Update to describe Synapse Core (Play reviewers read this) |
+| Foreground-service description | Says it "runs the local legacy daemon process" | Update to describe Synapse Core (Play reviewers read this) |
 
 ### H7 — Releases ship committed, stale binaries
 - `.gitignore` deliberately un-ignores `/bin/synapse-core` and `/app/desktopApp/bin/synapse-core`. The Android `.so` files sit in `app/androidApp/src/main/jniLibs/`.
@@ -366,13 +366,13 @@ Also: `tokio` is built with `features = ["full", "test-util"]`. `test-util` belo
 
 ## 7. Medium / polish findings
 
-### M1 — The app still identifies as a Syncthing client
-- `README.md` describes Synapse as a "Cross-platform Compose Multiplatform client for Syncthing", and its architecture section talks about the Syncthing daemon.
-- Kotlin types: `SyncthingService`, `SyncthingRunnable`, `SyncthingApiClient`, `MockSyncthingApiClient`.
-- The Android foreground-service description mentions the Syncthing daemon.
-- `packaging/cachyos/synapse-cachyos` symlinks system `syncthing` as `~/Synapse/bin/syncthing.exe` on Linux.
-- The API exposes duplicate `/rest/...` Syncthing-style routes next to `/api/v1/...`.
-- **Fix:** decide the product story. If Synapse Core replaces Syncthing, rename the classes, rewrite the README around Synapse Core, drop the Syncthing launcher logic, and deprecate the `/rest` aliases. If it's meant to stay Syncthing-compatible, real BEP needs TLS and real device IDs (see C3).
+### M1 — The app still uses legacy-engine naming
+- `README.md` describes Synapse as a "Cross-platform Compose Multiplatform client for a legacy sync engine", and its architecture section talks about the legacy daemon.
+- Kotlin types: `SynapseSyncService`, `EngineRunnable`, `SynapseApiClient`, `MockSynapseApiClient`.
+- The Android foreground-service description mentions the legacy daemon.
+- `packaging/cachyos/synapse-cachyos` symlinks the system legacy sync binary into `~/Synapse/bin/` on Linux.
+- The API exposes duplicate `/rest/...` REST-style routes next to `/api/v1/...`.
+- **Fix:** decide the product story. If Synapse Core replaces the legacy engine, rename the classes, rewrite the README around Synapse Core, drop the legacy launcher logic, and deprecate the `/rest` aliases. If it's meant to stay BEP-compatible, real BEP needs TLS and real device IDs (see C3).
 
 ### M2 — Version numbers disagree
 
@@ -389,7 +389,7 @@ Also: `tokio` is built with `features = ["full", "test-util"]`. `test-util` belo
 - `server/` — a Ktor "Hello, Ktor!" app listening on **0.0.0.0:8080** (all interfaces). It's unused and confusing; delete it or bind it to localhost.
 - `app/iosApp` — an empty SwiftUI wrapper. No iOS build exists in CI.
 - `app/webApp` — the README itself documents CORS and mixed-content blockers, and it only works because of the insecure wildcard CORS (C1). Either design a proper web story (the engine serving the UI from the same origin) or remove it.
-- `core/` contains `MockSyncthingApiClient` in **`commonMain`**, so a mock client ships in production builds. Move it to `commonTest`.
+- `core/` contains `MockSynapseApiClient` in **`commonMain`**, so a mock client ships in production builds. Move it to `commonTest`.
 
 ### M4 — Kotlin code structure (from file sizes and names)
 - Very large files: `DesktopDashboardScreen.kt` **69 KB**, `App.kt` **51 KB**, `DesktopSettingsScreen.kt` 37 KB, `DesktopFoldersScreen.kt` 31 KB, `FoldersScreen.kt` 27 KB. Split them into composables per card or section with their own previews.
@@ -417,7 +417,7 @@ Also: `tokio` is built with `features = ["full", "test-util"]`. `test-util` belo
 Remove these from the project root, and from git if they're tracked:
 - `hs_err_pid27504.log`, `hs_err_pid3816.log` (JVM crash dumps, 315 KB)
 - `err.txt`, `err_android.txt`, `err_check.txt`, `build_errors.txt`. `err_check.txt` is saved in UTF-16.
-- `syncthing-main.zip` (5.9 MB) and `syncthing-android-main.zip` (10.3 MB). They're git-ignored, but they still sit in the project folder.
+- Two upstream source archives (5.9 MB and 10.3 MB). They're git-ignored, but they still sit in the project folder.
 - `packaging/cachyos/*.pkg.tar.zst` (3 × ~50 MB), plus `packaging/cachyos/pkg/` and `src/` build output
 - `ArcadeLabs/` (an unrelated directory inside the project)
 - `logo.png` is **2.2 MB** and is used as the Android launcher icon and in shared Compose resources. Use adaptive vector icons and a properly sized PNG (under 100 KB).
@@ -485,7 +485,7 @@ Remove these from the project root, and from git if they're tracked:
 - [ ] Changelog and checksums on releases
 
 **Product**
-- [ ] Syncthing naming removed (or compatibility made real)
+- [ ] Legacy-engine naming removed (or compatibility made real)
 - [ ] README rewritten for Synapse Core
 - [ ] Privacy policy and Play declarations
 - [ ] Localization and accessibility pass
@@ -635,11 +635,11 @@ A browser can send all of these from any web page. Simple `POST` requests with `
 
 These files couldn't be read in this pass and should be audited next. They're likely to have their own issues, such as where and how the API key is stored, and error and loading states.
 
-- `core/src/commonMain/.../network/` — `SynapseCoreClient.kt`, `SyncthingApiClient.kt`, `HttpClientProvider.kt`, `MockSyncthingApiClient.kt`
+- `core/src/commonMain/.../network/` — `SynapseCoreClient.kt`, `SynapseApiClient.kt`, `HttpClientProvider.kt`, `MockSynapseApiClient.kt`
 - `core/src/{androidMain,jvmMain}/.../network/*ApiKeyProvider.kt` — **how the token is stored and read**
 - `app/shared/src/commonMain/.../App.kt` and all `features/*` screens and ViewModels
 - `app/shared/src/jvmMain/.../daemon/DesktopDaemonManager.kt` — how the desktop app launches and supervises the engine
-- `app/androidApp/.../service/SyncthingService.kt`, `SyncthingRunnable.kt`, `RunConditionMonitor.kt`, `BootReceiver.kt`, `SynapseWidgetProvider.kt`, `MainActivity.kt`
+- `app/androidApp/.../service/SynapseSyncService.kt`, `EngineRunnable.kt`, `RunConditionMonitor.kt`, `BootReceiver.kt`, `SynapseWidgetProvider.kt`, `MainActivity.kt`
 - `app/desktopApp/.../main.kt`, `cli/LinuxHyprlandCli.kt`
 
 To make them readable, free about 17 GB of disk space so the shell on the machine can start. Or connect the deep source folders (e.g. `app\shared\src\commonMain\kotlin\com\arcadelabs\synapse`) directly as additional folders.

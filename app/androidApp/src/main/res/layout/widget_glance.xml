@@ -15,11 +15,12 @@
         android:layout_height="0dp"
         android:layout_weight="1.1"
         android:orientation="vertical"
+        android:gravity="center_vertical"
         android:background="@drawable/widget_sub_card_background"
         android:padding="8dp"
         android:layout_marginBottom="4dp">
 
-        <!-- Header: Progress Label on Left, Status Indicator Dot on Right -->
+        <!-- Header: Status Label on Left, Status Indicator Dot on Right -->
         <RelativeLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content">
@@ -48,28 +49,6 @@
                 android:singleLine="true"
                 android:ellipsize="end" />
         </RelativeLayout>
-
-        <!-- Speed History Chart (Rendered dynamically in background onto a Canvas) -->
-        <ImageView
-            android:id="@+id/widget_speed_chart"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:layout_marginTop="2dp"
-            android:layout_marginBottom="2dp"
-            android:scaleType="fitXY"
-            android:contentDescription="Speed Chart" />
-
-        <!-- Linear Progress Bar -->
-        <ProgressBar
-            android:id="@+id/widget_progress_bar"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="3dp"
-            android:max="100"
-            android:progress="0"
-            android:progressTint="@color/widget_progress_fill"
-            android:progressBackgroundTint="@color/widget_progress_bg" />
     </LinearLayout>
 
     <!-- Bottom Half: Control Actions (Split horizontally) -->

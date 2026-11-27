@@ -28,13 +28,11 @@ data class DeviceUiModel(
     val inBytesTotal: Long = 0,
     val outBytesTotal: Long = 0,
     val introducer: Boolean = false,
-    val autoAcceptFolders: Boolean = false,
-    val untrusted: Boolean = false,
     val sharedFolders: List<String> = emptyList()
 )
 
 class DeviceViewModel(
-    private val apiClient: SyncthingApiClient
+    private val apiClient: SynapseApiClient
 ) : ViewModel() {
 
     // ── Explicit State Machine (Primary Source of Truth) ─────────────────────
@@ -110,11 +108,11 @@ class DeviceViewModel(
 
     private fun mapExceptionToUserMessage(e: Exception, defaultMsg: String): String {
         return when (e) {
-            is ApiKeyNotConfiguredException -> "Syncthing API key is missing or not configured."
-            is SyncthingUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
-            is SyncthingNotFoundException -> "Endpoint not found. Check the base URL."
-            is SyncthingTimeoutException -> "Connection timed out. Is Syncthing running?"
-            is SyncthingApiException -> "API Error: ${e.message}"
+            is ApiKeyNotConfiguredException -> "Synapse API key is missing or not configured."
+            is SynapseUnauthorizedException -> "Unauthorized: API key is invalid or rejected."
+            is SynapseNotFoundException -> "Endpoint not found. Check the base URL."
+            is SynapseTimeoutException -> "Connection timed out. Is Synapse running?"
+            is SynapseApiException -> "API Error: ${e.message}"
             else -> {
                 val msg = e.message ?: ""
                 if (
@@ -192,8 +190,6 @@ class DeviceViewModel(
                 inBytesTotal = conn?.inBytesTotal ?: 0,
                 outBytesTotal = conn?.outBytesTotal ?: 0,
                 introducer = device.introducer,
-                autoAcceptFolders = device.autoAcceptFolders,
-                untrusted = device.untrusted,
                 sharedFolders = sharedFolders
             )
         }
@@ -233,9 +229,7 @@ class DeviceViewModel(
         name: String,
         addresses: List<String>,
         introducer: Boolean,
-        autoAccept: Boolean,
         paused: Boolean,
-        untrusted: Boolean,
         sharedFolders: List<String>,
         onSuccess: () -> Unit
     ) {
@@ -252,11 +246,9 @@ class DeviceViewModel(
                     name = name,
                     addresses = addresses,
                     paused = paused,
-                    introducer = introducer,
-                    autoAcceptFolders = autoAccept,
-                    untrusted = untrusted
+                    introducer = introducer
                 )
-                
+
                 val updatedFolders = currentConfig.folders.map { folder ->
                     if (sharedFolders.contains(folder.id)) {
                         if (folder.devices.none { it.deviceID.normalizeDeviceId() == normalizedId }) {
@@ -302,10 +294,8 @@ class DeviceViewModel(
         name: String,
         addresses: List<String>,
         introducer: Boolean,
-        autoAccept: Boolean,
         paused: Boolean,
-        untrusted: Boolean,
-        sharedFolders: Map<String, String>,
+        sharedFolders: List<String>,
         onSuccess: () -> Unit
     ) {
         val normalizedId = id.normalizeDeviceId()
@@ -317,29 +307,21 @@ class DeviceViewModel(
                 val currentConfig = apiClient.systemConfig()
                 
                 val existingDevice = currentConfig.devices.firstOrNull { it.deviceID.normalizeDeviceId() == normalizedId }
+                // autoAcceptFolders / untrusted are no longer edited; copy() keeps their current values.
                 val updatedDevice = (existingDevice ?: Device(deviceID = normalizedId)).copy(
                     name = name,
                     addresses = addresses,
                     paused = paused,
-                    introducer = introducer,
-                    autoAcceptFolders = autoAccept,
-                    untrusted = untrusted
+                    introducer = introducer
                 )
-                
+
                 val updatedFolders = currentConfig.folders.map { folder ->
-                    if (sharedFolders.containsKey(folder.id)) {
-                        val password = sharedFolders[folder.id] ?: ""
+                    if (sharedFolders.contains(folder.id)) {
                         val existingRef = folder.devices.firstOrNull { it.deviceID.normalizeDeviceId() == normalizedId }
-                        val newRef = FolderDeviceReference(
-                            deviceID = normalizedId,
-                            encryptionPassword = if (untrusted) password else ""
-                        )
                         if (existingRef != null) {
-                            folder.copy(devices = folder.devices.map {
-                                if (it.deviceID.normalizeDeviceId() == normalizedId) newRef else it
-                            })
+                            folder
                         } else {
-                            folder.copy(devices = folder.devices + newRef)
+                            folder.copy(devices = folder.devices + FolderDeviceReference(normalizedId))
                         }
                     } else {
                         folder.copy(devices = folder.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId })
@@ -422,8 +404,14 @@ class DeviceViewModel(
         _pendingFolders.value = currentPending.filterKeys { it != folderId }
         viewModelScope.launch {
             try {
-                apiClient.acceptPendingFolder(folderId, localPath)
-                updateDeviceStates()
+                val accepted = apiClient.acceptPendingFolder(folderId, localPath)
+                updateDeviceStates() // also restores the invitation in the list if it was not accepted
+                if (!accepted) {
+                    commitState(resource = AsyncResource.Error(
+                        if (localPath.isNullOrBlank()) "Choose a folder path to accept this folder"
+                        else "Failed to accept pending folder"
+                    ))
+                }
             } catch (e: Exception) {
                 val errMsg = mapExceptionToUserMessage(e, "Failed to accept pending folder")
                 commitState(resource = AsyncResource.Error(errMsg, e))
@@ -450,16 +438,9 @@ class DeviceViewModel(
 
         viewModelScope.launch {
             try {
-                val currentConfig = apiClient.systemConfig()
-                val updatedDevices = currentConfig.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId }
-                val updatedFolders = currentConfig.folders.map { folder ->
-                    folder.copy(devices = folder.devices.filter { it.deviceID.normalizeDeviceId() != normalizedId })
-                }
-                val updatedConfig = currentConfig.copy(
-                    devices = updatedDevices,
-                    folders = updatedFolders
-                )
-                apiClient.updateSystemConfig(updatedConfig)
+                // DELETE /rest/config/devices/:id — the engine resolves the id format and also
+                // drops the device's folder shares and pending invitations.
+                apiClient.deleteDevice(deviceId)
                 removeOperation(normalizedId)
                 updateDeviceStates()
             } catch (e: Exception) {

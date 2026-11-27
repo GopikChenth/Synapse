@@ -2,18 +2,10 @@
 package com.arcadelabs.synapse.features.devices.ui
 
 import androidx.compose.foundation.clickable
+import com.arcadelabs.synapse.core.designsystem.SynapseIcons
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,8 +19,8 @@ import com.arcadelabs.synapse.core.designsystem.DevicesIcon
 import com.arcadelabs.synapse.core.designsystem.FolderIcon
 import com.arcadelabs.synapse.core.designsystem.QrCodeIcon
 import org.koin.compose.viewmodel.koinViewModel
-import com.arcadelabs.synapse.core.domain.models.parseSyncthingQr
-import com.arcadelabs.synapse.core.domain.models.parseSyncthingQrDetails
+import com.arcadelabs.synapse.core.domain.models.parseDeviceQr
+import com.arcadelabs.synapse.core.domain.models.parseDeviceQrDetails
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,17 +39,15 @@ fun DesktopAddDeviceDialog(
     var deviceAddresses by remember { mutableStateOf("dynamic") }
     val selectedFolders = remember { mutableStateListOf<String>() }
     var isIntroducer by remember { mutableStateOf(false) }
-    var isAutoAccept by remember { mutableStateOf(false) }
     var isPaused by remember { mutableStateOf(false) }
-    var isUntrusted by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Add Device", style = MaterialTheme.typography.titleMedium) },
+                title = { Text("Add device") },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(SynapseIcons.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -82,12 +72,9 @@ fun DesktopAddDeviceDialog(
                         },
                         enabled = deviceId.isNotEmpty()
                     ) {
-                        Icon(Icons.Default.Check, contentDescription = "Save")
+                        Icon(SynapseIcons.Check, contentDescription = "Save")
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
             )
         }
     ) { innerPadding ->
@@ -109,12 +96,12 @@ fun DesktopAddDeviceDialog(
                 )
             }
             // 1. Device ID (with trailing QR code scanner icon)
-            DesktopDeviceFormField(icon = Icons.Default.Info, title = "Device ID") {
+            DesktopDeviceFormField(icon = SynapseIcons.Info, title = "Device ID") {
                 OutlinedTextField(
                     value = deviceId,
                     onValueChange = { input ->
                         if (input.startsWith("syncthing://", ignoreCase = true)) {
-                            val (parsedId, parsedName) = input.parseSyncthingQrDetails()
+                            val (parsedId, parsedName) = input.parseDeviceQrDetails()
                             deviceId = parsedId
                             if (parsedName.isNotEmpty()) {
                                 deviceName = parsedName
@@ -130,7 +117,7 @@ fun DesktopAddDeviceDialog(
                         if (scanQrCode != null) {
                             IconButton(onClick = {
                                 scanQrCode.invoke { scannedId ->
-                                    val (parsedId, parsedName) = scannedId.parseSyncthingQrDetails()
+                                    val (parsedId, parsedName) = scannedId.parseDeviceQrDetails()
                                     deviceId = parsedId
                                     if (parsedName.isNotEmpty()) {
                                         deviceName = parsedName
@@ -150,7 +137,7 @@ fun DesktopAddDeviceDialog(
             }
 
             // 2. Name
-            DesktopDeviceFormField(icon = Icons.Default.Edit, title = "Name") {
+            DesktopDeviceFormField(icon = SynapseIcons.Edit, title = "Name") {
                 OutlinedTextField(
                     value = deviceName,
                     onValueChange = { deviceName = it },
@@ -162,7 +149,7 @@ fun DesktopAddDeviceDialog(
             }
 
             // 3. Addresses
-            DesktopDeviceFormField(icon = Icons.Default.Share, title = "Addresses") {
+            DesktopDeviceFormField(icon = SynapseIcons.Share, title = "Addresses") {
                 OutlinedTextField(
                     value = deviceAddresses,
                     onValueChange = { deviceAddresses = it },
@@ -177,8 +164,7 @@ fun DesktopAddDeviceDialog(
             DesktopDeviceFormField(icon = FolderIcon, title = "Folders") {
                 Text(
                     text = "Folders",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold
+                    style = MaterialTheme.typography.bodyLarge
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 if (folders.isEmpty()) {
@@ -208,7 +194,7 @@ fun DesktopAddDeviceDialog(
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.weight(1f)
                             )
-                            Switch(
+                            Checkbox(
                                 checked = isChecked,
                                 onCheckedChange = { checked ->
                                     if (checked) {
@@ -217,7 +203,6 @@ fun DesktopAddDeviceDialog(
                                         selectedFolders.remove(folder.id)
                                     }
                                 },
-                                modifier = Modifier.scale(0.8f)
                             )
                         }
                     }
@@ -236,21 +221,19 @@ fun DesktopAddDeviceDialog(
                 ) {
                     Text(
                         text = "Introducer",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.weight(1f)
                     )
                     Switch(
                         checked = isIntroducer,
                         onCheckedChange = { isIntroducer = it },
-                        modifier = Modifier.scale(0.8f)
                     )
                 }
             }
 
             // 6. Auto Accept
             DesktopDeviceFormField(
-                icon = Icons.Default.Refresh,
+                icon = SynapseIcons.Refresh,
                 title = "Auto Accept",
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -260,21 +243,19 @@ fun DesktopAddDeviceDialog(
                 ) {
                     Text(
                         text = "Auto Accept",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.weight(1f)
                     )
                     Switch(
                         checked = isAutoAccept,
                         onCheckedChange = { isAutoAccept = it },
-                        modifier = Modifier.scale(0.8f)
                     )
                 }
             }
 
             // 7. Pause Device
             DesktopDeviceFormField(
-                icon = Icons.Default.Warning,
+                icon = SynapseIcons.Warning,
                 title = "Pause Device",
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -284,41 +265,36 @@ fun DesktopAddDeviceDialog(
                 ) {
                     Text(
                         text = "Pause Device",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.weight(1f)
                     )
                     Switch(
                         checked = isPaused,
                         onCheckedChange = { isPaused = it },
-                        modifier = Modifier.scale(0.8f)
                     )
                 }
             }
 
             // 8. Untrusted Device
-            DesktopDeviceFormField(icon = Icons.Default.Lock, title = "Untrusted Device") {
+            DesktopDeviceFormField(icon = SynapseIcons.Lock, title = "Untrusted Device") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = "Untrusted Device",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.weight(1f)
                     )
                     Switch(
                         checked = isUntrusted,
                         onCheckedChange = { isUntrusted = it },
-                        modifier = Modifier.scale(0.8f)
                     )
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "All folders shared with this device must be protected by a password, such that all sent data is unreadable without the given password.",
                     style = MaterialTheme.typography.bodySmall,
-                    fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

@@ -17,7 +17,7 @@
    No more hand-built errors or hand-written registry JSON.
 2. **Every entity in the API carries its lifecycle**, as *additive* fields: `state` / `pairing_state` / `connection_state` / `engine_state`, plus a `lifecycle` object with `allowed_transitions` and `available_actions`. UIs render buttons from `available_actions` instead of re-deriving state from booleans; agents read the same fields.
 3. **Every illegal move returns the same structured error:** `{"error":"invalid_transition", "message", "current_state", "attempted_transition", "allowed_transitions", "available_actions"}`. A UI can say "you can't do that, here's what you can do", and an agent can self-correct.
-4. **Every state change is published as an event** (`FOLDER_STATE_CHANGED`, `DEVICE_STATE_CHANGED`, `PEER_DISCONNECTED`). These are available over the WebSocket and the Syncthing-style `GET /rest/events`, so clients can react instead of polling (the app currently makes about 8 requests a second while idle).
+4. **Every state change is published as an event** (`FOLDER_STATE_CHANGED`, `DEVICE_STATE_CHANGED`, `PEER_DISCONNECTED`). These are available over the WebSocket and the REST-style `GET /rest/events`, so clients can react instead of polling (the app currently makes about 8 requests a second while idle).
 5. **No breaking changes.** The app decodes with `ignoreUnknownKeys = true`, so new fields are safe. No existing field, value, route or status code changed, except where the old value was a bug (§4).
 
 **Why this elevates all three:**

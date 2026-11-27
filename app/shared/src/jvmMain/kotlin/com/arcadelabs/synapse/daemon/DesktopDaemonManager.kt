@@ -127,7 +127,7 @@ class DesktopDaemonManager {
 
         try {
             val isSynapseCore = binFile.name.contains("synapse-core", ignoreCase = true)
-            val logTag = if (isSynapseCore) "[SynapseCore]" else "[Syncthing]"
+            val logTag = if (isSynapseCore) "[SynapseCore]" else "[LegacyEngine]"
 
             val hostName = try { java.net.InetAddress.getLocalHost().hostName } catch (_: Exception) { "Desktop" }
             val pb = if (isSynapseCore) {
@@ -262,7 +262,7 @@ class DesktopDaemonManager {
     }
 
     private fun tryConnectToRunning(localAppData: String, synapseDir: File): Pair<String, String>? {
-        // Fast direct check for already running Synapse Core or Syncthing
+        // Fast direct check for already running Synapse Core or a legacy engine
         for (port in listOf(8384, 9090)) {
             val candidateUrl = "http://127.0.0.1:$port"
             if (pingApi(candidateUrl, MANAGED_API_KEY)) {

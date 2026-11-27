@@ -11,9 +11,9 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-class MockSyncthingApiClient(
+class MockSynapseApiClient(
     private val localDeviceName: String = "This Device"
-) : SyncthingApiClient {
+) : SynapseApiClient {
     private val mockEngine = MockEngine {
         respond("OK", HttpStatusCode.OK)
     }
@@ -57,7 +57,7 @@ class MockSyncthingApiClient(
     }
 
     private val logEntries = mutableListOf(
-        LogEntry("2026-06-22T12:00:00Z", "syncthing v1.27.8 \"Goldfish\" (go1.22.4 windows-amd64) jonas@build.syncthing.net 2024-07-04 10:15:30 UTC"),
+        LogEntry("2026-06-22T12:00:00Z", "legacy-engine v1.27.8 (go1.22.4 windows-amd64) 2024-07-04 10:15:30 UTC"),
         LogEntry("2026-06-22T12:00:01Z", "My ID: MOCK-DEVICE-ID-12345-67890-ABCDE-FGHIJ-KLMNO"),
         LogEntry("2026-06-22T12:00:02Z", "Single point of entry: local addresses [tcp://0.0.0.0:22000]"),
         LogEntry("2026-06-22T12:00:05Z", "Ready to accept connections")
@@ -82,14 +82,14 @@ class MockSyncthingApiClient(
     override suspend fun systemVersion(): SystemVersion {
         return SystemVersion(
             currentVersion = "v1.27.8",
-            longVersion = "syncthing v1.27.8 \"Goldfish\"",
+            longVersion = "legacy-engine v1.27.8",
             arch = "amd64",
             os = "windows"
         )
     }
 
-    override suspend fun systemConfig(): SyncthingConfig {
-        return SyncthingConfig(
+    override suspend fun systemConfig(): EngineConfig {
+        return EngineConfig(
             version = 37,
             folders = foldersList.toList(),
             devices = devicesList.toList()
@@ -104,7 +104,7 @@ class MockSyncthingApiClient(
         // Mock update
     }
 
-    override suspend fun updateSystemConfig(config: SyncthingConfig) {
+    override suspend fun updateSystemConfig(config: EngineConfig) {
         foldersList.clear()
         foldersList.addAll(config.folders)
         
@@ -195,6 +195,11 @@ class MockSyncthingApiClient(
     override suspend fun scan(folderId: String?): HttpResponse {
         delay(300)
         return dummyResponse()
+    }
+
+    override suspend fun registerFolder(folderId: String, path: String): Boolean {
+        delay(100)
+        return true
     }
 
     override suspend fun getPendingDevices(): Map<String, PendingDevice> {

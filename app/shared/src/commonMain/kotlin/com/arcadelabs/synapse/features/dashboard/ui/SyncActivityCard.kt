@@ -28,11 +28,10 @@ fun SyncActivityCard(
 
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
-        ),
-        border = borderForTheme()
+        )
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -47,7 +46,6 @@ fun SyncActivityCard(
             Text(
                 text = "${animatedActivity.toInt()} items",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             
@@ -56,7 +54,7 @@ fun SyncActivityCard(
             Text(
                 text = "Recent transfers",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

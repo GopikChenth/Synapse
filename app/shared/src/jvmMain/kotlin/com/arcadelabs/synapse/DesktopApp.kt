@@ -1,15 +1,12 @@
 package com.arcadelabs.synapse
 
+import com.arcadelabs.synapse.core.domain.models.formatDeviceId
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,11 +17,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arcadelabs.synapse.core.designsystem.*
+import com.arcadelabs.synapse.ui.ConfirmDialog
+import com.arcadelabs.synapse.ui.FolderOfferDialog
+import com.arcadelabs.synapse.ui.PairingRequestDialog
 import com.arcadelabs.synapse.core.navigation.AppModalState
 import com.arcadelabs.synapse.core.domain.models.PendingFolder
 import com.arcadelabs.synapse.core.domain.models.PendingFolderOffer
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.network.SynapseApiClient
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
+import com.arcadelabs.synapse.core.domain.models.isSynapseCore
 import com.arcadelabs.synapse.features.devices.ui.DesktopDevicesScreen
 import com.arcadelabs.synapse.features.devices.ui.DesktopAddDeviceDialog
 import com.arcadelabs.synapse.features.devices.ui.DesktopEditDeviceDialog
@@ -36,10 +37,9 @@ import com.arcadelabs.synapse.features.status.ui.DesktopStatusScreen
 import com.arcadelabs.synapse.features.status.ui.RunBehavior
 import com.arcadelabs.synapse.features.recent.ui.RecentChangesScreen
 import org.koin.compose.viewmodel.koinViewModel
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Settings
 import com.arcadelabs.synapse.features.settings.ui.DesktopSettingsScreen
 import com.arcadelabs.synapse.features.dashboard.ui.DesktopDashboardScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import com.arcadelabs.synapse.core.prefs.PreferencesHelper
@@ -49,7 +49,7 @@ enum class DesktopScreen(val title: String) {
     DASHBOARD("Dashboard"),
     FOLDERS("Folders"),
     DEVICES("Devices"),
-    RECENT("Recent Changes"),
+    RECENT("Recent"),
     SETTINGS("Settings")
 }
 
@@ -99,7 +99,7 @@ fun DesktopApp(
     openUrl: ((String) -> Unit)? = null,
     exitApp: (() -> Unit)? = null,
     onRunBehaviorChanged: ((RunBehavior) -> Unit)? = null,
-    apiClient: SyncthingApiClient = koinInject(),
+    apiClient: SynapseApiClient = koinInject(),
     deviceViewModel: DeviceViewModel = koinViewModel()
 ) {
     // ── Explicit Modal State Machine (Elevates UX, DX, AX) ──────────────────
@@ -176,6 +176,20 @@ fun DesktopApp(
         }
     }
 
+    // Restart exists only on the legacy engine; hide it for Synapse Core (and while the
+    // engine is unreachable). Re-checked periodically so it follows the running engine.
+    var isLegacyEngine by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            isLegacyEngine = try {
+                !apiClient.systemVersion().isSynapseCore()
+            } catch (_: Exception) {
+                false
+            }
+            delay(15_000)
+        }
+    }
+
     var localDeviceId by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
         try {
@@ -208,83 +222,53 @@ fun DesktopApp(
 
 
 
-    val isDarkTheme = when (themeMode) {
-        "Light" -> false
-        "Dark" -> true
-        else -> androidx.compose.foundation.isSystemInDarkTheme()
-    }
-
     SynapseTheme(selectedTheme = selectedTheme, themeMode = themeMode) {
         Box(modifier = Modifier.fillMaxSize()) {
             Row(modifier = Modifier.fillMaxSize()) {
                 NavigationRail(
                     header = {
-                        Box(
-                            modifier = Modifier.padding(vertical = 24.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            SynapseLogo(
-                                size = 40.dp,
-                                cornerRadius = 12.dp,
-                                isDarkTheme = isDarkTheme
-                            )
-                        }
+                        SynapseLogo(
+                            size = 40.dp,
+                            cornerRadius = 12.dp,
+                            modifier = Modifier.padding(vertical = 16.dp)
+                        )
                     },
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxHeight()
                 ) {
                     DesktopScreen.entries.forEach { screen ->
                         val selected = currentScreen == screen
                         val icon = when (screen) {
-                            DesktopScreen.DASHBOARD -> Icons.Default.Home
-                            DesktopScreen.FOLDERS -> FolderIcon
-                            DesktopScreen.DEVICES -> DevicesIcon
-                            DesktopScreen.RECENT -> HistoryIcon
-                            DesktopScreen.SETTINGS -> Icons.Default.Settings
+                            DesktopScreen.DASHBOARD -> if (selected) SynapseIcons.HomeFilled else SynapseIcons.Home
+                            DesktopScreen.FOLDERS -> if (selected) SynapseIcons.FolderFilled else SynapseIcons.Folder
+                            DesktopScreen.DEVICES -> if (selected) SynapseIcons.DevicesFilled else SynapseIcons.Devices
+                            DesktopScreen.RECENT -> SynapseIcons.History
+                            DesktopScreen.SETTINGS -> if (selected) SynapseIcons.SettingsFilled else SynapseIcons.Settings
                         }
                         NavigationRailItem(
                             selected = selected,
                             onClick = { currentScreen = screen },
-                            icon = { Icon(icon, contentDescription = screen.title) },
-                            label = { Text(screen.title) },
-                            alwaysShowLabel = false,
-                            colors = NavigationRailItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer
-                            )
+                            icon = { Icon(icon, contentDescription = null) },
+                            label = { Text(screen.title) }
                         )
                     }
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    // Restart Button
-                    NavigationRailItem(
-                        selected = false,
-                        onClick = { isRestartConfirmOpen = true },
-                        icon = { Icon(Icons.Default.Refresh, contentDescription = "Restart Daemon") },
-                        label = { Text("Restart") },
-                        alwaysShowLabel = false,
-                        colors = NavigationRailItemDefaults.colors(
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    // Restart is a no-op on Synapse Core; only the legacy engine restarts.
+                    if (isLegacyEngine) {
+                        NavigationRailItem(
+                            selected = false,
+                            onClick = { isRestartConfirmOpen = true },
+                            icon = { Icon(SynapseIcons.Refresh, contentDescription = null) },
+                            label = { Text("Restart") }
                         )
-                    )
-
-                    // Shutdown Button
+                    }
                     NavigationRailItem(
                         selected = false,
                         onClick = { isShutdownConfirmOpen = true },
-                        icon = { Icon(ExitIcon, contentDescription = "Shutdown Daemon") },
-                        label = { Text("Shutdown") },
-                        alwaysShowLabel = false,
-                        colors = NavigationRailItemDefaults.colors(
-                            unselectedIconColor = MaterialTheme.colorScheme.error,
-                            unselectedTextColor = MaterialTheme.colorScheme.error
-                        )
+                        icon = { Icon(SynapseIcons.Exit, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                        label = { Text("Quit", color = MaterialTheme.colorScheme.error) },
+                        modifier = Modifier.padding(bottom = 16.dp)
                     )
                 }
 
@@ -331,7 +315,8 @@ fun DesktopApp(
                                  }
                              )
                              DesktopScreen.RECENT -> RecentChangesScreen(
-                                 onCloseClick = { currentScreen = DesktopScreen.DASHBOARD }
+                                 onCloseClick = { currentScreen = DesktopScreen.DASHBOARD },
+                                 embedded = true
                              )
                              DesktopScreen.SETTINGS -> DesktopSettingsScreen(
                                  apiClient = apiClient,
@@ -385,214 +370,100 @@ fun DesktopApp(
                 }
             }
 
-            // Root level Full-screen Add Device Dialog Overlay
-            AnimatedVisibility(
-                visible = isAddDeviceDialogOpen,
-                enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
-                exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background)
-                ) {
-                    DesktopAddDeviceDialog(
-                        onDismiss = { isAddDeviceDialogOpen = false },
-                        scanQrCode = scanQrCode,
-                        prefilledDeviceId = prefilledDeviceId,
-                        prefilledDeviceName = prefilledDeviceName
-                    )
-                }
+            // Full-screen Add Device dialog
+            FullScreenOverlay(visible = isAddDeviceDialogOpen) {
+                DesktopAddDeviceDialog(
+                    onDismiss = { isAddDeviceDialogOpen = false },
+                    scanQrCode = scanQrCode,
+                    prefilledDeviceId = prefilledDeviceId,
+                    prefilledDeviceName = prefilledDeviceName
+                )
             }
 
-            // Restart Confirmation Dialog
-            if (isRestartConfirmOpen) {
-                AlertDialog(
-                    onDismissRequest = { isRestartConfirmOpen = false },
-                    shape = SynapseDialogShape,
-                    title = { Text("Restart Syncthing Daemon?", style = MaterialTheme.typography.titleLarge) },
-                    text = { Text("Are you sure you want to restart the Syncthing daemon? This will briefly disconnect all active synchronizations.", style = MaterialTheme.typography.bodyMedium) },
-                    confirmButton = {
-                        Button(
-                            shape = SynapsePillShape,
-                            onClick = {
-                                isRestartConfirmOpen = false
-                                coroutineScope.launch {
-                                    try {
-                                        apiClient.restart()
-                                    } catch (e: Exception) {
-                                        // ignore
-                                    }
-                                }
+            if (isRestartConfirmOpen && isLegacyEngine) {
+                ConfirmDialog(
+                    icon = SynapseIcons.Refresh,
+                    title = "Restart Synapse?",
+                    text = "Syncing pauses briefly and every connected device reconnects.",
+                    confirmLabel = "Restart",
+                    onConfirm = {
+                        isRestartConfirmOpen = false
+                        coroutineScope.launch {
+                            try {
+                                apiClient.restart()
+                            } catch (e: Exception) {
+                                // expected: the connection drops while the engine restarts
                             }
-                        ) {
-                            Text("Restart")
                         }
                     },
-                    dismissButton = {
-                        TextButton(
-                            shape = SynapsePillShape,
-                            onClick = { isRestartConfirmOpen = false }
-                        ) {
-                            Text("Cancel")
-                        }
-                    }
+                    onDismiss = { isRestartConfirmOpen = false }
                 )
             }
 
-            // Shutdown Confirmation Dialog
             if (isShutdownConfirmOpen) {
-                AlertDialog(
-                    onDismissRequest = { isShutdownConfirmOpen = false },
-                    shape = SynapseDialogShape,
-                    title = { Text("Shutdown Synapse?", style = MaterialTheme.typography.titleLarge) },
-                    text = { Text("This will stop the Syncthing background daemon and exit the application. Do you want to proceed?", style = MaterialTheme.typography.bodyMedium) },
-                    confirmButton = {
-                        Button(
-                            shape = SynapsePillShape,
-                            onClick = {
-                                isShutdownConfirmOpen = false
-                                coroutineScope.launch {
-                                    try {
-                                        apiClient.shutdown()
-                                    } catch (e: Exception) {
-                                        // ignore
-                                    }
-                                    exitApp?.invoke()
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                        ) {
-                            Text("Shutdown")
+                ConfirmDialog(
+                    icon = SynapseIcons.Exit,
+                    title = "Quit Synapse?",
+                    text = "Syncing stops on this computer until you open Synapse again.",
+                    confirmLabel = "Quit",
+                    destructive = true,
+                    onConfirm = {
+                        isShutdownConfirmOpen = false
+                        coroutineScope.launch {
+                            try {
+                                apiClient.shutdown()
+                            } catch (e: Exception) {
+                                // ignore
+                            }
+                            exitApp?.invoke()
                         }
                     },
-                    dismissButton = {
-                        TextButton(
-                            shape = SynapsePillShape,
-                            onClick = { isShutdownConfirmOpen = false }
-                        ) {
-                            Text("Cancel")
-                        }
-                    }
+                    onDismiss = { isShutdownConfirmOpen = false }
                 )
             }
 
-            // Incoming Connection Request Dialog Overlay
+            // Incoming pairing request
             val pendingDevices by deviceViewModel.pendingDevices.collectAsState()
             if (pendingDevices.isNotEmpty() && !isAddDeviceDialogOpen) {
                 val (pendingId, pendingDevice) = pendingDevices.entries.first()
-                AlertDialog(
-                    onDismissRequest = { /* Keep open until action taken */ },
-                    shape = SynapseDialogShape,
-                    title = { Text("Incoming Connection Request", style = MaterialTheme.typography.titleLarge) },
-                    text = {
-                        Column {
-                            Text("A remote device wants to pair with you:", style = MaterialTheme.typography.bodyMedium)
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text("Name: ${pendingDevice.name.ifEmpty { "Unnamed Device" }}", style = MaterialTheme.typography.titleMedium)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("ID: ${pendingId.chunked(4).joinToString(" ")}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                            if (pendingDevice.address.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("Address: ${pendingDevice.address}", style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
+                PairingRequestDialog(
+                    deviceName = pendingDevice.name,
+                    deviceId = pendingId,
+                    address = pendingDevice.address,
+                    onAccept = { deviceViewModel.acceptPendingDeviceDirect(pendingId) },
+                    onConfigure = {
+                        prefilledDeviceId = pendingId
+                        prefilledDeviceName = pendingDevice.name
+                        isAddDeviceDialogOpen = true
+                        deviceViewModel.dismissPendingDevice(pendingId)
                     },
-                    confirmButton = {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                shape = SynapsePillShape,
-                                onClick = {
-                                    deviceViewModel.acceptPendingDeviceDirect(pendingId)
-                                }
-                            ) {
-                                Text("Quick Accept & Pair")
-                            }
-                            OutlinedButton(
-                                shape = SynapsePillShape,
-                                onClick = {
-                                    prefilledDeviceId = pendingId
-                                    prefilledDeviceName = pendingDevice.name
-                                    isAddDeviceDialogOpen = true
-                                    deviceViewModel.dismissPendingDevice(pendingId)
-                                }
-                            ) {
-                                Text("Configure & Add")
-                            }
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            shape = SynapsePillShape,
-                            onClick = {
-                                deviceViewModel.dismissPendingDevice(pendingId)
-                            }
-                        ) {
-                            Text("Dismiss", color = MaterialTheme.colorScheme.error)
-                        }
-                    }
+                    onDismiss = { deviceViewModel.dismissPendingDevice(pendingId) }
                 )
             }
 
-            // Incoming Folder Request Dialog Overlay
+            // Incoming folder offer
             val pendingFolders by deviceViewModel.pendingFolders.collectAsState()
             if (pendingFolders.isNotEmpty() && !isCreateFolderDialogOpen) {
                 val (folderId, pendingOffer) = pendingFolders.entries.first()
                 val offeringDeviceId = pendingOffer.offeredBy.keys.firstOrNull() ?: ""
                 val folderDetails = pendingOffer.offeredBy[offeringDeviceId] ?: PendingFolder()
-                AlertDialog(
-                    onDismissRequest = { /* Keep open until action taken */ },
-                    shape = SynapseDialogShape,
-                    title = { Text("Folder Share Offered", style = MaterialTheme.typography.titleLarge) },
-                    text = {
-                        Column {
-                            Text("A remote device wants to share a folder with you:", style = MaterialTheme.typography.bodyMedium)
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text("Folder Label: ${folderDetails.label.ifEmpty { "Unnamed Folder" }}", style = MaterialTheme.typography.titleMedium)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("Folder ID: $folderId", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("Offered By Device ID: ${offeringDeviceId.chunked(4).joinToString(" ")}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                        }
+                FolderOfferDialog(
+                    folderLabel = folderDetails.label,
+                    folderId = folderId,
+                    offeredByDeviceId = offeringDeviceId,
+                    onConfigure = {
+                        prefilledFolderId = folderId
+                        prefilledFolderLabel = folderDetails.label
+                        prefilledFolderSharedDevices = listOf(offeringDeviceId)
+                        isCreateFolderDialogOpen = true
                     },
-                    confirmButton = {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                shape = SynapsePillShape,
-                                onClick = {
-                                    deviceViewModel.acceptPendingFolderDirect(folderId)
-                                }
-                            ) {
-                                Text("Quick Accept")
-                            }
-                            OutlinedButton(
-                                shape = SynapsePillShape,
-                                onClick = {
-                                    prefilledFolderId = folderId
-                                    prefilledFolderLabel = folderDetails.label
-                                    prefilledFolderSharedDevices = listOf(offeringDeviceId)
-                                    isCreateFolderDialogOpen = true
-                                }
-                            ) {
-                                Text("Configure & Add")
-                            }
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            shape = SynapsePillShape,
-                            onClick = {
-                                deviceViewModel.dismissPendingFolder(
-                                    folderId = folderId,
-                                    deviceId = offeringDeviceId,
-                                    label = folderDetails.label,
-                                    time = folderDetails.time
-                                )
-                            }
-                        ) {
-                            Text("Dismiss", color = MaterialTheme.colorScheme.error)
-                        }
+                    onDismiss = {
+                        deviceViewModel.dismissPendingFolder(
+                            folderId = folderId,
+                            deviceId = offeringDeviceId,
+                            label = folderDetails.label,
+                            time = folderDetails.time
+                        )
                     }
                 )
             }

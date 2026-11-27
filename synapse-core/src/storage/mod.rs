@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{OptionalExtension, params, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 
+use crate::p2p::identity::canonical_device_id;
+
 /// Folder synchronization configuration and policy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolderRecord {
@@ -285,6 +287,7 @@ impl StorageEngine {
         };
 
         engine.init_schema()?;
+        engine.canonicalize_device_ids()?;
         Ok(engine)
     }
 
@@ -308,6 +311,7 @@ impl StorageEngine {
         };
 
         engine.init_schema()?;
+        engine.canonicalize_device_ids()?;
         Ok(engine)
     }
 
@@ -468,6 +472,95 @@ impl StorageEngine {
         Ok(())
     }
 
+/// Idempotent start-up repair: rewrites every stored device id into its canonical form
+    /// (see `canonical_device_id`) and merges rows that were the same device under different
+    /// spellings, e.g. one added by an app as "6F00..." and one stored from the network as
+    /// "6f00...". Settings of the older (user-created) row win; addresses are merged; folder
+    /// shares, pairing requests and invitations follow the merged id. Returns how many
+    /// duplicate device rows were merged away.
+    pub fn canonicalize_device_ids(&self) -> SqlResult<usize> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut merged = 0;
+
+        type Row = (String, String, String, i64, i64, i64, Option<String>, i64);
+        let rows: Vec<Row> = {
+            let mut st = tx.prepare(
+                "SELECT device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at FROM devices",
+            )?;
+            let it = st.query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+            })?;
+            it.collect::<SqlResult<_>>()?
+        };
+        for (id, name, addrs, paused, trusted, intro, cert, created) in rows {
+            let canon = canonical_device_id(&id);
+            if canon == id {
+                continue;
+            }
+            let existing: Option<(String, i64)> = tx
+                .query_row("SELECT addresses, created_at FROM devices WHERE device_id = ?1", params![canon], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .optional()?;
+            match existing {
+                None => {
+                    tx.execute("UPDATE devices SET device_id = ?2 WHERE device_id = ?1", params![id, canon])?;
+                }
+                Some((canon_addrs, canon_created)) => {
+                    let mut all: Vec<String> = serde_json::from_str(&canon_addrs).unwrap_or_default();
+                    for a in serde_json::from_str::<Vec<String>>(&addrs).unwrap_or_default() {
+                        if !all.contains(&a) {
+                            all.push(a);
+                        }
+                    }
+                    if all.len() > 1 {
+                        all.retain(|a| a != "dynamic");
+                    }
+                    let all = serde_json::to_string(&all).unwrap_or_else(|_| "[]".into());
+                    if created < canon_created {
+                        tx.execute(
+                            "UPDATE devices SET name = ?2, addresses = ?3, is_paused = ?4, is_trusted = ?5,
+                                 introducer = ?6, cert_name = ?7, created_at = ?8 WHERE device_id = ?1",
+                            params![canon, name, all, paused, trusted, intro, cert, created],
+                        )?;
+                    } else {
+                        tx.execute("UPDATE devices SET addresses = ?2 WHERE device_id = ?1", params![canon, all])?;
+                    }
+                    tx.execute("DELETE FROM devices WHERE device_id = ?1", params![id])?;
+                    merged += 1;
+                }
+            }
+        }
+
+        // Tables keyed (partly) by device id: move rows to the canonical id, dropping any
+        // that would now be duplicates.
+        for table in ["pending_devices", "rejected_devices", "folder_devices", "pending_folders"] {
+            let ids: Vec<String> = {
+                let mut st = tx.prepare(&format!("SELECT DISTINCT device_id FROM {}", table))?;
+                let it = st.query_map([], |r| r.get(0))?;
+                it.collect::<SqlResult<_>>()?
+            };
+            for id in ids {
+                let canon = canonical_device_id(&id);
+                if canon != id {
+                    tx.execute(&format!("UPDATE OR IGNORE {} SET device_id = ?2 WHERE device_id = ?1", table), params![id, canon])?;
+                    tx.execute(&format!("DELETE FROM {} WHERE device_id = ?1", table), params![id])?;
+                }
+            }
+        }
+        // A paired device is never also a pending pairing request.
+        tx.execute("DELETE FROM pending_devices WHERE device_id IN (SELECT device_id FROM devices)", [])?;
+        // Nor is a folder already shared with a device still an invitation from it.
+        tx.execute(
+            "DELETE FROM pending_folders WHERE EXISTS (SELECT 1 FROM folder_devices fd
+                 WHERE fd.folder_id = pending_folders.folder_id AND fd.device_id = pending_folders.device_id)",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(merged)
+    }
+
     pub fn blocks_dir(&self) -> &Path {
         &self.blocks_dir
     }
@@ -590,7 +683,10 @@ impl StorageEngine {
     // =========================================================================
 
     pub fn add_device(&self, device: &DeviceRecord) -> SqlResult<()> {
+        let device = &DeviceRecord { device_id: canonical_device_id(&device.device_id), ..device.clone() };
         let conn = self.conn.lock().unwrap();
+        // Pairing a device answers its pairing request; leaving it pending listed it twice.
+        conn.execute("DELETE FROM pending_devices WHERE device_id = ?1", params![device.device_id])?;
         let addrs_json = serde_json::to_string(&device.addresses).unwrap_or_else(|_| "[]".to_string());
         conn.execute(
             "INSERT INTO devices (
@@ -645,6 +741,7 @@ impl StorageEngine {
     }
 
     pub fn get_device(&self, device_id: &str) -> SqlResult<Option<DeviceRecord>> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT device_id, name, addresses, is_paused, is_trusted, introducer, cert_name, created_at
@@ -672,13 +769,17 @@ impl StorageEngine {
     }
 
     pub fn remove_device(&self, device_id: &str) -> SqlResult<()> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM devices WHERE device_id = ?1", params![device_id])?;
         conn.execute("DELETE FROM folder_devices WHERE device_id = ?1", params![device_id])?;
+        // Its folder invitations go with it (accepting one would share with a removed device).
+        conn.execute("DELETE FROM pending_folders WHERE device_id = ?1", params![device_id])?;
         Ok(())
     }
 
     pub fn set_device_paused(&self, device_id: &str, paused: bool) -> SqlResult<()> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE devices SET is_paused = ?1 WHERE device_id = ?2",
@@ -688,6 +789,7 @@ impl StorageEngine {
     }
 
     pub fn is_device_introducer(&self, device_id: &str) -> SqlResult<bool> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT introducer FROM devices WHERE device_id = ?1")?;
         let mut rows = stmt.query_map(params![device_id], |row| row.get::<_, i64>(0))?;
@@ -699,6 +801,7 @@ impl StorageEngine {
     }
 
     pub fn set_device_introducer(&self, device_id: &str, introducer: bool) -> SqlResult<()> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE devices SET introducer = ?1 WHERE device_id = ?2",
@@ -708,6 +811,7 @@ impl StorageEngine {
     }
 
     pub fn is_device_trusted(&self, device_id: &str) -> SqlResult<bool> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT is_trusted FROM devices WHERE device_id = ?1")?;
         let mut rows = stmt.query_map(params![device_id], |row| row.get::<_, i64>(0))?;
@@ -719,6 +823,7 @@ impl StorageEngine {
     }
 
     pub fn set_device_trusted(&self, device_id: &str, is_trusted: bool) -> SqlResult<()> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE devices SET is_trusted = ?1 WHERE device_id = ?2",
@@ -888,6 +993,7 @@ impl StorageEngine {
     /// Records an incoming pairing request. Ignored (no-op) for devices that are already
     /// paired or whose requests were rejected.
     pub fn add_pending_device(&self, rec: &PendingDeviceRecord) -> SqlResult<()> {
+        let rec = &PendingDeviceRecord { device_id: canonical_device_id(&rec.device_id), ..rec.clone() };
         let conn = self.conn.lock().unwrap();
         let known: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM devices WHERE device_id = ?1)
@@ -932,6 +1038,7 @@ impl StorageEngine {
     }
 
     pub fn get_pending_device(&self, device_id: &str) -> SqlResult<Option<PendingDeviceRecord>> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT device_id, name, address, received_at FROM pending_devices WHERE device_id = ?1",
@@ -952,6 +1059,7 @@ impl StorageEngine {
     }
 
     pub fn accept_pending_device(&self, device_id: &str) -> SqlResult<()> {
+        let device_id = &canonical_device_id(device_id);
         let mut conn = self.conn.lock().unwrap();
         // One transaction: a crash can never leave the device both paired and pending.
         let tx = conn.transaction()?;
@@ -985,6 +1093,7 @@ impl StorageEngine {
     /// Rejects a pending pairing request and remembers the rejection so the device does not
     /// re-appear as pending every time it announces itself. No-op if not pending.
     pub fn reject_pending_device(&self, device_id: &str) -> SqlResult<()> {
+        let device_id = &canonical_device_id(device_id);
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let pending: Option<(String, String)> = tx
@@ -1026,6 +1135,7 @@ impl StorageEngine {
     /// Un-rejects a device: moves it back to pending so it can be accepted. Returns `false`
     /// if the device was not rejected.
     pub fn unreject_device(&self, device_id: &str) -> SqlResult<bool> {
+        let device_id = &canonical_device_id(device_id);
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let rejected: Option<(String, String)> = tx
@@ -1050,6 +1160,7 @@ impl StorageEngine {
 
     /// Current pairing state of a device, or `None` if the engine knows nothing about it.
     pub fn device_pairing_state(&self, device_id: &str) -> SqlResult<Option<crate::state::DevicePairingState>> {
+        let device_id = &canonical_device_id(device_id);
         use crate::state::DevicePairingState;
         let conn = self.conn.lock().unwrap();
         let paused: Option<bool> = conn
@@ -1107,6 +1218,7 @@ impl StorageEngine {
     // =========================================================================
 
     pub fn share_folder_with_device(&self, folder_id: &str, device_id: &str) -> SqlResult<()> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT OR IGNORE INTO folder_devices (folder_id, device_id) VALUES (?1, ?2)",
@@ -1116,6 +1228,7 @@ impl StorageEngine {
     }
 
     pub fn unshare_folder_from_device(&self, folder_id: &str, device_id: &str) -> SqlResult<()> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "DELETE FROM folder_devices WHERE folder_id = ?1 AND device_id = ?2",
@@ -1140,6 +1253,7 @@ impl StorageEngine {
     // =========================================================================
 
     pub fn add_pending_folder(&self, rec: &PendingFolderRecord) -> SqlResult<()> {
+        let rec = &PendingFolderRecord { device_id: canonical_device_id(&rec.device_id), ..rec.clone() };
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO pending_folders (folder_id, device_id, folder_label, offered_at)
@@ -1174,6 +1288,7 @@ impl StorageEngine {
     }
 
     pub fn accept_pending_folder(&self, folder_id: &str, device_id: &str, local_path: &str) -> SqlResult<()> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         // Create folder locally if not exists
         conn.execute(
@@ -1195,6 +1310,7 @@ impl StorageEngine {
     }
 
     pub fn reject_pending_folder(&self, folder_id: &str, device_id: &str) -> SqlResult<()> {
+        let device_id = &canonical_device_id(device_id);
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "DELETE FROM pending_folders WHERE folder_id = ?1 AND device_id = ?2",
@@ -1282,6 +1398,7 @@ impl StorageEngine {
     }
 
     pub fn get_device_completion(&self, device_id: &str, folder_id: &str) -> SqlResult<DeviceCompletionMetrics> {
+        let device_id = &canonical_device_id(device_id);
         let status = self.get_folder_status(folder_id)?;
         Ok(DeviceCompletionMetrics {
             device_id: device_id.to_string(),
@@ -1517,6 +1634,7 @@ impl StorageEngine {
     /// Whether a chunk belongs to the current revision of a file in a folder shared with
     /// `device_id` (i.e. whether that peer may download it).
     pub fn chunk_visible_to_device(&self, chunk_hash: &str, device_id: &str) -> SqlResult<bool> {
+        let device_id = &canonical_device_id(device_id);
         if !is_valid_chunk_hash(chunk_hash) {
             return Ok(false);
         }

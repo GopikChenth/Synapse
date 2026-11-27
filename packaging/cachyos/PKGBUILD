@@ -6,7 +6,7 @@ pkgdesc="Continuous Peer-to-Peer File Synchronization Client (CachyOS x86-64 Mic
 arch=('x86_64' 'x86_64_v3' 'x86_64_v4')
 url="https://github.com/GopikChenth/Synapse"
 license=('GPL3')
-depends=('java-runtime>=17' 'syncthing' 'hicolor-icon-theme' 'glibc')
+depends=('java-runtime>=17' 'hicolor-icon-theme' 'glibc')
 optdepends=(
     'hyprland: dynamic tiling Wayland compositor support and scratchpad integration'
     'libnotify: desktop notifications on hotkey triggers'
@@ -54,9 +54,11 @@ package() {
 
     # Install native Synapse Core binary into system PATH
     CORE_BIN=$(find "${startdir}" "${srcdir}/../../.." -path "*/bin/synapse-core" -type f 2>/dev/null | head -n 1)
-    if [ -n "$CORE_BIN" ] && [ -f "$CORE_BIN" ]; then
-        install -Dm755 "${CORE_BIN}" "${pkgdir}/usr/bin/synapse-core"
+    if [ -z "$CORE_BIN" ] || [ ! -f "$CORE_BIN" ]; then
+        echo "ERROR: synapse-core engine binary not found (build it with: cd synapse-core && cargo build --release, then copy it to bin/)"
+        exit 1
     fi
+    install -Dm755 "${CORE_BIN}" "${pkgdir}/usr/bin/synapse-core"
 
     # Install CachyOS optimized executable launcher script
     install -Dm755 "${srcdir}/synapse-cachyos" "${pkgdir}/usr/bin/synapse-cachyos"

@@ -43,19 +43,19 @@ fun createHttpClient(): HttpClient {
                     is ClientRequestException -> {
                         val status = cause.response.status
                         when (status.value) {
-                            401, 403 -> SyncthingUnauthorizedException("Unauthorized: API key is invalid or rejected", cause)
-                            404 -> SyncthingNotFoundException("Endpoint not found: ${request.url}", cause)
-                            else -> SyncthingApiException("HTTP Error ${status.value}: ${status.description}", cause)
+                            401, 403 -> SynapseUnauthorizedException("Unauthorized: API key is invalid or rejected", cause)
+                            404 -> SynapseNotFoundException("Endpoint not found: ${request.url}", cause)
+                            else -> SynapseApiException("HTTP Error ${status.value}: ${status.description}", cause)
                         }
                     }
                     is ServerResponseException -> {
                         val status = cause.response.status
-                        SyncthingApiException("Server Error ${status.value}: ${status.description}", cause)
+                        SynapseApiException("Server Error ${status.value}: ${status.description}", cause)
                     }
                     is HttpRequestTimeoutException,
                     is ConnectTimeoutException,
                     is SocketTimeoutException -> {
-                        SyncthingTimeoutException("Request timed out", cause)
+                        SynapseTimeoutException("Request timed out", cause)
                     }
                     else -> cause
                 }

@@ -17,8 +17,6 @@ captures
 !*.xcworkspace/contents.xcworkspacedata
 **/xcshareddata/WorkspaceSettings.xcsettings
 node_modules/
-syncthing-android-main/
-syncthing-main/
 *.zip
 **/bin/
 !/bin/
@@ -26,17 +24,20 @@ syncthing-main/
 !/bin/synapse-core.exe
 !/bin/android/
 !/app/desktopApp/bin/
+/app/desktopApp/bin/main/
 !/app/desktopApp/bin/synapse-core
 !/app/desktopApp/bin/synapse-core.exe
 **/out/
 dist/
-reference_syncthing_fork
+.claude/
 /ArcadeLabs/
 
 # Rust Native Engine Build Cache
 synapse-core/target/
 *.pkg.tar.zst
 *.apk
+hs_err_pid*.log
+*.log
 packaging/**/pkg/
 packaging/**/src/
 

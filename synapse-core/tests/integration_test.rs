@@ -496,7 +496,7 @@ async fn test_system_endpoints_all() {
     let res_rs_rest = router.clone().oneshot(req_rs_rest).await.unwrap();
     assert_eq!(res_rs_rest.status(), StatusCode::OK);
 
-    // 7. /rest/system/config Syncthing full config format
+    // 7. /rest/system/config full config format
     let req_cfg_rest = Request::builder()
         .header("Authorization", format!("Bearer {}", TEST_TOKEN))
         .uri("/rest/system/config")
@@ -767,7 +767,7 @@ async fn test_cluster_pairing_and_devices_all() {
     let team_folder_path = harness.temp_dir.join("team_vault");
     fs::create_dir_all(&team_folder_path).unwrap();
     let accept_folder_payload = serde_json::to_string(&AcceptFolderPayload {
-        device_id: "BETA-DEV-002".into(),
+        device_id: Some("BETA-DEV-002".into()),
         local_path: team_folder_path.to_string_lossy().to_string(),
     }).unwrap();
 
@@ -795,7 +795,7 @@ async fn test_cluster_pairing_and_devices_all() {
     harness.storage.add_pending_folder(&p_folder_rej).unwrap();
 
     let rej_folder_payload = serde_json::to_string(&RejectFolderPayload {
-        device_id: "BETA-DEV-002".into(),
+        device_id: Some("BETA-DEV-002".into()),
     }).unwrap();
     let req_rf = Request::builder()
         .header("Authorization", format!("Bearer {}", TEST_TOKEN))
@@ -1018,7 +1018,7 @@ async fn test_folder_lifecycle_controls_status_and_ignores() {
     let ig_v1: IgnoresRequest = serde_json::from_slice(&body).unwrap();
     assert_eq!(ig_v1.ignore, vec!["*.tmp", ".git/"]);
 
-    // Test Syncthing /rest/db/ignores with query parameter
+    // Test /rest/db/ignores with query parameter
     let ig_payload_2 = serde_json::to_string(&IgnoresRequest {
         ignore: vec!["node_modules/".into(), "*.log".into(), "(?d).DS_Store".into()],
     }).unwrap();
@@ -1918,7 +1918,7 @@ async fn test_security_api_requires_token() {
     ).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
-    // X-API-Key -> 200 (Syncthing-style clients)
+    // X-API-Key -> 200 (REST-style clients)
     let res = router.clone().oneshot(
         plain_get("/rest/system/status").header("X-API-Key", TEST_TOKEN).body(Body::empty()).unwrap(),
     ).await.unwrap();
@@ -2094,7 +2094,7 @@ async fn test_security_p2p_rejects_poisoned_or_traversal_chunks() {
 }
 
 // =============================================================================
-// SYNCTHING-COMPATIBLE EVENT LONG-POLL (GET /rest/events)
+// REST-COMPATIBLE EVENT LONG-POLL (GET /rest/events)
 // =============================================================================
 
 async fn get_events(router: &axum::Router, uri: &str) -> (StatusCode, Vec<serde_json::Value>) {
@@ -2109,7 +2109,7 @@ async fn get_events(router: &axum::Router, uri: &str) -> (StatusCode, Vec<serde_
 }
 
 #[tokio::test]
-async fn test_rest_events_long_poll_syncthing_format() {
+async fn test_rest_events_long_poll_compat_format() {
     let harness = TestHarness::new();
     let router = ApiServer::create_router(harness.app_state.clone());
 
@@ -2446,4 +2446,139 @@ async fn test_folder_watching_follows_folder_lifecycle() {
     ).await.unwrap();
     assert!(res.status().is_success());
     assert!(!engine.is_watching("live"));
+}
+
+const PEER_HEX: &str = "6f00119eb194c882aff989bccb5c60ee7eefa7e390b6adfb477b7e81cecd52ce";
+
+async fn api_call(router: &axum::Router, method: &str, uri: &str, body: Option<serde_json::Value>) -> (StatusCode, serde_json::Value) {
+    let mut b = Request::builder()
+        .header("Authorization", format!("Bearer {}", TEST_TOKEN))
+        .uri(uri)
+        .method(method);
+    let body = match body {
+        Some(v) => {
+            b = b.header("Content-Type", "application/json");
+            Body::from(v.to_string())
+        }
+        None => Body::empty(),
+    };
+    let res = router.clone().oneshot(b.body(body).unwrap()).await.unwrap();
+    let status = res.status();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+}
+
+/// Regression: the apps delete a device the REST way (GET the config, drop the device,
+/// POST it back). The engine used to only add/update from a posted config, so the device and
+/// its folder shares survived and reappeared.
+#[tokio::test]
+async fn test_posting_config_without_a_device_deletes_it() {
+    let harness = TestHarness::new();
+    let router = ApiServer::create_router(harness.app_state.clone());
+    let docs = harness.temp_dir.join("docs");
+    fs::create_dir_all(&docs).unwrap();
+    harness.storage.add_folder(&FolderRecord::new("docs", docs.to_string_lossy())).unwrap();
+    for (id, name) in [(PEER_HEX, "phone"), ("BETA-DEV-002", "laptop")] {
+        harness.storage.add_device(&DeviceRecord {
+            device_id: id.into(), name: name.into(), addresses: vec!["dynamic".into()],
+            is_paused: false, is_trusted: true, introducer: false, cert_name: None, created_at: 1,
+        }).unwrap();
+        harness.storage.share_folder_with_device("docs", id).unwrap();
+    }
+
+    // What the app does: fetch, remove the phone everywhere, post back.
+    let (st, mut cfg) = api_call(&router, "GET", "/rest/system/config", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(cfg["devices"].as_array().unwrap().len(), 2);
+    cfg["devices"].as_array_mut().unwrap().retain(|d| d["deviceID"] != PEER_HEX);
+    for f in cfg["folders"].as_array_mut().unwrap() {
+        f["devices"].as_array_mut().unwrap().retain(|d| d["deviceID"] != PEER_HEX);
+    }
+    let (st, _) = api_call(&router, "POST", "/rest/system/config", Some(cfg.clone())).await;
+    assert_eq!(st, StatusCode::OK);
+
+    let ids: Vec<String> = harness.storage.list_devices().unwrap().into_iter().map(|d| d.device_id).collect();
+    assert_eq!(ids, vec!["BETA-DEV-002".to_string()], "phone must be deleted, laptop kept");
+    assert_eq!(harness.storage.list_folder_devices("docs").unwrap(), vec!["BETA-DEV-002".to_string()]);
+
+    // A body without a "devices" list (e.g. a client only changing folders) deletes nothing.
+    let (st, _) = api_call(&router, "POST", "/rest/system/config", Some(serde_json::json!({ "version": 1, "folders": [] }))).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(harness.storage.list_devices().unwrap().len(), 1);
+
+    // The engine never adds itself as a peer, even if a client lists it.
+    let own = harness.app_state.p2p_manager.device_id().to_string();
+    let mut cfg2 = cfg.clone();
+    cfg2["devices"].as_array_mut().unwrap().push(serde_json::json!({ "deviceID": own.to_uppercase(), "name": "me" }));
+    let (st, _) = api_call(&router, "POST", "/rest/system/config", Some(cfg2)).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(harness.storage.list_devices().unwrap().iter().all(|d| !d.device_id.eq_ignore_ascii_case(&own)));
+}
+
+/// Regression: the app sends device ids uppercased; the network side uses lowercase hex. The
+/// same device then got stored twice (once per spelling). Every spelling must land on one row.
+#[tokio::test]
+async fn test_same_device_is_never_stored_twice() {
+    let harness = TestHarness::new();
+    let router = ApiServer::create_router(harness.app_state.clone());
+
+    // App adds the device with the uppercase id it shows to users.
+    let (st, _) = api_call(&router, "POST", "/api/v1/devices", Some(serde_json::json!({
+        "device_id": PEER_HEX.to_uppercase(), "name": "phone", "addresses": ["dynamic"]
+    }))).await;
+    assert!(st.is_success(), "add device: {}", st);
+    // The same device later says Hello from the network (lowercase hex): not a new request.
+    harness.storage.add_pending_device(&PendingDeviceRecord {
+        device_id: PEER_HEX.into(), name: "phone".into(), address: "10.0.0.2:9190".into(), received_at: 2,
+    }).unwrap();
+    // And it is added again in grouped form and with dashes.
+    let grouped = synapse_core::p2p::identity::format_device_id(&hex::decode(PEER_HEX).unwrap());
+    for id in [grouped.clone(), grouped.to_lowercase(), PEER_HEX.to_uppercase()] {
+        let (st, _) = api_call(&router, "POST", "/rest/system/config", Some(serde_json::json!({
+            "version": 1,
+            "folders": [],
+            "devices": [{ "deviceID": id, "name": "phone" }]
+        }))).await;
+        assert_eq!(st, StatusCode::OK);
+    }
+
+    let devices = harness.storage.list_devices().unwrap();
+    assert_eq!(devices.len(), 1, "one device, got {:?}", devices.iter().map(|d| &d.device_id).collect::<Vec<_>>());
+    assert_eq!(devices[0].device_id, PEER_HEX);
+    assert!(harness.storage.list_pending_devices().unwrap().is_empty(), "paired device is not also pending");
+    let (_, cfg) = api_call(&router, "GET", "/rest/system/config", None).await;
+    assert_eq!(cfg["devices"].as_array().unwrap().len(), 1);
+}
+
+/// Regression: databases written before ids were canonical can already hold duplicates.
+/// Re-opening merges them, keeping the user's settings and every folder share.
+#[test]
+fn test_existing_duplicate_devices_are_merged_on_open() {
+    let dir = std::env::temp_dir().join(format!("synapse_dupes_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(dir.join("docs")).unwrap();
+    {
+        let storage = StorageEngine::new(&dir).unwrap();
+        storage.add_folder(&FolderRecord::new("docs", dir.join("docs").to_string_lossy())).unwrap();
+    }
+    {
+        // Write the duplicates the way old versions did (raw ids, no canonicalisation).
+        let conn = rusqlite::Connection::open(dir.join("synapse_metadata.db")).unwrap();
+        conn.execute("INSERT INTO devices (device_id, name, addresses, is_paused, is_trusted, introducer, created_at)
+                      VALUES (?1, 'My phone', '[\"10.0.0.2:9190\"]', 0, 1, 0, 100)", [PEER_HEX.to_uppercase()]).unwrap();
+        conn.execute("INSERT INTO devices (device_id, name, addresses, is_paused, is_trusted, introducer, created_at)
+                      VALUES (?1, ?1, '[\"dynamic\"]', 0, 1, 0, 200)", [PEER_HEX]).unwrap();
+        conn.execute("INSERT INTO folder_devices (folder_id, device_id) VALUES ('docs', ?1)", [PEER_HEX.to_uppercase()]).unwrap();
+        conn.execute("INSERT INTO pending_devices (device_id, name, address, received_at) VALUES (?1, 'x', 'y', 1)", [PEER_HEX]).unwrap();
+    }
+    let storage = StorageEngine::new(&dir).unwrap();
+    let devices = storage.list_devices().unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].device_id, PEER_HEX);
+    assert_eq!(devices[0].name, "My phone", "the older, user-created settings win");
+    assert_eq!(devices[0].addresses, vec!["10.0.0.2:9190".to_string()]);
+    assert_eq!(storage.list_folder_devices("docs").unwrap(), vec![PEER_HEX.to_string()]);
+    assert!(storage.list_pending_devices().unwrap().is_empty());
+    // Idempotent.
+    assert_eq!(storage.canonicalize_device_ids().unwrap(), 0);
+    let _ = fs::remove_dir_all(&dir);
 }

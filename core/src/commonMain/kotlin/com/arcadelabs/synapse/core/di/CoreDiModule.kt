@@ -1,8 +1,8 @@
 package com.arcadelabs.synapse.core.di
 
 import com.arcadelabs.synapse.core.network.createHttpClient
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
-import com.arcadelabs.synapse.core.network.SyncthingApiClientImpl
+import com.arcadelabs.synapse.core.network.SynapseApiClient
+import com.arcadelabs.synapse.core.network.SynapseApiClientImpl
 import com.arcadelabs.synapse.core.network.SynapseCoreClient
 import com.arcadelabs.synapse.core.network.SynapseCoreClientImpl
 import com.arcadelabs.synapse.core.prefs.PreferencesHelper
@@ -13,7 +13,7 @@ import org.koin.dsl.module
 
 /**
  * Dependency injection module for the core module.
- * Provides the HTTP client, platform preferences helper, the Syncthing API client,
+ * Provides the HTTP client, platform preferences helper, the Synapse API client,
  * and the native Synapse Core client.
  */
 val coreDiModule = module {
@@ -28,5 +28,5 @@ val coreDiModule = module {
             tokenProvider = { get<PreferencesHelper>().apiKey }
         )
     }
-    single<SyncthingApiClient> { SyncthingApiClientImpl(get(), get(), get(), get()) }
+    single<SynapseApiClient> { SynapseApiClientImpl(get(), get(), get(), get()) }
 }

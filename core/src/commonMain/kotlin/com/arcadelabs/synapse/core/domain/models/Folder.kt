@@ -1,5 +1,9 @@
+@file:OptIn(ExperimentalSerializationApi::class)
+
 package com.arcadelabs.synapse.core.domain.models
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -24,6 +28,6 @@ data class Folder(
     @SerialName("paused") val paused: Boolean = false,
     @SerialName("rescanIntervalS") val rescanIntervalS: Int = 60,
     @SerialName("fsWatcherEnabled") val fsWatcherEnabled: Boolean = true,
-    @SerialName("devices") val devices: List<FolderDeviceReference> = emptyList(),
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS) @SerialName("devices") val devices: List<FolderDeviceReference> = emptyList(),
     @SerialName("versioning") val versioning: FolderVersioning = FolderVersioning()
 )

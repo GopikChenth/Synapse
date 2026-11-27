@@ -1,5 +1,6 @@
 package com.arcadelabs.synapse.features.dashboard.ui
 
+import com.arcadelabs.synapse.core.domain.models.formatDeviceId
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,7 +24,7 @@ fun ThisDeviceCard(
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
         )
@@ -35,13 +36,12 @@ fun ThisDeviceCard(
             Text(
                 text = "This Device",
                 style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
 
             // Device ID on its own line
             Text(
-                text = myId.chunked(7).joinToString("-").take(30) + "…",
+                text = myId.formatDeviceId().take(30) + "…",
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

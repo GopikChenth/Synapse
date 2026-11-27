@@ -18,7 +18,14 @@ fun String.normalizeDeviceId(): String {
     return this.replace("-", "").replace(" ", "").uppercase()
 }
 
-fun String.parseSyncthingQr(): String {
+/**
+ * Formats a device ID for display in the canonical grouped form (`XXXXXXX-XXXXXXX-…`).
+ * Normalizes first, so an ID that already contains dashes is not grouped twice.
+ * Users compare these visually when pairing, so every screen must show the same form.
+ */
+fun String.formatDeviceId(): String = normalizeDeviceId().chunked(7).joinToString("-")
+
+fun String.parseDeviceQr(): String {
     val cleaned = this.trim()
     if (cleaned.startsWith("syncthing://", ignoreCase = true)) {
         val uriPart = cleaned.substring("syncthing://".length)
@@ -57,7 +64,7 @@ private fun decodeUrlComponent(input: String): String {
     return sb.toString()
 }
 
-fun String.parseSyncthingQrDetails(): Pair<String, String> {
+fun String.parseDeviceQrDetails(): Pair<String, String> {
     val cleaned = this.trim()
     if (cleaned.startsWith("syncthing://", ignoreCase = true)) {
         val uriPart = cleaned.substring("syncthing://".length)

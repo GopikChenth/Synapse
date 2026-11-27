@@ -1,7 +1,7 @@
-//! Syncthing Block Exchange Protocol v1 (BEP v1) Wire Implementation.
+//! Block Exchange Protocol v1 (BEP v1) Wire Implementation.
 //!
 //! Provides bidirectional wire-level interoperability with official upstream
-//! Syncthing nodes (Go reference daemon) over TCP/TLS on port 22000.
+//! BEP peers (e.g. the Go reference daemon) over TCP/TLS on port 22000.
 //!
 //! Specifications implemented:
 //! - BEP v1 Handshake Magic: 0x2ea7d90b (Big-Endian)
@@ -31,10 +31,10 @@ use tracing::{info, warn};
 /// Canonical 4-byte BEP Hello Magic: 0x2ea7d90b
 pub const BEP_MAGIC: u32 = 0x2ea7d90b;
 
-/// Default Syncthing BEP listening port
+/// Default BEP BEP listening port
 pub const BEP_DEFAULT_PORT: u16 = 22000;
 
-/// Default Syncthing client identification strings for maximum compatibility
+/// Default BEP client identification strings for maximum compatibility
 pub const BEP_CLIENT_NAME: &str = "syncthing";
 pub const BEP_CLIENT_VERSION: &str = "v1.27.8";
 pub const SYNAPSE_CLIENT_BRAND: &str = "synapse-core";
@@ -776,7 +776,7 @@ pub async fn start_bep_listener(
         }
     };
 
-    info!("Synapse Core BEP v1 (Syncthing Wire Protocol) listening on TCP {}", bind_addr);
+    info!("Synapse Core BEP v1 wire protocol listening on TCP {}", bind_addr);
 
     tokio::spawn(async move {
         while let Ok((socket, peer_addr)) = listener.accept().await {
@@ -899,7 +899,7 @@ mod tests {
             let remote_hello = read_bep_hello(&mut client_stream).await.unwrap();
             assert_eq!(remote_hello.device_name, "Local-Synapse-Node");
 
-            let server_hello = BepHello::new("Remote-Syncthing-Daemon");
+            let server_hello = BepHello::new("Remote-BEP-Daemon");
             send_bep_hello(&mut client_stream, &server_hello).await.unwrap();
 
             // Receive ClusterConfig
@@ -929,7 +929,7 @@ mod tests {
                 vec![test_folder],
                 dummy_addr,
                 |hello, _, _| {
-                    assert_eq!(hello.device_name, "Remote-Syncthing-Daemon");
+                    assert_eq!(hello.device_name, "Remote-BEP-Daemon");
                 },
             ).await;
             let _ = res;

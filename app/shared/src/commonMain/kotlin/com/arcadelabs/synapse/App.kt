@@ -1,5 +1,6 @@
 package com.arcadelabs.synapse
 
+import com.arcadelabs.synapse.core.domain.models.formatDeviceId
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
@@ -9,15 +10,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,11 +20,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arcadelabs.synapse.core.designsystem.*
-import com.arcadelabs.synapse.core.domain.models.SyncthingConfig
+import com.arcadelabs.synapse.core.domain.models.EngineConfig
 import com.arcadelabs.synapse.core.domain.models.PendingFolder
 import com.arcadelabs.synapse.core.domain.models.PendingFolderOffer
 import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.domain.models.isSynapseCore
+import com.arcadelabs.synapse.core.network.SynapseApiClient
 import com.arcadelabs.synapse.core.navigation.AppModalState
 import com.arcadelabs.synapse.features.devices.ui.DevicesScreen
 import com.arcadelabs.synapse.features.devices.ui.AddDeviceDialog
@@ -48,6 +41,10 @@ import com.arcadelabs.synapse.features.settings.ui.SettingsScreen
 import com.arcadelabs.synapse.features.dashboard.ui.MobileDashboardScreen
 import com.arcadelabs.synapse.core.prefs.PreferencesHelper
 import com.arcadelabs.synapse.SynapseBackHandler
+import com.arcadelabs.synapse.ui.ConfirmDialog
+import com.arcadelabs.synapse.ui.FolderOfferDialog
+import com.arcadelabs.synapse.ui.PairingRequestDialog
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
@@ -108,10 +105,13 @@ fun App(
     onRunBehaviorChanged: ((RunBehavior) -> Unit)? = null,
     showNotification: ((title: String, message: String) -> Unit)? = null,
     deviceModelName: String = "",
+    // True only on platforms whose boot hook honours the "Start on boot" setting (Android).
+    supportsStartOnBoot: Boolean = false,
+    dynamicColorScheme: ((darkTheme: Boolean) -> ColorScheme)? = null,
     initialDeviceId: String = "",
     initialOpenAddDevice: Boolean = false,
     clearPrefilledDevice: () -> Unit = {},
-    apiClient: SyncthingApiClient = koinInject(),
+    apiClient: SynapseApiClient = koinInject(),
     preferencesHelper: PreferencesHelper = koinInject(),
     deviceViewModel: DeviceViewModel = koinViewModel()
 ) {
@@ -242,6 +242,20 @@ fun App(
         }
     }
 
+    // Restart and the web GUI exist only on the legacy engine; hide them for Synapse Core
+    // (and while the engine is unreachable). Re-checked periodically so it follows the engine.
+    var isLegacyEngine by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            isLegacyEngine = try {
+                !apiClient.systemVersion().isSynapseCore()
+            } catch (_: Exception) {
+                false
+            }
+            delay(15_000)
+        }
+    }
+
     var localDeviceId by remember { mutableStateOf("") }
     var localDeviceName by remember { mutableStateOf("") }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -267,158 +281,96 @@ fun App(
         }
     }
 
-    val isDarkTheme = when (themeMode) {
-        "Light" -> false
-        "Dark" -> true
-        else -> isSystemInDarkTheme()
-    }
-
-    SynapseTheme(selectedTheme = selectedTheme, themeMode = themeMode) {
+    SynapseTheme(
+        selectedTheme = selectedTheme,
+        themeMode = themeMode,
+        dynamicColorScheme = dynamicColorScheme
+    ) {
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
-                val drawerItemColors = NavigationDrawerItemDefaults.colors(
-                    unselectedContainerColor = Color.Transparent,
-                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    unselectedTextColor = MaterialTheme.colorScheme.onSurface
-                )
-                ModalDrawerSheet(
-                    modifier = Modifier.fillMaxWidth(0.65f),
-                    drawerContainerColor = MaterialTheme.colorScheme.surface,
-                    drawerTonalElevation = 1.dp
-                ) {
-                    Spacer(modifier = Modifier.height(24.dp))
+                ModalDrawerSheet {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                            .padding(start = 28.dp, end = 16.dp, top = 24.dp, bottom = 16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        SynapseLogo(
-                            size = 36.dp,
-                            cornerRadius = 10.dp,
-                            isDarkTheme = isDarkTheme
-                        )
+                        SynapseLogo(size = 36.dp, cornerRadius = 10.dp)
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
                             text = "Synapse",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
-                    
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                    )
+
+                    val closeDrawerThen: (() -> Unit) -> Unit = { action ->
+                        coroutineScope.launch { drawerState.close() }
+                        action()
+                    }
+                    val drawerItemModifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
 
                     NavigationDrawerItem(
-                        icon = { Icon(QrCodeIcon, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                        label = { Text("Show device ID", style = MaterialTheme.typography.bodyMedium) },
+                        icon = { Icon(SynapseIcons.QrCode, contentDescription = null) },
+                        label = { Text("Show device ID") },
                         selected = false,
-                        onClick = {
-                            coroutineScope.launch {
-                                drawerState.close()
-                            }
-                            isShowDeviceIdDialogOpen = true
-                        },
-                        colors = drawerItemColors,
-                        modifier = Modifier.padding(horizontal = 12.dp)
+                        onClick = { closeDrawerThen { isShowDeviceIdDialogOpen = true } },
+                        modifier = drawerItemModifier
                     )
-
                     NavigationDrawerItem(
-                        icon = { Icon(HistoryIcon, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                        label = { Text("Recent changes", style = MaterialTheme.typography.bodyMedium) },
+                        icon = { Icon(SynapseIcons.History, contentDescription = null) },
+                        label = { Text("Recent changes") },
                         selected = false,
-                        onClick = {
-                            coroutineScope.launch {
-                                drawerState.close()
-                            }
-                            isRecentChangesPageOpen = true
-                        },
-                        colors = drawerItemColors,
-                        modifier = Modifier.padding(horizontal = 12.dp)
+                        onClick = { closeDrawerThen { isRecentChangesPageOpen = true } },
+                        modifier = drawerItemModifier
                     )
-
+                    // Only the legacy engine serves a web GUI; Synapse Core has none.
+                    if (isLegacyEngine) {
+                        NavigationDrawerItem(
+                            icon = { Icon(SynapseIcons.Web, contentDescription = null) },
+                            label = { Text("Web GUI") },
+                            selected = false,
+                            onClick = { closeDrawerThen { openUrl?.invoke("http://127.0.0.1:8384") } },
+                            modifier = drawerItemModifier
+                        )
+                    }
                     NavigationDrawerItem(
-                        icon = { Icon(WebIcon, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                        label = { Text("Web GUI", style = MaterialTheme.typography.bodyMedium) },
+                        icon = { Icon(SynapseIcons.ImportExport, contentDescription = null) },
+                        label = { Text("Import and export") },
                         selected = false,
-                        onClick = {
-                            coroutineScope.launch {
-                                drawerState.close()
-                            }
-                            openUrl?.invoke("http://127.0.0.1:8384")
-                        },
-                        colors = drawerItemColors,
-                        modifier = Modifier.padding(horizontal = 12.dp)
+                        onClick = { closeDrawerThen { isImportExportDialogOpen = true } },
+                        modifier = drawerItemModifier
                     )
-
-                    NavigationDrawerItem(
-                        icon = { Icon(ImportExportIcon, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                        label = { Text("Import and Export", style = MaterialTheme.typography.bodyMedium) },
-                        selected = false,
-                        onClick = {
-                            coroutineScope.launch {
-                                drawerState.close()
-                            }
-                            isImportExportDialogOpen = true
-                        },
-                        colors = drawerItemColors,
-                        modifier = Modifier.padding(horizontal = 12.dp)
-                    )
-
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                        label = { Text("Restart", style = MaterialTheme.typography.bodyMedium) },
-                        selected = false,
-                        onClick = {
-                            coroutineScope.launch {
-                                drawerState.close()
-                            }
-                            isRestartConfirmOpen = true
-                        },
-                        colors = drawerItemColors,
-                        modifier = Modifier.padding(horizontal = 12.dp)
-                    )
+                    // Restart is a no-op on Synapse Core; only the legacy engine restarts.
+                    if (isLegacyEngine) {
+                        NavigationDrawerItem(
+                            icon = { Icon(SynapseIcons.Refresh, contentDescription = null) },
+                            label = { Text("Restart") },
+                            selected = false,
+                            onClick = { closeDrawerThen { isRestartConfirmOpen = true } },
+                            modifier = drawerItemModifier
+                        )
+                    }
 
                     Spacer(modifier = Modifier.weight(1f))
-
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                    )
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp))
 
                     NavigationDrawerItem(
-                        icon = { Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                        label = { Text("Settings", style = MaterialTheme.typography.bodyMedium) },
+                        icon = { Icon(SynapseIcons.Settings, contentDescription = null) },
+                        label = { Text("Settings") },
                         selected = false,
-                        onClick = {
-                            coroutineScope.launch {
-                                drawerState.close()
-                            }
-                            isSettingsPageOpen = true
-                        },
-                        colors = drawerItemColors,
-                        modifier = Modifier.padding(horizontal = 12.dp)
+                        onClick = { closeDrawerThen { isSettingsPageOpen = true } },
+                        modifier = drawerItemModifier
                     )
-
                     NavigationDrawerItem(
-                        icon = { Icon(ExitIcon, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                        label = { Text("Exit", style = MaterialTheme.typography.bodyMedium) },
+                        icon = { Icon(SynapseIcons.Exit, contentDescription = null) },
+                        label = { Text("Exit") },
                         selected = false,
-                        onClick = {
-                            coroutineScope.launch {
-                                drawerState.close()
-                            }
-                            exitApp?.invoke()
-                        },
-                        colors = drawerItemColors,
-                        modifier = Modifier.padding(horizontal = 12.dp)
+                        onClick = { closeDrawerThen { exitApp?.invoke() } },
+                        modifier = drawerItemModifier
                     )
-                    
-                    Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
             }
         ) {
@@ -433,12 +385,9 @@ fun App(
                                         drawerState.open()
                                     }
                                 }) {
-                                    Icon(Icons.Default.Menu, contentDescription = "Menu")
+                                    Icon(SynapseIcons.Menu, contentDescription = "Menu")
                                 }
-                            },
-                            colors = TopAppBarDefaults.topAppBarColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
+                            }
                         )
                     },
                     bottomBar = {
@@ -446,10 +395,10 @@ fun App(
                             Screen.entries.forEach { screen ->
                                 val selected = pagerState.currentPage == screen.ordinal
                                 val icon = when (screen) {
-                                    Screen.DASHBOARD -> Icons.Default.Home
-                                    Screen.FOLDERS -> FolderIcon
-                                    Screen.DEVICES -> DevicesIcon
-                                    Screen.STATUS -> Icons.Default.Info
+                                    Screen.DASHBOARD -> if (selected) SynapseIcons.HomeFilled else SynapseIcons.Home
+                                    Screen.FOLDERS -> if (selected) SynapseIcons.FolderFilled else SynapseIcons.Folder
+                                    Screen.DEVICES -> if (selected) SynapseIcons.DevicesFilled else SynapseIcons.Devices
+                                    Screen.STATUS -> if (selected) SynapseIcons.InfoFilled else SynapseIcons.Info
                                 }
                                 NavigationBarItem(
                                     selected = selected,
@@ -458,7 +407,7 @@ fun App(
                                             pagerState.animateScrollToPage(screen.ordinal)
                                         }
                                     },
-                                    icon = { Icon(icon, contentDescription = screen.title) },
+                                    icon = { Icon(icon, contentDescription = null) },
                                     label = { Text(screen.title) }
                                 )
                             }
@@ -468,16 +417,11 @@ fun App(
                         val currentScreen = Screen.entries[pagerState.currentPage]
                         AnimatedVisibility(
                             visible = currentScreen == Screen.FOLDERS || currentScreen == Screen.DEVICES,
-                            enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + fadeIn(),
-                            exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + fadeOut()
+                            enter = scaleIn(tween(SynapseMotion.DurationMedium2, easing = SynapseMotion.EmphasizedDecelerate)) +
+                                fadeIn(tween(SynapseMotion.DurationMedium2)),
+                            exit = scaleOut(tween(SynapseMotion.DurationShort4, easing = SynapseMotion.EmphasizedAccelerate)) +
+                                fadeOut(tween(SynapseMotion.DurationShort4))
                         ) {
-                            val isTransitionRunning = transition.currentState != transition.targetState
-                            val targetElevation = if (isTransitionRunning) 0.dp else 6.dp
-                            val fabElevation by animateDpAsState(
-                                targetValue = targetElevation,
-                                animationSpec = spring(stiffness = Spring.StiffnessLow)
-                            )
-
                             ExtendedFloatingActionButton(
                                 onClick = {
                                     when (currentScreen) {
@@ -490,13 +434,7 @@ fun App(
                                         else -> {}
                                     }
                                 },
-                                elevation = FloatingActionButtonDefaults.elevation(
-                                    defaultElevation = fabElevation,
-                                    pressedElevation = fabElevation + 2.dp,
-                                    focusedElevation = fabElevation,
-                                    hoveredElevation = fabElevation
-                                ),
-                                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                                icon = { Icon(SynapseIcons.Add, contentDescription = null) },
                                 text = {
                                     Text(
                                         when (currentScreen) {
@@ -565,99 +503,55 @@ fun App(
                 }
 
                 // Root level Full-screen Add Folder Overlay
-                AnimatedVisibility(
-                    visible = isCreateFolderDialogOpen,
-                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
-                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.background)
-                    ) {
-                        CreateFolderDialog(
-                            onDismiss = {
-                                isCreateFolderDialogOpen = false
-                                prefilledFolderId = ""
-                                prefilledFolderLabel = ""
-                                prefilledFolderSharedDevices = emptyList()
-                            },
-                            selectDirectory = selectDirectory,
-                            prefilledFolderId = prefilledFolderId,
-                            prefilledFolderLabel = prefilledFolderLabel,
-                            prefilledSharedDevices = prefilledFolderSharedDevices
-                        )
-                    }
+                FullScreenOverlay(visible = isCreateFolderDialogOpen) {
+                    CreateFolderDialog(
+                        onDismiss = {
+                            isCreateFolderDialogOpen = false
+                            prefilledFolderId = ""
+                            prefilledFolderLabel = ""
+                            prefilledFolderSharedDevices = emptyList()
+                        },
+                        selectDirectory = selectDirectory,
+                        prefilledFolderId = prefilledFolderId,
+                        prefilledFolderLabel = prefilledFolderLabel,
+                        prefilledSharedDevices = prefilledFolderSharedDevices
+                    )
                 }
 
                 // Root level Full-screen Edit Folder Overlay
-                AnimatedVisibility(
-                    visible = isEditFolderDialogOpen,
-                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
-                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.background)
-                    ) {
-                        folderToEdit?.let { folder ->
-                            EditFolderDialog(
-                                folder = folder,
-                                onDismiss = {
-                                    isEditFolderDialogOpen = false
-                                    folderToEdit = null
-                                },
-                                selectDirectory = selectDirectory
-                            )
-                        }
+                FullScreenOverlay(visible = isEditFolderDialogOpen) {
+                    folderToEdit?.let { folder ->
+                        EditFolderDialog(
+                            folder = folder,
+                            onDismiss = {
+                                isEditFolderDialogOpen = false
+                                folderToEdit = null
+                            },
+                            selectDirectory = selectDirectory
+                        )
                     }
                 }
 
                 // Root level Full-screen Add Device Dialog Overlay
-                AnimatedVisibility(
-                    visible = isAddDeviceDialogOpen,
-                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
-                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.background)
-                    ) {
-                        AddDeviceDialog(
-                            onDismiss = { isAddDeviceDialogOpen = false },
-                            scanQrCode = scanQrCode,
-                            prefilledDeviceId = prefilledDeviceId,
-                            prefilledDeviceName = prefilledDeviceName
-                        )
-                    }
+                FullScreenOverlay(visible = isAddDeviceDialogOpen) {
+                    AddDeviceDialog(
+                        onDismiss = { isAddDeviceDialogOpen = false },
+                        scanQrCode = scanQrCode,
+                        prefilledDeviceId = prefilledDeviceId,
+                        prefilledDeviceName = prefilledDeviceName
+                    )
                 }
 
                 // Root level Full-screen Edit Device Dialog Overlay
-                AnimatedVisibility(
-                    visible = isEditDeviceDialogOpen,
-                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
-                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.background)
-                    ) {
-                        deviceToEdit?.let { device ->
-                            EditDeviceDialog(
-                                device = device,
-                                onDismiss = {
-                                    isEditDeviceDialogOpen = false
-                                    deviceToEdit = null
-                                }
-                            )
-                        }
+                FullScreenOverlay(visible = isEditDeviceDialogOpen) {
+                    deviceToEdit?.let { device ->
+                        EditDeviceDialog(
+                            device = device,
+                            onDismiss = {
+                                isEditDeviceDialogOpen = false
+                                deviceToEdit = null
+                            }
+                        )
                     }
                 }
 
@@ -665,7 +559,8 @@ fun App(
                 if (isShowDeviceIdDialogOpen) {
                     AlertDialog(
                         onDismissRequest = { isShowDeviceIdDialogOpen = false },
-                        title = { Text("Local Device ID", style = MaterialTheme.typography.titleMedium) },
+                        icon = { Icon(SynapseIcons.QrCode, contentDescription = null) },
+                        title = { Text("This device's ID") },
                         text = {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -679,27 +574,33 @@ fun App(
                                     } else {
                                         localId
                                     }
-                                    QrCodeView(
-                                        text = qrText,
-                                        modifier = Modifier
-                                            .size(200.dp)
-                                            .background(Color.White)
-                                            .padding(16.dp)
-                                    )
+                                    // QR codes need a fixed dark-on-white quiet zone to scan reliably,
+                                    // so this is the one place that intentionally ignores the theme.
+                                    Surface(
+                                        color = Color.White,
+                                        shape = MaterialTheme.shapes.medium
+                                    ) {
+                                        QrCodeView(
+                                            text = qrText,
+                                            modifier = Modifier
+                                                .size(200.dp)
+                                                .padding(16.dp)
+                                        )
+                                    }
                                     Spacer(modifier = Modifier.height(16.dp))
                                 }
                                 
-                                Text(
-                                    text = localId,
-                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier
-                                        .background(
-                                            MaterialTheme.colorScheme.surfaceVariant,
-                                            shape = RoundedCornerShape(8.dp)
-                                        )
-                                        .padding(8.dp)
-                                )
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    shape = MaterialTheme.shapes.small
+                                ) {
+                                    Text(
+                                        text = localId,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                    )
+                                }
                             }
                         },
                         confirmButton = {
@@ -728,10 +629,11 @@ fun App(
 
                     AlertDialog(
                         onDismissRequest = { isImportExportDialogOpen = false },
-                        title = { Text("Import / Export Configuration") },
+                        icon = { Icon(SynapseIcons.ImportExport, contentDescription = null) },
+                        title = { Text("Import and export") },
                         text = {
                             Column {
-                                Text("Exported configuration (copy below) or paste a new configuration to import:", style = MaterialTheme.typography.bodySmall)
+                                Text("Copy the configuration below to export it, or paste a configuration to import it.")
                                 Spacer(modifier = Modifier.height(8.dp))
                                 OutlinedTextField(
                                     value = configJsonText,
@@ -747,24 +649,18 @@ fun App(
                                     Text(
                                         text = importError ?: "",
                                         color = MaterialTheme.colorScheme.error,
-                                        style = MaterialTheme.typography.labelSmall
+                                        style = MaterialTheme.typography.bodySmall
                                     )
                                 }
                             }
                         },
                         confirmButton = {
-                            Row {
                                 TextButton(
                                     onClick = {
                                         coroutineScope.launch {
                                             try {
                                                 kotlinx.serialization.json.Json.parseToJsonElement(configJsonText)
                                                 apiClient.updateRawSystemConfig(configJsonText)
-                                                try {
-                                                    apiClient.restart()
-                                                } catch (e: Exception) {
-                                                    // Ignored
-                                                }
                                                 isImportExportDialogOpen = false
                                             } catch(e: Exception) {
                                                 val msg = e.message ?: ""
@@ -785,10 +681,10 @@ fun App(
                                 ) {
                                     Text("Import")
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                TextButton(onClick = { isImportExportDialogOpen = false }) {
-                                    Text("Cancel")
-                                }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { isImportExportDialogOpen = false }) {
+                                Text("Cancel")
                             }
                         }
                     )
@@ -797,56 +693,18 @@ fun App(
                 // Incoming Connection Request Dialog Overlay
                 if (pendingDevices.isNotEmpty() && !isAddDeviceDialogOpen) {
                     val (pendingId, pendingDevice) = pendingDevices.entries.first()
-                    AlertDialog(
-                        onDismissRequest = { /* Keep open until action taken */ },
-                        shape = SynapseDialogShape,
-                        title = { Text("Incoming Connection Request", style = MaterialTheme.typography.titleLarge) },
-                        text = {
-                            Column {
-                                Text("A remote device wants to pair with you:", style = MaterialTheme.typography.bodyMedium)
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text("Name: ${pendingDevice.name.ifEmpty { "Unnamed Device" }}", style = MaterialTheme.typography.titleMedium)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("ID: ${pendingId.chunked(4).joinToString(" ")}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                                if (pendingDevice.address.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text("Address: ${pendingDevice.address}", style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
+                    PairingRequestDialog(
+                        deviceName = pendingDevice.name,
+                        deviceId = pendingId,
+                        address = pendingDevice.address,
+                        onAccept = { deviceViewModel.acceptPendingDeviceDirect(pendingId) },
+                        onConfigure = {
+                            prefilledDeviceId = pendingId
+                            prefilledDeviceName = pendingDevice.name
+                            isAddDeviceDialogOpen = true
+                            deviceViewModel.dismissPendingDevice(pendingId)
                         },
-                        confirmButton = {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
-                                    shape = SynapsePillShape,
-                                    onClick = {
-                                        deviceViewModel.acceptPendingDeviceDirect(pendingId)
-                                    }
-                                ) {
-                                    Text("Quick Accept & Pair")
-                                }
-                                OutlinedButton(
-                                    shape = SynapsePillShape,
-                                    onClick = {
-                                        prefilledDeviceId = pendingId
-                                        prefilledDeviceName = pendingDevice.name
-                                        isAddDeviceDialogOpen = true
-                                        deviceViewModel.dismissPendingDevice(pendingId)
-                                    }
-                                ) {
-                                    Text("Configure & Add")
-                                }
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                shape = SynapsePillShape,
-                                onClick = {
-                                    deviceViewModel.dismissPendingDevice(pendingId)
-                                }
-                            ) {
-                                Text("Dismiss", color = MaterialTheme.colorScheme.error)
-                            }
-                        }
+                        onDismiss = { deviceViewModel.dismissPendingDevice(pendingId) }
                     )
                 }
 
@@ -856,58 +714,23 @@ fun App(
                     val (folderId, pendingOffer) = pendingFolders.entries.first()
                     val offeringDeviceId = pendingOffer.offeredBy.keys.firstOrNull() ?: ""
                     val folderDetails = pendingOffer.offeredBy[offeringDeviceId] ?: PendingFolder()
-                    AlertDialog(
-                        onDismissRequest = { /* Keep open until action taken */ },
-                        shape = SynapseDialogShape,
-                        title = { Text("Folder Share Offered", style = MaterialTheme.typography.titleLarge) },
-                        text = {
-                            Column {
-                                Text("A remote device wants to share a folder with you:", style = MaterialTheme.typography.bodyMedium)
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text("Folder Label: ${folderDetails.label.ifEmpty { "Unnamed Folder" }}", style = MaterialTheme.typography.titleMedium)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("Folder ID: $folderId", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text("Offered By Device ID: ${offeringDeviceId.chunked(4).joinToString(" ")}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                            }
+                    FolderOfferDialog(
+                        folderLabel = folderDetails.label,
+                        folderId = folderId,
+                        offeredByDeviceId = offeringDeviceId,
+                        onConfigure = {
+                            prefilledFolderId = folderId
+                            prefilledFolderLabel = folderDetails.label
+                            prefilledFolderSharedDevices = listOf(offeringDeviceId)
+                            isCreateFolderDialogOpen = true
                         },
-                        confirmButton = {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
-                                    shape = SynapsePillShape,
-                                    onClick = {
-                                        deviceViewModel.acceptPendingFolderDirect(folderId)
-                                    }
-                                ) {
-                                    Text("Quick Accept")
-                                }
-                                OutlinedButton(
-                                    shape = SynapsePillShape,
-                                    onClick = {
-                                        prefilledFolderId = folderId
-                                        prefilledFolderLabel = folderDetails.label
-                                        prefilledFolderSharedDevices = listOf(offeringDeviceId)
-                                        isCreateFolderDialogOpen = true
-                                    }
-                                ) {
-                                    Text("Configure & Add")
-                                }
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                shape = SynapsePillShape,
-                                onClick = {
-                                    deviceViewModel.dismissPendingFolder(
-                                        folderId = folderId,
-                                        deviceId = offeringDeviceId,
-                                        label = folderDetails.label,
-                                        time = folderDetails.time
-                                    )
-                                }
-                            ) {
-                                Text("Dismiss", color = MaterialTheme.colorScheme.error)
-                            }
+                        onDismiss = {
+                            deviceViewModel.dismissPendingFolder(
+                                folderId = folderId,
+                                deviceId = offeringDeviceId,
+                                label = folderDetails.label,
+                                time = folderDetails.time
+                            )
                         }
                     )
                 }
@@ -919,80 +742,41 @@ fun App(
                 }
 
                 // Restart Confirmation Dialog
-                if (isRestartConfirmOpen) {
-                    AlertDialog(
-                        onDismissRequest = { isRestartConfirmOpen = false },
-                        shape = SynapseDialogShape,
-                        title = { Text("Restart Syncthing Daemon?", style = MaterialTheme.typography.titleLarge) },
-                        text = {
-                            Text("Are you sure you want to restart the Syncthing daemon? This will briefly disconnect all active synchronizations.", style = MaterialTheme.typography.bodyMedium)
-                        },
-                        confirmButton = {
-                            Button(
-                                shape = SynapsePillShape,
-                                onClick = {
-                                    isRestartConfirmOpen = false
-                                    coroutineScope.launch {
-                                        try {
-                                            apiClient.restart()
-                                        } catch (e: Exception) {
-                                            // ignore expected network error due to connection termination on restart
-                                        }
-                                    }
+                if (isRestartConfirmOpen && isLegacyEngine) {
+                    ConfirmDialog(
+                        icon = SynapseIcons.Refresh,
+                        title = "Restart Synapse?",
+                        text = "Syncing pauses briefly and every connected device reconnects.",
+                        confirmLabel = "Restart",
+                        onConfirm = {
+                            isRestartConfirmOpen = false
+                            coroutineScope.launch {
+                                try {
+                                    apiClient.restart()
+                                } catch (e: Exception) {
+                                    // expected: the connection drops while the engine restarts
                                 }
-                            ) {
-                                Text("Restart")
                             }
                         },
-                        dismissButton = {
-                            TextButton(
-                                shape = SynapsePillShape,
-                                onClick = {
-                                    isRestartConfirmOpen = false
-                                }
-                            ) {
-                                Text("Cancel")
-                            }
-                        }
+                        onDismiss = { isRestartConfirmOpen = false }
                     )
                 }
 
                 // Root level Full-screen Recent Changes Overlay
-                AnimatedVisibility(
-                    visible = isRecentChangesPageOpen,
-                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
-                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
-                    modifier = Modifier.fillMaxSize()
-                ) {
+                FullScreenOverlay(visible = isRecentChangesPageOpen) {
                     SynapseBackHandler(enabled = isRecentChangesPageOpen, onBack = { isRecentChangesPageOpen = false })
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.background)
-                    ) {
-                        RecentChangesScreen(
-                            onCloseClick = { isRecentChangesPageOpen = false }
-                        )
-                    }
+                    RecentChangesScreen(
+                        onCloseClick = { isRecentChangesPageOpen = false }
+                    )
                 }
 
                 // Root level Full-screen Settings Overlay
-                AnimatedVisibility(
-                    visible = isSettingsPageOpen,
-                    enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), initialScale = 0.8f) + fadeIn(),
-                    exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium), targetScale = 0.8f) + fadeOut(),
-                    modifier = Modifier.fillMaxSize()
-                ) {
+                FullScreenOverlay(visible = isSettingsPageOpen) {
                     SynapseBackHandler(enabled = isSettingsPageOpen, onBack = { isSettingsPageOpen = false })
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.background)
-                    ) {
-                        SettingsScreen(
-                            onClose = { isSettingsPageOpen = false }
-                        )
-                    }
+                    SettingsScreen(
+                        onClose = { isSettingsPageOpen = false },
+                        supportsStartOnBoot = supportsStartOnBoot
+                    )
                 }
             }
         }

@@ -31,11 +31,10 @@ fun SyncConflictsCard(
 
     Card(
         modifier = if (onClick != null) modifier.clickable { onClick() } else modifier,
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
-        ),
-        border = borderForTheme()
+        )
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -50,7 +49,6 @@ fun SyncConflictsCard(
             Text(
                 text = if (conflictCount > 0) "${animatedConflicts.toInt()} issues" else "No issues",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
                 color = if (conflictCount > 0) MaterialTheme.colorScheme.error else com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected
             )
             
@@ -59,7 +57,7 @@ fun SyncConflictsCard(
             Text(
                 text = if (conflictCount > 0) "Requires attention" else "All files healthy",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

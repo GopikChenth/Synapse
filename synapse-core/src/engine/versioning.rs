@@ -340,7 +340,7 @@ pub fn apply_trashcan_retention(
 
 /// Parses historical timestamps from archived directory names or filenames.
 pub fn parse_version_timestamp(s: &str) -> Option<DateTime<Utc>> {
-    // 1. Standard Synapse / Syncthing timestamp: "%Y%m%d-%H%M%S"
+    // 1. Standard Synapse timestamp: "%Y%m%d-%H%M%S"
     if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y%m%d-%H%M%S") {
         return Some(naive.and_utc());
     }

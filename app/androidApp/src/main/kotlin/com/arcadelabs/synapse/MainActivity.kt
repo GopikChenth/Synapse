@@ -14,6 +14,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -27,7 +29,7 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.LayerDrawable
 import android.view.Gravity
 import android.graphics.Color as AndroidColor
-import com.arcadelabs.synapse.service.SyncthingService
+import com.arcadelabs.synapse.service.SynapseSyncService
 import com.arcadelabs.synapse.features.status.ui.RunBehavior
 import com.arcadelabs.synapse.core.prefs.PreferencesHelper
 import org.koin.android.ext.android.inject
@@ -66,8 +68,19 @@ class MainActivity : ComponentActivity() {
             initialOpenAddDevice = true
         }
 
+        // Material You: offer wallpaper-based color on Android 12+.
+        val dynamicColorScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            { darkTheme: Boolean ->
+                if (darkTheme) dynamicDarkColorScheme(this) else dynamicLightColorScheme(this)
+            }
+        } else {
+            null
+        }
+
         setContent {
             App(
+                supportsStartOnBoot = true,
+                dynamicColorScheme = dynamicColorScheme,
                 initialDeviceId = initialDeviceId,
                 initialOpenAddDevice = initialOpenAddDevice,
                 clearPrefilledDevice = {
@@ -159,12 +172,12 @@ class MainActivity : ComponentActivity() {
                     prefs.edit().putString("run_behavior", behavior.name).apply()
                     
                     if (behavior == RunBehavior.FORCE_STOP) {
-                        val serviceIntent = Intent(this, SyncthingService::class.java).apply {
-                            action = SyncthingService.ACTION_STOP
+                        val serviceIntent = Intent(this, SynapseSyncService::class.java).apply {
+                            action = SynapseSyncService.ACTION_STOP
                         }
                         startService(serviceIntent)
                     } else {
-                        startSyncthingService()
+                        startSynapseSyncService()
                     }
                 },
                 showNotification = { title, message ->
@@ -287,7 +300,7 @@ class MainActivity : ComponentActivity() {
                     startActivityForResult(intent, STORAGE_PERMISSION_REQUEST_CODE)
                 }
             } else {
-                startSyncthingService()
+                startSynapseSyncService()
             }
         } else {
             // Android 10 and below: request standard storage permissions
@@ -299,14 +312,14 @@ class MainActivity : ComponentActivity() {
                     STORAGE_PERMISSION_REQUEST_CODE
                 )
             } else {
-                startSyncthingService()
+                startSynapseSyncService()
             }
         }
     }
 
-    private fun startSyncthingService() {
-        val serviceIntent = Intent(this, SyncthingService::class.java).apply {
-            action = SyncthingService.ACTION_START
+    private fun startSynapseSyncService() {
+        val serviceIntent = Intent(this, SynapseSyncService::class.java).apply {
+            action = SynapseSyncService.ACTION_START
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent)
@@ -321,7 +334,7 @@ class MainActivity : ComponentActivity() {
             checkStoragePermissionAndStartService()
         } else if (requestCode == STORAGE_PERMISSION_REQUEST_CODE) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                startSyncthingService()
+                startSynapseSyncService()
             }
         }
     }
@@ -331,7 +344,7 @@ class MainActivity : ComponentActivity() {
         if (requestCode == STORAGE_PERMISSION_REQUEST_CODE) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 if (Environment.isExternalStorageManager()) {
-                    startSyncthingService()
+                    startSynapseSyncService()
                 }
             }
         }
@@ -360,14 +373,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            val colorHex = when (selectedTheme) {
-                "DeepSpace" -> if (isNight) "#0B0C10" else "#F4F6F9"
-                "TacticalHUD" -> if (isNight) "#000000" else "#EAEFF2"
-                "MidnightGreen" -> if (isNight) "#171615" else "#F7F8F6"
-                else -> if (isNight) "#1C1B1F" else "#FFFBFE"
+            // Matches the M3 `background` role of each theme (core/designsystem/Theme.kt).
+            val backgroundColor = when {
+                selectedTheme == "Dynamic" && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+                    getColor(if (isNight) android.R.color.system_neutral1_900 else android.R.color.system_neutral1_10)
+                selectedTheme == "DeepSpace" -> AndroidColor.parseColor(if (isNight) "#0D1516" else "#F3FBFC")
+                selectedTheme == "TacticalHUD" -> AndroidColor.parseColor(if (isNight) "#0D1513" else "#F2FBF7")
+                selectedTheme == "MidnightGreen" -> AndroidColor.parseColor(if (isNight) "#10150D" else "#F6FBED")
+                else -> AndroidColor.parseColor(if (isNight) "#141218" else "#FDF7FF")
             }
-
-            val backgroundColor = AndroidColor.parseColor(colorHex)
             val logoDrawable = ContextCompat.getDrawable(this, R.drawable.transparent_logo)
 
             if (logoDrawable != null) {

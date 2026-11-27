@@ -17,13 +17,11 @@ import androidx.compose.ui.unit.sp
 fun HeaderStatusCard(
     isRunning: Boolean,
     uptime: Long,
-    downloadSpeed: Long,
-    uploadSpeed: Long,
     modifier: Modifier = Modifier
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
         )
@@ -48,93 +46,26 @@ fun HeaderStatusCard(
                     Text(
                         text = "Synapse Sync",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
                 
-                Surface(
-                    shape = com.arcadelabs.synapse.core.designsystem.SynapseCardShape,
-                    color = if (isRunning) com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected else com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Disconnected,
-                    modifier = Modifier.clip(com.arcadelabs.synapse.core.designsystem.SynapseCardShape)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .background(Color.White, RoundedCornerShape(3.dp))
-                        )
-                        Text(
-                            text = if (isRunning) "Running" else "Stopped",
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
+                com.arcadelabs.synapse.core.designsystem.components.SyncStateBadge(
+                    state = if (isRunning) com.arcadelabs.synapse.core.designsystem.components.SyncState.Connected
+                        else com.arcadelabs.synapse.core.designsystem.components.SyncState.Disconnected,
+                    label = if (isRunning) "Running" else "Stopped"
+                )
             }
             
             Text(
                 text = if (isRunning) {
-                    "All folders and devices are active. Uptime: ${formatUptime(uptime)}"
+                    "The Synapse engine is running. Uptime: ${formatUptime(uptime)}"
                 } else {
-                    "The Syncthing daemon is currently offline."
+                    "The Synapse daemon is currently offline."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            
-            HorizontalDivider(
-                color = MaterialTheme.colorScheme.outlineVariant,
-                thickness = 1.dp
-            )
-            
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), RoundedCornerShape(8.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("↓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    }
-                    Column {
-                        Text("Download", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(formatSpeedKmp(downloadSpeed), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                    }
-                }
-                
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), RoundedCornerShape(8.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("↑", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    }
-                    Column {
-                        Text("Upload", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(formatSpeedKmp(uploadSpeed), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                    }
-                }
-            }
         }
     }
 }

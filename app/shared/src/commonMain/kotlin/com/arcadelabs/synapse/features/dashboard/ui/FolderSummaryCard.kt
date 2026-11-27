@@ -41,7 +41,7 @@ fun FolderSummaryCard(
 
     Card(
         modifier = modifier.clickable { onNavigateToFolders() },
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
         )
@@ -70,12 +70,11 @@ fun FolderSummaryCard(
             Text(
                 text = "${animatedFolders.toInt()}",
                 style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             
             Text(
-                text = if (pausedCount > 0) "${animatedPaused.toInt()} Paused" else "All Synced",
+                text = if (pausedCount > 0) "${animatedPaused.toInt()} Paused" else "Active",
                 style = MaterialTheme.typography.bodySmall,
                 color = if (pausedCount > 0) MaterialTheme.colorScheme.secondary else com.arcadelabs.synapse.core.designsystem.SynapseStatusColors.Connected
             )

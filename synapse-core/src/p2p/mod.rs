@@ -37,7 +37,8 @@ use crate::dag::RevisionNode;
 use crate::engine::SyncEngine;
 pub use crate::p2p::identity::NodeIdentity;
 use crate::storage::{
-    FileRecord, IntroducedDevice, IntroducerPropagationResult, PendingDeviceRecord, RevisionRecord,
+    FileRecord, IntroducedDevice, IntroducerPropagationResult, PendingDeviceRecord, PendingFolderRecord,
+    RevisionRecord,
 };
 
 pub const DEFAULT_P2P_PORT: u16 = 9190;
@@ -435,7 +436,76 @@ impl P2PManager {
     // =====================================================================
 
     /// Our Hello for a given peer. The cluster device list is only shared with paired peers.
-    fn hello_for(&self, pairing: Option<crate::state::DevicePairingState>) -> P2PMessage {
+    /// Folder IDs this device shares with `stored_id` (the folder invitations it sends).
+    fn folders_shared_with(&self, stored_id: &str) -> Vec<String> {
+        let storage = self.sync_engine.storage();
+        storage
+            .list_folders()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| f.folder_id)
+            .filter(|fid| folder_shared_with(storage, fid, stored_id))
+            .collect()
+    }
+
+    /// Turns folders a paired peer shares with us into pending folder invitations (what
+    /// clients show as "device X wants to share folder Y"), unless the folder is already
+    /// shared with that peer here or the invitation is already pending. Returns how many
+    /// new invitations were recorded.
+    fn record_folder_offers(&self, stored_id: &str, offered: &[String]) -> usize {
+        let storage = self.sync_engine.storage();
+        let pending = storage.list_pending_folders().unwrap_or_default();
+        let mut added = 0;
+        for fid in offered.iter().take(MAX_FOLDER_OFFERS) {
+            if !is_plausible_folder_id(fid) {
+                continue;
+            }
+            let have = storage.get_folder(fid).ok().flatten().is_some();
+            if have && folder_shared_with(storage, fid, stored_id) {
+                continue;
+            }
+            if pending.iter().any(|p| &p.folder_id == fid && p.device_id == stored_id) {
+                continue;
+            }
+            let rec = PendingFolderRecord {
+                folder_id: fid.clone(),
+                device_id: stored_id.to_string(),
+                folder_label: fid.clone(),
+                offered_at: chrono::Utc::now().timestamp_millis(),
+            };
+            if storage.add_pending_folder(&rec).is_ok() {
+                info!("Device {} offers folder {}", stored_id, fid);
+                added += 1;
+            }
+        }
+        added
+    }
+
+    /// Sends Hello (with the current shared-folder list) to every connected paired device, so
+    /// a folder shared while already connected reaches the other side without reconnecting,
+    /// then pulls any folders that are now shared in both directions.
+    pub async fn announce_folders(&self) {
+        let ids: Vec<String> = self
+            .connections
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, c)| c.close_reason().is_none())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            let (_, pairing) = resolve_device(self.sync_engine.storage(), &id);
+            if pairing != Some(crate::state::DevicePairingState::Paired) {
+                continue;
+            }
+            if let Ok(Some(P2PMessage::Hello { folders, .. })) = self.request(&id, self.hello_for(pairing, &id)).await {
+                self.record_folder_offers(&id, &folders);
+            }
+            self.sync_all_folders_with(&id).await;
+        }
+    }
+
+    fn hello_for(&self, pairing: Option<crate::state::DevicePairingState>, stored_id: &str) -> P2PMessage {
         let cluster_devices = if pairing == Some(crate::state::DevicePairingState::Paired) {
             self.sync_engine
                 .storage()
@@ -455,10 +525,15 @@ impl P2PManager {
         } else {
             Vec::new()
         };
+        let folders = if pairing == Some(crate::state::DevicePairingState::Paired) {
+            self.folders_shared_with(stored_id)
+        } else {
+            Vec::new()
+        };
         P2PMessage::Hello {
             device_id: self.identity.device_id.clone(),
             device_name: self.device_name.clone(),
-            folders: Vec::new(),
+            folders,
             cluster_devices,
         }
     }
@@ -480,7 +555,7 @@ impl P2PManager {
         let storage = self.sync_engine.storage().clone();
         let (stored_id, pairing) = resolve_device(&storage, peer_hex);
 
-        if let P2PMessage::Hello { device_id, device_name, folders: _, cluster_devices } = msg {
+        if let P2PMessage::Hello { device_id, device_name, folders, cluster_devices } = msg {
             if !same_device(&device_id, peer_hex) {
                 warn!("Hello from {} claims to be {}; ignoring", peer_hex, device_id);
                 return Ok(None);
@@ -513,6 +588,7 @@ impl P2PManager {
                     if let Some(addr) = peer_addr {
                         self.mark_present(&stored_id, &device_name, addr).await;
                     }
+                    self.record_folder_offers(&stored_id, &folders);
                     if !cluster_devices.is_empty() && storage.is_device_introducer(&stored_id).unwrap_or(false) {
                         // Only from peers the user marked as introducers, attributed to the
                         // *authenticated* sender.
@@ -521,7 +597,7 @@ impl P2PManager {
                 }
                 Some(_) => {} // paused or rejected: no state changes
             }
-            return Ok(Some(self.hello_for(pairing)));
+            return Ok(Some(self.hello_for(pairing, &stored_id)));
         }
 
         if pairing != Some(Pairing::Paired) {
@@ -556,6 +632,12 @@ impl P2PManager {
                 self.build_file_notice(&folder_id, &relative_path)
             }
             P2PMessage::FileNotice { folder_id, relative_path, revision, chunk_hashes, ancestry } => {
+                // A folder the peer shares but we have not accepted (yet): it is a pending
+                // invitation, and accepting it pulls the whole folder, so skip quietly.
+                if !folder_shared_with(&storage, &folder_id, &stored_id) {
+                    tracing::debug!("Ignoring change to {}/{}: folder not shared with {} here", folder_id, relative_path, stored_id);
+                    return Ok(None);
+                }
                 // Applied in the background: we fetch missing chunks back from the sender.
                 let me = self.clone();
                 tokio::spawn(async move {
@@ -621,6 +703,25 @@ impl P2PManager {
         self.peer_count.store(fresh_peer_count(&map), Ordering::Relaxed);
     }
 
+    /// Drops everything the transport holds for a device the user removed: closes its open
+    /// connection and forgets its presence, so it stops being reported as online. If the
+    /// peer still has this device configured it may dial again; it is then treated like any
+    /// unpaired device (its Hello becomes a pending pairing request).
+    pub async fn forget_device(&self, stored_id: &str) {
+        let conn = self.connections.lock().await.remove(stored_id);
+        if let Some(conn) = conn {
+            conn.close(0u32.into(), b"device removed");
+        }
+        {
+            let mut map = self.peers.lock().await;
+            map.remove(stored_id);
+            self.peer_count.store(fresh_peer_count(&map), Ordering::Relaxed);
+        }
+        if self.online_peers.lock().await.remove(stored_id) {
+            let _ = self.event_sender.send(CoreEvent::PeerDisconnected { peer_id: stored_id.to_string() });
+        }
+    }
+
     // =====================================================================
     // QUIC TRANSPORT (mutual TLS)
     // =====================================================================
@@ -669,10 +770,11 @@ impl P2PManager {
         }
         self.adopt_connection(stored_id.clone(), proven, conn, addr).await;
 
-        if let Some(P2PMessage::Hello { device_name, .. }) =
-            self.request(&stored_id, self.hello_for(pairing)).await?
+        if let Some(P2PMessage::Hello { device_name, folders, .. }) =
+            self.request(&stored_id, self.hello_for(pairing, &stored_id)).await?
         {
             self.mark_present(&stored_id, &device_name, addr).await;
+            self.record_folder_offers(&stored_id, &folders);
         }
         self.sync_all_folders_with(&stored_id).await;
         Ok(())
@@ -1026,7 +1128,7 @@ impl P2PManager {
 
     /// Spawns the BEP v1 listener and the authenticated QUIC server, and accepts peers.
     pub async fn run_server(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // 1. BEP v1 TCP listener (Syncthing wire protocol). Unauthenticated: peers are listed
+        // 1. BEP v1 TCP listener (BEP wire protocol). Unauthenticated: peers are listed
         //    under a derived "BEP-…" id and are never matched to paired devices by name.
         let bep_port = self.bep_port;
         let local_name = self.device_name.clone();
@@ -1145,6 +1247,19 @@ pub fn parse_peer_address(address: &str) -> Option<SocketAddr> {
     rest.to_socket_addrs().ok()?.next()
 }
 
+/// Upper bound on folder invitations taken from one Hello.
+const MAX_FOLDER_OFFERS: usize = 256;
+
+/// Folder ids offered by peers become database keys and default directory names on accept:
+/// keep them short, printable and free of path separators.
+fn is_plausible_folder_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id != "."
+        && id != ".."
+        && id.chars().all(|c| !c.is_control() && c != '/' && c != '\\')
+}
+
 /// Whether two device ids (hex or grouped Base32) refer to the same device.
 fn same_device(a: &str, b: &str) -> bool {
     match (normalize_hex(a), normalize_hex(b)) {
@@ -1160,7 +1275,9 @@ pub fn resolve_device(
     storage: &crate::storage::StorageEngine,
     device_id: &str,
 ) -> (String, Option<crate::state::DevicePairingState>) {
-    let mut candidates = vec![device_id.to_string()];
+    // Devices are stored under their canonical id; the other spellings only matter for
+    // rows written before that repair ran.
+    let mut candidates = vec![identity::canonical_device_id(device_id), device_id.to_string()];
     if let Some(hex) = normalize_hex(device_id) {
         if let Ok(bytes) = hex::decode(&hex) {
             candidates.push(identity::format_device_id(&bytes));

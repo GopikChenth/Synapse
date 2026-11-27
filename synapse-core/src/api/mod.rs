@@ -8,7 +8,7 @@
 //! - Active conflict inspection (base, local, remote, 3-way diff)
 //! - User conflict resolution commands
 //! - Real-time WebSocket event streaming
-//! - Full compatibility route aliases for Syncthing API clients (`/rest/*`)
+//! - Full compatibility route aliases for REST API clients (`/rest/*`)
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -55,18 +55,18 @@ pub struct AppState {
     /// Browser origins allowed to call the API (e.g. `http://localhost:8080` for the
     /// web UI). Empty = no cross-origin access at all.
     pub allowed_origins: Vec<String>,
-    /// Recent events, served to Syncthing-style long-poll clients (`GET /rest/events`).
+    /// Recent events, served to REST-style long-poll clients (`GET /rest/events`).
     pub event_log: Arc<EventLog>,
 }
 
 // =============================================================================
-// EVENT LOG (Syncthing-compatible long-poll for GET /rest/events)
+// EVENT LOG (REST-compatible long-poll for GET /rest/events)
 // =============================================================================
 
 /// Number of recent events kept in memory for long-poll clients.
 pub const EVENT_LOG_CAPACITY: usize = 1000;
 
-/// Ring buffer of recent events in Syncthing's event format:
+/// Ring buffer of recent events in the REST event format:
 /// `{"id", "globalID", "type", "time", "data"}`.
 pub struct EventLog {
     inner: std::sync::Mutex<EventLogInner>,
@@ -87,9 +87,9 @@ impl EventLog {
         })
     }
 
-    /// Records an engine event, converting it to Syncthing's event shape.
+    /// Records an engine event, converting it to the REST event shape.
     pub fn record(&self, event: &CoreEvent) {
-        let (event_type, data) = to_syncthing_event(event);
+        let (event_type, data) = to_rest_event(event);
         let id = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             let id = inner.next_id;
@@ -111,7 +111,7 @@ impl EventLog {
     }
 
     /// Events with `id > since`, optionally filtered by type, keeping the newest `limit`
-    /// (0 = no limit). Oldest first, like Syncthing.
+    /// (0 = no limit). Oldest first, as in the REST API.
     pub fn since(&self, since: u64, limit: usize, types: Option<&[String]>) -> Vec<serde_json::Value> {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut out: Vec<serde_json::Value> = inner
@@ -148,10 +148,10 @@ impl EventLog {
     }
 }
 
-/// Maps an engine event to a Syncthing event type and `data` object. File activity uses
-/// Syncthing's names (`ItemStarted`, `ItemFinished`, `LocalChangeDetected`) so existing
-/// Syncthing clients understand it; everything else keeps its Synapse name.
-fn to_syncthing_event(event: &CoreEvent) -> (String, serde_json::Value) {
+/// Maps an engine event to a REST event type and `data` object. File activity uses
+/// the standard names (`ItemStarted`, `ItemFinished`, `LocalChangeDetected`) so existing
+/// REST clients understand it; everything else keeps its Synapse name.
+fn to_rest_event(event: &CoreEvent) -> (String, serde_json::Value) {
     use serde_json::json;
     match event {
         CoreEvent::ItemStarted { folder_id, relative_path, action } => (
@@ -190,7 +190,7 @@ fn to_syncthing_event(event: &CoreEvent) -> (String, serde_json::Value) {
 struct EventsQuery {
     since: Option<u64>,
     limit: Option<usize>,
-    /// Seconds to wait for new events (Syncthing default 60, max 300).
+    /// Seconds to wait for new events (default 60, max 300).
     timeout: Option<u64>,
     /// Comma-separated event types to include.
     events: Option<String>,
@@ -286,6 +286,11 @@ fn error_response(err: &(dyn std::error::Error + Send + Sync + 'static), fallbac
     (fallback, err.to_string()).into_response()
 }
 
+/// `{"error": code, "message": message}` with the given status.
+fn error_json(status: StatusCode, code: &str, message: &str) -> Response {
+    (status, Json(serde_json::json!({ "error": code, "message": message }))).into_response()
+}
+
 fn transition_error_response(t: &crate::state::StateTransitionError) -> Response {
     let mut body = serde_json::to_value(t).unwrap_or_else(|_| serde_json::json!({}));
     body["error"] = "invalid_transition".into();
@@ -350,7 +355,7 @@ pub struct SystemStatusResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SyncthingFolderDeviceRef {
+pub struct RestFolderDeviceRef {
     #[serde(rename = "deviceID")]
     pub device_id: String,
     #[serde(rename = "encryptionPassword", default)]
@@ -358,7 +363,7 @@ pub struct SyncthingFolderDeviceRef {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct SyncthingFolderVersioning {
+pub struct RestFolderVersioning {
     #[serde(rename = "type", default = "default_versioning_type")]
     pub versioning_type: String,
     #[serde(default)]
@@ -378,7 +383,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SyncthingFolderDto {
+pub struct RestFolderDto {
     pub id: String,
     #[serde(default)]
     pub label: String,
@@ -393,9 +398,9 @@ pub struct SyncthingFolderDto {
     #[serde(rename = "fsWatcherEnabled", default = "default_true")]
     pub fs_watcher_enabled: bool,
     #[serde(default)]
-    pub devices: Vec<SyncthingFolderDeviceRef>,
+    pub devices: Vec<RestFolderDeviceRef>,
     #[serde(default)]
-    pub versioning: SyncthingFolderVersioning,
+    pub versioning: RestFolderVersioning,
 }
 
 fn default_rescan_interval() -> i32 {
@@ -403,7 +408,7 @@ fn default_rescan_interval() -> i32 {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SyncthingDeviceDto {
+pub struct RestDeviceDto {
     #[serde(rename = "deviceID")]
     pub device_id: String,
     #[serde(default)]
@@ -421,13 +426,13 @@ pub struct SyncthingDeviceDto {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SyncthingConfigDto {
+pub struct RestConfigDto {
     #[serde(default = "default_config_version")]
     pub version: i32,
     #[serde(default)]
-    pub folders: Vec<SyncthingFolderDto>,
+    pub folders: Vec<RestFolderDto>,
     #[serde(default)]
-    pub devices: Vec<SyncthingDeviceDto>,
+    pub devices: Vec<RestDeviceDto>,
 }
 
 fn default_config_version() -> i32 {
@@ -565,7 +570,7 @@ impl ApiServer {
             .route("/rest/system/statemachines", get(get_system_statemachines))
             .route("/api/v1/connections", get(get_connections))
             .route("/rest/system/connections", get(get_connections))
-            .route("/rest/system/config", get(get_syncthing_config).post(set_syncthing_config))
+            .route("/rest/system/config", get(get_rest_config).post(set_rest_config))
             .route("/rest/system/pause", post(pause_device_query))
             .route("/rest/system/resume", post(resume_device_query))
 
@@ -835,11 +840,11 @@ async fn get_system_statemachines() -> impl IntoResponse {
     Json(crate::state::get_all_state_machines())
 }
 
-async fn get_syncthing_config(State(state): State<AppState>) -> impl IntoResponse {
+async fn get_rest_config(State(state): State<AppState>) -> impl IntoResponse {
     let folders = state.sync_engine.storage().list_folders().unwrap_or_default();
     let devices = state.sync_engine.storage().list_devices().unwrap_or_default();
 
-    let mapped_folders: Vec<SyncthingFolderDto> = folders
+    let mapped_folders: Vec<RestFolderDto> = folders
         .into_iter()
         .map(|f| {
             let devs = state
@@ -848,7 +853,7 @@ async fn get_syncthing_config(State(state): State<AppState>) -> impl IntoRespons
                 .list_folder_devices(&f.folder_id)
                 .unwrap_or_default()
                 .into_iter()
-                .map(|device_id| SyncthingFolderDeviceRef {
+                .map(|device_id| RestFolderDeviceRef {
                     device_id,
                     encryption_password: String::new(),
                 })
@@ -860,7 +865,7 @@ async fn get_syncthing_config(State(state): State<AppState>) -> impl IntoRespons
             }
             params.insert("cleanoutDays".to_string(), f.versioning_keep_days.to_string());
 
-            SyncthingFolderDto {
+            RestFolderDto {
                 id: f.folder_id.clone(),
                 label: f.folder_id.clone(),
                 path: f.local_path,
@@ -869,7 +874,7 @@ async fn get_syncthing_config(State(state): State<AppState>) -> impl IntoRespons
                 rescan_interval_s: 60,
                 fs_watcher_enabled: true,
                 devices: devs,
-                versioning: SyncthingFolderVersioning {
+                versioning: RestFolderVersioning {
                     versioning_type: f.versioning_type.to_lowercase(),
                     params,
                 },
@@ -877,9 +882,9 @@ async fn get_syncthing_config(State(state): State<AppState>) -> impl IntoRespons
         })
         .collect();
 
-    let mapped_devices: Vec<SyncthingDeviceDto> = devices
+    let mapped_devices: Vec<RestDeviceDto> = devices
         .into_iter()
-        .map(|d| SyncthingDeviceDto {
+        .map(|d| RestDeviceDto {
             device_id: d.device_id,
             name: d.name,
             addresses: d.addresses,
@@ -890,18 +895,49 @@ async fn get_syncthing_config(State(state): State<AppState>) -> impl IntoRespons
         })
         .collect();
 
-    Json(SyncthingConfigDto {
+    Json(RestConfigDto {
         version: 1,
         folders: mapped_folders,
         devices: mapped_devices,
     })
 }
 
-async fn set_syncthing_config(
+async fn set_rest_config(
     State(state): State<AppState>,
-    Json(config): Json<SyncthingConfigDto>,
+    Json(raw): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    use std::collections::HashSet;
+    use crate::p2p::identity::canonical_device_id;
+
+    let config: RestConfigDto = match serde_json::from_value(raw.clone()) {
+        Ok(c) => c,
+        Err(e) => return error_json(StatusCode::UNPROCESSABLE_ENTITY, "invalid_config", &e.to_string()),
+    };
     let storage = state.sync_engine.storage();
+    let own_id = canonical_device_id(state.p2p_manager.device_id());
+
+    // REST semantics: a posted config is the complete desired state. Clients (including
+    // the Synapse apps) delete a device by posting the config without it, so devices and
+    // folder shares missing from the post are removed. Only lists actually present in the
+    // body are treated that way, so a partial body never wipes anything.
+    let devices_listed = raw.get("devices").map(|v| v.is_array()).unwrap_or(false);
+    let folders_with_device_lists: HashSet<String> = raw
+        .get("folders")
+        .and_then(|f| f.as_array())
+        .map(|list| {
+            list.iter()
+                .filter(|f| f.get("devices").map(|d| d.is_array()).unwrap_or(false))
+                .filter_map(|f| f.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let wanted_devices: HashSet<String> = config
+        .devices
+        .iter()
+        .map(|d| canonical_device_id(&d.device_id))
+        .filter(|d| *d != own_id)
+        .collect();
+
     for f in config.folders {
         let v_cmd = f.versioning.params.get("command").cloned();
         let v_days = f
@@ -919,14 +955,31 @@ async fn set_syncthing_config(
         rec.versioning_command = v_cmd;
         let _ = storage.add_folder(&rec);
 
-        for d in f.devices {
-            let _ = storage.share_folder_with_device(&f.id, &d.device_id);
+        let wanted: HashSet<String> = f
+            .devices
+            .iter()
+            .map(|d| canonical_device_id(&d.device_id))
+            .filter(|d| *d != own_id)
+            .collect();
+        for d in &wanted {
+            let _ = storage.share_folder_with_device(&f.id, d);
+        }
+        if folders_with_device_lists.contains(&f.id) {
+            for d in storage.list_folder_devices(&f.id).unwrap_or_default() {
+                if !wanted.contains(&d) {
+                    let _ = storage.unshare_folder_from_device(&f.id, &d);
+                }
+            }
         }
     }
 
     for d in config.devices {
+        let device_id = canonical_device_id(&d.device_id);
+        if device_id == own_id {
+            continue; // never pair with ourselves
+        }
         let rec = DeviceRecord {
-            device_id: d.device_id,
+            device_id,
             name: d.name,
             addresses: d.addresses,
             is_paused: d.paused,
@@ -938,6 +991,18 @@ async fn set_syncthing_config(
         let _ = storage.add_device(&rec);
     }
 
+    if devices_listed {
+        for existing in storage.list_devices().unwrap_or_default() {
+            if !wanted_devices.contains(&existing.device_id) {
+                if storage.remove_device(&existing.device_id).is_ok() {
+                    info!("Device {} removed (absent from posted config)", existing.device_id);
+                    state.p2p_manager.forget_device(&existing.device_id).await;
+                }
+            }
+        }
+    }
+
+    announce_folder_shares(&state);
     StatusCode::OK.into_response()
 }
 
@@ -1000,9 +1065,14 @@ async fn register_folder(
     // after an engine restart).
     let engine = state.sync_engine.clone();
     let fid = payload.folder_id;
-    tokio::task::spawn_blocking(move || {
-        let _ = engine.index_folder(&fid);
-        engine.start_watching(&fid);
+    let p2p = state.p2p_manager.clone();
+    tokio::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = engine.index_folder(&fid);
+            engine.start_watching(&fid);
+        })
+        .await;
+        p2p.announce_folders().await;
     });
 
     (StatusCode::CREATED, Json(folder)).into_response()
@@ -1161,8 +1231,14 @@ async fn share_folder_device(
     AxumPath((id, device_id)): AxumPath<(String, String)>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    match state.sync_engine.storage().share_folder_with_device(&id, &device_id) {
-        Ok(_) => StatusCode::OK.into_response(),
+    let storage = state.sync_engine.storage();
+    let (stored_id, _) = crate::p2p::resolve_device(storage, &device_id);
+    match storage.share_folder_with_device(&id, &stored_id) {
+        Ok(_) => {
+            // Without this the other device only heard about the share after reconnecting.
+            announce_folder_shares(&state);
+            StatusCode::OK.into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1291,10 +1367,30 @@ async fn remove_device(
     AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    match state.sync_engine.storage().remove_device(&id) {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+    let storage = state.sync_engine.storage();
+    // The id as stored (callers may send a differently formatted id for the same device).
+    let (stored_id, _) = crate::p2p::resolve_device(storage, &id);
+    match storage.remove_device(&stored_id).and_then(|_| {
+        if stored_id != id { storage.remove_device(&id) } else { Ok(()) }
+    }) {
+        Ok(_) => {
+            // Without this the open connection kept the removed device "online" in
+            // /api/v1/connections, so clients showed it as still connected.
+            state.p2p_manager.forget_device(&stored_id).await;
+            if stored_id != id {
+                state.p2p_manager.forget_device(&id).await;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+/// Tells connected peers about the current folder shares (folder invitations) in the
+/// background, after an API call changed which folders are shared with which devices.
+fn announce_folder_shares(state: &AppState) {
+    let p2p = state.p2p_manager.clone();
+    tokio::spawn(async move { p2p.announce_folders().await });
 }
 
 /// Runs a guarded device pairing transition and publishes the resulting events.
@@ -1450,7 +1546,10 @@ async fn list_pending_folders(State(state): State<AppState>) -> impl IntoRespons
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcceptFolderPayload {
-    pub device_id: String,
+    /// Which device's invitation to accept; optional (clients may send only `local_path`),
+    /// then the most recent invitation for the folder is used.
+    #[serde(default)]
+    pub device_id: Option<String>,
     pub local_path: String,
 }
 
@@ -1459,15 +1558,62 @@ async fn accept_pending_folder(
     State(state): State<AppState>,
     Json(payload): Json<AcceptFolderPayload>,
 ) -> impl IntoResponse {
-    match state.sync_engine.storage().accept_pending_folder(&id, &payload.device_id, &payload.local_path) {
-        Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let storage = state.sync_engine.storage();
+    let offers: Vec<_> = storage
+        .list_pending_folders()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p.folder_id == id)
+        .collect();
+    let device_id = match &payload.device_id {
+        Some(d) => {
+            let (stored, _) = crate::p2p::resolve_device(storage, d);
+            match offers.iter().find(|p| p.device_id == stored || p.device_id == *d) {
+                Some(p) => p.device_id.clone(),
+                None => return error_json(StatusCode::NOT_FOUND, "not_found", "no pending invitation for this folder from that device"),
+            }
+        }
+        // list_pending_folders is newest first
+        None => match offers.first() {
+            Some(p) => p.device_id.clone(),
+            None => return error_json(StatusCode::NOT_FOUND, "not_found", "no pending invitation for this folder"),
+        },
+    };
+    let local_path = payload.local_path.trim().to_string();
+    if local_path.is_empty() {
+        return error_json(StatusCode::BAD_REQUEST, "invalid_request", "local_path is required");
     }
+    if let Err(e) = std::fs::create_dir_all(&local_path) {
+        return error_json(StatusCode::BAD_REQUEST, "invalid_path", &format!("cannot create {}: {}", local_path, e));
+    }
+    if let Err(e) = storage.accept_pending_folder(&id, &device_id, &local_path) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    // Same as adding a folder: index, watch, then tell the peer and pull its files
+    // (previously accepting only wrote database rows and nothing synced until a restart).
+    let engine = state.sync_engine.clone();
+    let p2p = state.p2p_manager.clone();
+    let fid = id.clone();
+    tokio::spawn(async move {
+        let f2 = fid.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = engine.index_folder(&f2);
+            engine.start_watching(&f2);
+        })
+        .await;
+        p2p.announce_folders().await;
+        if let Err(e) = p2p.sync_folder_from(&device_id, &fid).await {
+            tracing::warn!("Initial sync of accepted folder {} from {} failed: {}", fid, device_id, e);
+        }
+    });
+    StatusCode::OK.into_response()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RejectFolderPayload {
-    pub device_id: String,
+    /// Optional: without it every pending invitation for the folder is rejected.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 async fn reject_pending_folder(
@@ -1475,10 +1621,23 @@ async fn reject_pending_folder(
     State(state): State<AppState>,
     Json(payload): Json<RejectFolderPayload>,
 ) -> impl IntoResponse {
-    match state.sync_engine.storage().reject_pending_folder(&id, &payload.device_id) {
-        Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let storage = state.sync_engine.storage();
+    let targets: Vec<String> = match &payload.device_id {
+        Some(d) => vec![crate::p2p::resolve_device(storage, d).0, d.clone()],
+        None => storage
+            .list_pending_folders()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.folder_id == id)
+            .map(|p| p.device_id)
+            .collect(),
+    };
+    for dev in targets {
+        if let Err(e) = storage.reject_pending_folder(&id, &dev) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
     }
+    StatusCode::OK.into_response()
 }
 
 async fn reject_pending_folder_query(
@@ -1691,7 +1850,7 @@ async fn reopen_conflict(
 /// `GET /api/v1/events`, `GET /rest/events`.
 ///
 /// - With WebSocket upgrade headers: live event stream (Synapse native).
-/// - Plain GET: Syncthing-compatible long-poll. Returns events with `id > since`
+/// - Plain GET: REST-compatible long-poll. Returns events with `id > since`
 ///   (newest `limit`), waiting up to `timeout` seconds for new ones. With `since=0`
 ///   (first load) it returns immediately unless `timeout` is given.
 async fn events_handler(

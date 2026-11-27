@@ -6,7 +6,7 @@ import com.arcadelabs.synapse.core.domain.models.Event
 import com.arcadelabs.synapse.core.domain.models.ItemFinishedEventData
 import com.arcadelabs.synapse.core.domain.models.toItemFinishedData
 import com.arcadelabs.synapse.core.domain.state.AsyncResource
-import com.arcadelabs.synapse.core.network.SyncthingApiClient
+import com.arcadelabs.synapse.core.network.SynapseApiClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,7 +24,7 @@ data class RecentChangeUiModel(
 )
 
 class RecentChangesViewModel(
-    private val apiClient: SyncthingApiClient
+    private val apiClient: SynapseApiClient
 ) : ViewModel() {
 
     // ── Explicit State Machine (Primary Source of Truth) ─────────────────────

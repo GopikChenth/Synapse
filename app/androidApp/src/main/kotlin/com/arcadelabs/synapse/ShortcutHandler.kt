@@ -3,7 +3,7 @@ package com.arcadelabs.synapse
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import com.arcadelabs.synapse.service.SyncthingService
+import com.arcadelabs.synapse.service.SynapseSyncService
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 
 class ShortcutHandler(private val context: Context) {
@@ -19,12 +19,12 @@ class ShortcutHandler(private val context: Context) {
             ACTION_FORCE_START -> {
                 val prefs = context.getSharedPreferences("${context.packageName}_preferences", Context.MODE_PRIVATE)
                 prefs.edit().putString("run_behavior", "FORCE_START").apply()
-                startSyncthingService()
+                startSynapseSyncService()
             }
             ACTION_PAUSE_SYNC -> {
                 val prefs = context.getSharedPreferences("${context.packageName}_preferences", Context.MODE_PRIVATE)
                 prefs.edit().putString("run_behavior", "FORCE_STOP").apply()
-                stopSyncthingService()
+                stopSynapseSyncService()
             }
             ACTION_SCAN_QR -> {
                 triggerQrScanner(onQrScanned)
@@ -32,9 +32,9 @@ class ShortcutHandler(private val context: Context) {
         }
     }
 
-    private fun startSyncthingService() {
-        val serviceIntent = Intent(context, SyncthingService::class.java).apply {
-            action = SyncthingService.ACTION_START
+    private fun startSynapseSyncService() {
+        val serviceIntent = Intent(context, SynapseSyncService::class.java).apply {
+            action = SynapseSyncService.ACTION_START
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent)
@@ -43,9 +43,9 @@ class ShortcutHandler(private val context: Context) {
         }
     }
 
-    private fun stopSyncthingService() {
-        val serviceIntent = Intent(context, SyncthingService::class.java).apply {
-            action = SyncthingService.ACTION_STOP
+    private fun stopSynapseSyncService() {
+        val serviceIntent = Intent(context, SynapseSyncService::class.java).apply {
+            action = SynapseSyncService.ACTION_STOP
         }
         context.startService(serviceIntent)
     }

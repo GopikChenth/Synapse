@@ -17,30 +17,30 @@ import com.arcadelabs.synapse.core.designsystem.DevicesIcon
 @Composable
 fun DeviceSummaryCard(
     devicesCount: Int,
-    activeCount: Int,
+    onlineCount: Int,
     onNavigateToDevices: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var targetDevices by remember { mutableStateOf(0f) }
-    var targetActive by remember { mutableStateOf(0f) }
+    var targetOnline by remember { mutableStateOf(0f) }
     
-    LaunchedEffect(devicesCount, activeCount) {
+    LaunchedEffect(devicesCount, onlineCount) {
         targetDevices = devicesCount.toFloat()
-        targetActive = activeCount.toFloat()
+        targetOnline = onlineCount.toFloat()
     }
     
     val animatedDevices by animateFloatAsState(
         targetValue = targetDevices,
         animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
     )
-    val animatedActive by animateFloatAsState(
-        targetValue = targetActive,
+    val animatedOnline by animateFloatAsState(
+        targetValue = targetOnline,
         animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
     )
 
     Card(
         modifier = modifier.clickable { onNavigateToDevices() },
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
         )
@@ -69,12 +69,11 @@ fun DeviceSummaryCard(
             Text(
                 text = "${animatedDevices.toInt()}",
                 style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             
             Text(
-                text = "${animatedActive.toInt()} Active",
+                text = "${animatedOnline.toInt()} Online",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

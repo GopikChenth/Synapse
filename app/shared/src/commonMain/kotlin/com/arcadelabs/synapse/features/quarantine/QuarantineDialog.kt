@@ -1,6 +1,7 @@
 package com.arcadelabs.synapse.features.quarantine
 
 import androidx.compose.foundation.background
+import com.arcadelabs.synapse.core.designsystem.SynapseIcons
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -8,10 +9,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,9 +40,8 @@ fun QuarantineDialog(
 
     Dialog(onDismissRequest = onDismissRequest) {
         Surface(
-            shape = SynapseDialogShape,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp,
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
             modifier = modifier
                 .fillMaxWidth(0.94f)
                 .fillMaxHeight(0.88f)
@@ -65,39 +61,31 @@ fun QuarantineDialog(
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "Virtual Quarantine",
+                                text = "Conflicts",
                                 style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.Bold
                             )
                             if (uiState.conflicts.isNotEmpty()) {
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Surface(
-                                    color = MaterialTheme.colorScheme.errorContainer,
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text(
-                                        text = "${uiState.conflicts.size} Conflicts",
-                                        color = MaterialTheme.colorScheme.onErrorContainer,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                    )
-                                }
+                                com.arcadelabs.synapse.core.designsystem.components.StatusBadge(
+                                    text = "${uiState.conflicts.size} conflicts",
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                )
                             }
                         }
                         Text(
-                            text = "Conflicting concurrent edits held safely with zero disk pollution",
+                            text = "Edits made on two devices at once are held here until you choose which to keep.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         IconButton(onClick = { viewModel.loadConflicts() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh conflicts")
+                            Icon(SynapseIcons.Refresh, contentDescription = "Refresh conflicts")
                         }
                         IconButton(onClick = onDismissRequest) {
-                            Icon(Icons.Default.Close, contentDescription = "Close")
+                            Icon(SynapseIcons.Close, contentDescription = "Close")
                         }
                     }
                 }
@@ -108,7 +96,7 @@ fun QuarantineDialog(
                 if (uiState.error != null) {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = MaterialTheme.shapes.small,
                         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
                     ) {
                         Text(
@@ -122,15 +110,14 @@ fun QuarantineDialog(
 
                 if (uiState.successMessage != null) {
                     Surface(
-                        color = SynapseStatusColors.Connected.copy(alpha = 0.15f),
-                        shape = RoundedCornerShape(8.dp),
+                        color = SynapseStatusColors.ConnectedContainer,
+                        contentColor = SynapseStatusColors.OnConnectedContainer,
+                        shape = MaterialTheme.shapes.small,
                         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
                     ) {
                         Text(
                             text = uiState.successMessage ?: "",
-                            color = SynapseStatusColors.Connected,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(12.dp)
                         )
                     }
@@ -148,28 +135,23 @@ fun QuarantineDialog(
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Surface(
-                                shape = RoundedCornerShape(50),
-                                color = SynapseStatusColors.Connected.copy(alpha = 0.15f),
+                                shape = androidx.compose.foundation.shape.CircleShape,
+                                color = SynapseStatusColors.ConnectedContainer,
+                                contentColor = SynapseStatusColors.OnConnectedContainer,
                                 modifier = Modifier.size(64.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Default.Check,
-                                        contentDescription = null,
-                                        tint = SynapseStatusColors.Connected,
-                                        modifier = Modifier.size(36.dp)
-                                    )
+                                    Icon(SynapseIcons.CheckCircle, contentDescription = null, modifier = Modifier.size(36.dp))
                                 }
                             }
                             Text(
-                                text = "Quarantine is Empty",
+                                text = "No conflicts",
                                 style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "All synchronizing files are clean and converged across your cluster.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                text = "Every synced file matches across your devices.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -186,8 +168,7 @@ fun QuarantineDialog(
                                 diffResponse = if (uiState.selectedConflictId == conflict.conflictId) uiState.selectedDiff else null,
                                 onInspectDiffClick = { viewModel.inspectDiff(conflict.conflictId) },
                                 onResolve = { action -> viewModel.resolve(conflict.conflictId, action) },
-                                onIgnore = { viewModel.ignore(conflict.conflictId) },
-                                onReopen = { viewModel.reopen(conflict.conflictId) }
+                                onIgnore = { viewModel.ignore(conflict.conflictId) }
                             )
                         }
                     }
@@ -200,10 +181,7 @@ fun QuarantineDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    Button(
-                        shape = SynapsePillShape,
-                        onClick = onDismissRequest
-                    ) {
+                    TextButton(onClick = onDismissRequest) {
                         Text("Done")
                     }
                 }
@@ -212,6 +190,7 @@ fun QuarantineDialog(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ConflictItemCard(
     conflict: CoreQuarantineConflict,
@@ -220,16 +199,9 @@ private fun ConflictItemCard(
     diffResponse: CoreDiffResponse?,
     onInspectDiffClick: () -> Unit,
     onResolve: (CoreResolveAction) -> Unit,
-    onIgnore: () -> Unit,
-    onReopen: () -> Unit
+    onIgnore: () -> Unit
 ) {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             // Header Row
             Row(
@@ -242,13 +214,12 @@ private fun ConflictItemCard(
                         text = conflict.relativePath,
                         style = MaterialTheme.typography.titleSmall,
                         fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         text = "Folder: ${conflict.folderId}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
@@ -266,59 +237,26 @@ private fun ConflictItemCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Action Row
-            Row(
+            // Actions wrap onto more lines on narrow windows.
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilledTonalButton(
-                    shape = SynapsePillShape,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    onClick = { onResolve(CoreResolveAction.ACCEPT_LOCAL) }
-                ) {
-                    Text("Keep Local", style = MaterialTheme.typography.labelMedium)
+                Button(onClick = { onResolve(CoreResolveAction.KEEP_BOTH) }) {
+                    Text("Keep both")
                 }
-
-                FilledTonalButton(
-                    shape = SynapsePillShape,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    onClick = { onResolve(CoreResolveAction.ACCEPT_REMOTE) }
-                ) {
-                    Text("Keep Remote", style = MaterialTheme.typography.labelMedium)
+                FilledTonalButton(onClick = { onResolve(CoreResolveAction.ACCEPT_LOCAL) }) {
+                    Text("Keep this device's")
                 }
-
-                Button(
-                    shape = SynapsePillShape,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    onClick = { onResolve(CoreResolveAction.KEEP_BOTH) }
-                ) {
-                    Text("Keep Both", style = MaterialTheme.typography.labelMedium)
+                FilledTonalButton(onClick = { onResolve(CoreResolveAction.ACCEPT_REMOTE) }) {
+                    Text("Keep other device's")
                 }
-
-                OutlinedButton(
-                    shape = SynapsePillShape,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    onClick = onInspectDiffClick
-                ) {
-                    Text(if (isSelected) "Hide Diff" else "Inspect Diff", style = MaterialTheme.typography.labelMedium)
+                OutlinedButton(onClick = onInspectDiffClick) {
+                    Text(if (isSelected) "Hide changes" else "Compare")
                 }
-
-                if (conflict.status != "IGNORED") {
-                    TextButton(
-                        shape = SynapsePillShape,
-                        onClick = onIgnore
-                    ) {
-                        Text("Ignore", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                } else {
-                    TextButton(
-                        shape = SynapsePillShape,
-                        onClick = onReopen
-                    ) {
-                        Text("Reopen", color = MaterialTheme.colorScheme.primary)
-                    }
-                }
+                // The engine lists only pending conflicts, so every card can be ignored.
+                TextButton(onClick = onIgnore) { Text("Ignore") }
             }
 
             // Expanded Diff View
@@ -340,37 +278,32 @@ private fun ConflictItemCard(
 private fun StatusPill(status: String) {
     val (bg, fg) = when (status.uppercase()) {
         "PENDING" -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
-        "RESOLVED" -> SynapseStatusColors.Connected.copy(alpha = 0.2f) to SynapseStatusColors.Connected
-        "IGNORED" -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
+        "RESOLVED" -> SynapseStatusColors.ConnectedContainer to SynapseStatusColors.OnConnectedContainer
+        "IGNORED" -> MaterialTheme.colorScheme.surfaceContainerHighest to MaterialTheme.colorScheme.onSurfaceVariant
         else -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
     }
 
-    Surface(
-        color = bg,
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Text(
-            text = status,
-            color = fg,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-        )
-    }
+    com.arcadelabs.synapse.core.designsystem.components.StatusBadge(
+        text = status.lowercase().replaceFirstChar { it.uppercase() },
+        containerColor = bg,
+        contentColor = fg
+    )
 }
 
 @Composable
 private fun DiffViewer(diffResponse: CoreDiffResponse) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(8.dp),
+        shape = MaterialTheme.shapes.small,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
-                .padding(12.dp)
-                .verticalScroll(rememberScrollState())
+                // Cap the height before scrolling: this sits inside a LazyColumn item, which
+                // measures children with an unbounded height and crashes a bare verticalScroll.
                 .heightIn(max = 260.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(12.dp)
         ) {
             Text(
                 text = "3-Way Merge Inspection: ${diffResponse.relativePath}",
@@ -399,17 +332,17 @@ private fun DiffViewer(diffResponse: CoreDiffResponse) {
 private fun DiffHunkRow(hunk: CoreDiffHunk) {
     val (bg, prefix, textLines) = when (hunk.hunkType) {
         CoreHunkType.LOCAL_CHANGE -> Triple(
-            Color(0xFF2E7D32).copy(alpha = 0.15f),
+            SynapseStatusColors.ConnectedContainer,
             "+ [Local]  ",
             hunk.localLines
         )
         CoreHunkType.REMOTE_CHANGE -> Triple(
-            Color(0xFF0277BD).copy(alpha = 0.15f),
+            MaterialTheme.colorScheme.tertiaryContainer,
             "+ [Remote] ",
             hunk.remoteLines
         )
         CoreHunkType.CONFLICT -> Triple(
-            Color(0xFFC62828).copy(alpha = 0.2f),
+            MaterialTheme.colorScheme.errorContainer,
             "! [COLLIDE] ",
             (hunk.localLines.map { "Local: $it" } + hunk.remoteLines.map { "Remote: $it" })
         )
@@ -423,17 +356,14 @@ private fun DiffHunkRow(hunk: CoreDiffHunk) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(bg, shape = RoundedCornerShape(4.dp))
+            .background(bg, shape = MaterialTheme.shapes.extraSmall)
             .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
         textLines.forEach { line ->
             Text(
                 text = "$prefix$line",
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp
-                ),
-                color = MaterialTheme.colorScheme.onSurface
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = contentColorFor(bg).takeIf { bg != Color.Transparent } ?: MaterialTheme.colorScheme.onSurface
             )
         }
     }

@@ -15,10 +15,11 @@ dependencies {
     implementation(projects.app.shared)
 
     implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.core.ktx)       // Required by NotificationCompat in SyncthingService
+    implementation(libs.androidx.core.ktx)       // Required by NotificationCompat in SynapseSyncService
     implementation(libs.koin.android)             // Koin Android support (androidContext, etc.)
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
 
+    implementation(libs.compose.material3)          // Material 3 dynamic color (Android 12+)
     implementation(libs.compose.uiToolingPreview)
     debugImplementation(libs.compose.uiTooling)
 }

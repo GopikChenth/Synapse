@@ -3,406 +3,84 @@ package com.arcadelabs.synapse.core.designsystem
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.unit.dp
 
-val FolderIcon: ImageVector by lazy {
+/*
+ * Material Symbols (Outlined, weight 400, 24dp) — the Material 3 icon set.
+ * Generated from @material-symbols/svg-400 (Apache-2.0). Replaces the
+ * Material 2 `androidx.compose.material.icons` library.
+ *
+ * Navigation destinations use the *Filled variant when selected and the
+ * outlined one otherwise, per the M3 navigation-bar spec.
+ */
+
+private fun symbol(name: String, pathData: String, autoMirror: Boolean = false): ImageVector =
     ImageVector.Builder(
-        name = "Folder",
+        name = name,
         defaultWidth = 24.dp,
         defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f
-    ).path(fill = SolidColor(Color.Black)) {
-        moveTo(10f, 4f)
-        horizontalLineTo(4f)
-        curveTo(2.9f, 4f, 2.01f, 4.9f, 2.01f, 6f)
-        lineTo(2f, 18f)
-        curveTo(2f, 19.1f, 2.9f, 20f, 4f, 20f)
-        horizontalLineTo(20f)
-        curveTo(21.1f, 20f, 22f, 19.1f, 22f, 18f)
-        verticalLineTo(8f)
-        curveTo(22f, 6.9f, 21.1f, 6f, 20f, 6f)
-        horizontalLineTo(12f)
-        lineTo(10f, 4f)
-        close()
-    }.build()
+        viewportWidth = 960f,
+        viewportHeight = 960f,
+        autoMirror = autoMirror
+    )
+        // Material Symbols use a "0 -960 960 960" viewBox.
+        .addGroup(translationY = 960f)
+        .addPath(pathData = addPathNodes(pathData), fill = SolidColor(Color.Black))
+        .clearGroup()
+        .build()
+
+object SynapseIcons {
+    val Home: ImageVector by lazy { symbol("Home", "M220-180h150v-250h220v250h150v-390L480-765 220-570v390Zm-60 60v-480l320-240 320 240v480H530v-250H430v250H160Zm320-353Z") }
+    val HomeFilled: ImageVector by lazy { symbol("HomeFilled", "M160-120v-480l320-240 320 240v480H560v-280H400v280H160Z") }
+    val Folder: ImageVector by lazy { symbol("Folder", "M140-160q-24 0-42-18.5T80-220v-520q0-23 18-41.5t42-18.5h281l60 60h339q23 0 41.5 18.5T880-680v460q0 23-18.5 41.5T820-160H140Zm0-60h680v-460H456l-60-60H140v520Zm0 0v-520 520Z") }
+    val FolderFilled: ImageVector by lazy { symbol("FolderFilled", "M140-160q-24 0-42-18.5T80-220v-520q0-23 18-41.5t42-18.5h281l60 60h339q23 0 41.5 18.5T880-680v460q0 23-18.5 41.5T820-160H140Z") }
+    val Devices: ImageVector by lazy { symbol("Devices", "M501-540ZM80-160v-60h421v60H80Zm100-120q-24 0-42-18t-18-42v-400q0-24 18-42t42-18h600q24 0 42 18t18 42H180v400h321v60H180Zm640 60v-400H621v400h199Zm-214 60q-18 0-31.5-13.5T561-205v-430q0-18 13.5-31.5T606-680h229q18 0 31.5 13.5T880-635v430q0 18-13.5 31.5T835-160H606Zm115-360q12 0 21-9t9-21q0-12-9-21t-21.48-9Q709-580 700-571t-9 21.48q0 11.52 9 20.52t21 9Zm0 100Z") }
+    val DevicesFilled: ImageVector by lazy { symbol("DevicesFilled", "M180-280q-24 0-42-18t-18-42v-400q0-24 18-42t42-18h600q24 0 42 18t18 42H606q-42 0-73.5 31.5T501-635v355H180Zm426 120q-18 0-31.5-13.5T561-205v-430q0-18 13.5-31.5T606-680h229q18 0 31.5 13.5T880-635v430q0 18-13.5 31.5T835-160H606Zm-526 0v-60h421v60H80Zm641-360q12 0 21-9t9-21q0-12-9-21t-21-9q-12 0-21 9t-9 21q0 12 9 21t21 9Z") }
+    val Info: ImageVector by lazy { symbol("Info", "M453-280h60v-240h-60v240Zm50.5-323.2q9.5-9.2 9.5-22.8 0-14.45-9.48-24.22-9.48-9.78-23.5-9.78t-23.52 9.78Q447-640.45 447-626q0 13.6 9.48 22.8 9.48 9.2 23.5 9.2t23.52-9.2ZM480.27-80q-82.74 0-155.5-31.5Q252-143 197.5-197.5t-86-127.34Q80-397.68 80-480.5t31.5-155.66Q143-709 197.5-763t127.34-85.5Q397.68-880 480.5-880t155.66 31.5Q709-817 763-763t85.5 127Q880-563 880-480.27q0 82.74-31.5 155.5Q817-252 763-197.68q-54 54.31-127 86Q563-80 480.27-80Zm.23-60Q622-140 721-239.5t99-241Q820-622 721.19-721T480-820q-141 0-240.5 98.81T140-480q0 141 99.5 240.5t241 99.5Zm-.5-340Z") }
+    val InfoFilled: ImageVector by lazy { symbol("InfoFilled", "M453-280h60v-240h-60v240Zm50.5-323.2q9.5-9.2 9.5-22.8 0-14.45-9.48-24.22-9.48-9.78-23.5-9.78t-23.52 9.78Q447-640.45 447-626q0 13.6 9.48 22.8 9.48 9.2 23.5 9.2t23.52-9.2ZM480.27-80q-82.74 0-155.5-31.5Q252-143 197.5-197.5t-86-127.34Q80-397.68 80-480.5t31.5-155.66Q143-709 197.5-763t127.34-85.5Q397.68-880 480.5-880t155.66 31.5Q709-817 763-763t85.5 127Q880-563 880-480.27q0 82.74-31.5 155.5Q817-252 763-197.68q-54 54.31-127 86Q563-80 480.27-80Z") }
+    val History: ImageVector by lazy { symbol("History", "M477-120q-149 0-253-105.5T120-481h60q0 125 86 213t211 88q127 0 215-89t88-216q0-124-89-209.5T477-780q-68 0-127.5 31T246-667h105v60H142v-208h60v106q52-61 123.5-96T477-840q75 0 141 28t115.5 76.5Q783-687 811.5-622T840-482q0 75-28.5 141t-78 115Q684-177 618-148.5T477-120Zm128-197L451-469v-214h60v189l137 134-43 43Z") }
+    val Settings: ImageVector by lazy { symbol("Settings", "m388-80-20-126q-19-7-40-19t-37-25l-118 54-93-164 108-79q-2-9-2.5-20.5T185-480q0-9 .5-20.5T188-521L80-600l93-164 118 54q16-13 37-25t40-18l20-127h184l20 126q19 7 40.5 18.5T669-710l118-54 93 164-108 77q2 10 2.5 21.5t.5 21.5q0 10-.5 21t-2.5 21l108 78-93 164-118-54q-16 13-36.5 25.5T592-206L572-80H388Zm48-60h88l14-112q33-8 62.5-25t53.5-41l106 46 40-72-94-69q4-17 6.5-33.5T715-480q0-17-2-33.5t-7-33.5l94-69-40-72-106 46q-23-26-52-43.5T538-708l-14-112h-88l-14 112q-34 7-63.5 24T306-642l-106-46-40 72 94 69q-4 17-6.5 33.5T245-480q0 17 2.5 33.5T254-413l-94 69 40 72 106-46q24 24 53.5 41t62.5 25l14 112Zm44-210q54 0 92-38t38-92q0-54-38-92t-92-38q-54 0-92 38t-38 92q0 54 38 92t92 38Zm0-130Z") }
+    val SettingsFilled: ImageVector by lazy { symbol("SettingsFilled", "m388-80-20-126q-19-7-40-19t-37-25l-118 54-93-164 108-79q-2-9-2.5-20.5T185-480q0-9 .5-20.5T188-521L80-600l93-164 118 54q16-13 37-25t40-18l20-127h184l20 126q19 7 40.5 18.5T669-710l118-54 93 164-108 77q2 10 2.5 21.5t.5 21.5q0 10-.5 21t-2.5 21l108 78-93 164-118-54q-16 13-36.5 25.5T592-206L572-80H388Zm92-270q54 0 92-38t38-92q0-54-38-92t-92-38q-54 0-92 38t-38 92q0 54 38 92t92 38Z") }
+    val Add: ImageVector by lazy { symbol("Add", "M450-450H200v-60h250v-250h60v250h250v60H510v250h-60v-250Z") }
+    val Refresh: ImageVector by lazy { symbol("Refresh", "M480-160q-133 0-226.5-93.5T160-480q0-133 93.5-226.5T480-800q85 0 149 34.5T740-671v-129h60v254H546v-60h168q-38-60-97-97t-137-37q-109 0-184.5 75.5T220-480q0 109 75.5 184.5T480-220q83 0 152-47.5T728-393h62q-29 105-115 169t-195 64Z") }
+    val Delete: ImageVector by lazy { symbol("Delete", "M261-120q-24.75 0-42.37-17.63Q201-155.25 201-180v-570h-41v-60h188v-30h264v30h188v60h-41v570q0 24-18 42t-42 18H261Zm438-630H261v570h438v-570ZM367-266h60v-399h-60v399Zm166 0h60v-399h-60v399ZM261-750v570-570Z") }
+    val Check: ImageVector by lazy { symbol("Check", "M378-246 154-470l43-43 181 181 384-384 43 43-427 427Z") }
+    val ArrowBack: ImageVector by lazy { symbol("ArrowBack", "m274-450 248 248-42 42-320-320 320-320 42 42-248 248h526v60H274Z", autoMirror = true) }
+    val Share: ImageVector by lazy { symbol("Share", "M686-80q-47.5 0-80.75-33.25T572-194q0-8 5-34L278-403q-16.28 17.34-37.64 27.17Q219-366 194-366q-47.5 0-80.75-33T80-480q0-48 33.25-81T194-594q24 0 45 9.3 21 9.29 37 25.7l301-173q-2-8-3.5-16.5T572-766q0-47.5 33.25-80.75T686-880q47.5 0 80.75 33.25T800-766q0 47.5-33.25 80.75T686-652q-23.27 0-43.64-9Q622-670 606-685L302-516q3 8 4.5 17.5t1.5 18q0 8.5-1 16t-3 15.5l303 173q16-15 36.09-23.5 20.1-8.5 43.07-8.5Q734-308 767-274.75T800-194q0 47.5-33.25 80.75T686-80Zm.04-60q22.96 0 38.46-15.54 15.5-15.53 15.5-38.5 0-22.96-15.54-38.46-15.53-15.5-38.5-15.5-22.96 0-38.46 15.54-15.5 15.53-15.5 38.5 0 22.96 15.54 38.46 15.53 15.5 38.5 15.5Zm-492-286q22.96 0 38.46-15.54 15.5-15.53 15.5-38.5 0-22.96-15.54-38.46-15.53-15.5-38.5-15.5-22.96 0-38.46 15.54-15.5 15.53-15.5 38.5 0 22.96 15.54 38.46 15.53 15.5 38.5 15.5ZM724.5-727.54q15.5-15.53 15.5-38.5 0-22.96-15.54-38.46-15.53-15.5-38.5-15.5-22.96 0-38.46 15.54-15.5 15.53-15.5 38.5 0 22.96 15.54 38.46 15.53 15.5 38.5 15.5 22.96 0 38.46-15.54ZM686-194ZM194-480Zm492-286Z") }
+    val Close: ImageVector by lazy { symbol("Close", "m249-207-42-42 231-231-231-231 42-42 231 231 231-231 42 42-231 231 231 231-42 42-231-231-231 231Z") }
+    val MoreVert: ImageVector by lazy { symbol("MoreVert", "M479.86-160Q460-160 446-174.14t-14-34Q432-228 446.14-242t34-14Q500-256 514-241.86t14 34Q528-188 513.86-174t-34 14Zm0-272Q460-432 446-446.14t-14-34Q432-500 446.14-514t34-14Q500-528 514-513.86t14 34Q528-460 513.86-446t-34 14Zm0-272Q460-704 446-718.14t-14-34Q432-772 446.14-786t34-14Q500-800 514-785.86t14 34Q528-732 513.86-718t-34 14Z") }
+    val Warning: ImageVector by lazy { symbol("Warning", "m40-120 440-760 440 760H40Zm104-60h672L480-760 144-180Zm361.5-65.68q8.5-8.67 8.5-21.5 0-12.82-8.68-21.32-8.67-8.5-21.5-8.5-12.82 0-21.32 8.68-8.5 8.67-8.5 21.5 0 12.82 8.68 21.32 8.67 8.5 21.5 8.5 12.82 0 21.32-8.68ZM454-348h60v-224h-60v224Zm26-122Z") }
+    val Lock: ImageVector by lazy { symbol("Lock", "M220-80q-24.75 0-42.37-17.63Q160-115.25 160-140v-434q0-24.75 17.63-42.38Q195.25-634 220-634h70v-96q0-78.85 55.61-134.42Q401.21-920 480.11-920q78.89 0 134.39 55.58Q670-808.85 670-730v96h70q24.75 0 42.38 17.62Q800-598.75 800-574v434q0 24.75-17.62 42.37Q764.75-80 740-80H220Zm0-60h520v-434H220v434Zm314.5-162.03Q557-324.06 557-355q0-30-22.67-54.5t-54.5-24.5q-31.83 0-54.33 24.5t-22.5 55q0 30.5 22.67 52.5t54.5 22q31.83 0 54.33-22.03ZM350-634h260v-96q0-54.17-37.88-92.08-37.88-37.92-92-37.92T388-822.08q-38 37.91-38 92.08v96ZM220-140v-434 434Z") }
+    val Edit: ImageVector by lazy { symbol("Edit", "M180-180h44l472-471-44-44-472 471v44Zm-60 60v-128l575-574q8-8 19-12.5t23-4.5q11 0 22 4.5t20 12.5l44 44q9 9 13 20t4 22q0 11-4.5 22.5T823-694L248-120H120Zm659-617-41-41 41 41Zm-105 64-22-22 44 44-22-22Z") }
+    val PlayArrow: ImageVector by lazy { symbol("PlayArrow", "M320-203v-560l440 280-440 280Zm60-280Zm0 171 269-171-269-171v342Z") }
+    val Pause: ImageVector by lazy { symbol("Pause", "M525-200v-560h235v560H525Zm-325 0v-560h235v560H200Zm385-60h115v-440H585v440Zm-325 0h115v-440H260v440Zm0-440v440-440Zm325 0v440-440Z") }
+    val Menu: ImageVector by lazy { symbol("Menu", "M120-240v-60h720v60H120Zm0-210v-60h720v60H120Zm0-210v-60h720v60H120Z") }
+    val QrCode: ImageVector by lazy { symbol("QrCode", "M120-510v-330h330v330H120Zm60-60h210v-210H180v210Zm-60 450v-330h330v330H120Zm60-60h210v-210H180v210Zm330-330v-330h330v330H510Zm60-60h210v-210H570v210Zm188 450v-82h82v82h-82ZM510-367v-83h82v83h-82Zm82 82v-82h83v82h-83Zm-82 83v-83h82v83h-82Zm82 82v-82h83v82h-83Zm83-82v-83h83v83h-83Zm0-165v-83h83v83h-83Zm83 82v-82h82v82h-82Z") }
+    val ImportExport: ImageVector by lazy { symbol("ImportExport", "M323-450v-316L202-645l-42-42 193-193 193 193-42 42-121-121v316h-60ZM607-80 414-273l42-42 121 121v-316h60v316l121-121 42 42L607-80Z") }
+    val Exit: ImageVector by lazy { symbol("Exit", "M180-120q-24 0-42-18t-18-42v-600q0-24 18-42t42-18h299v60H180v600h299v60H180Zm486-185-43-43 102-102H360v-60h363L621-612l43-43 176 176-174 174Z", autoMirror = true) }
+    val Web: ImageVector by lazy { symbol("Web", "M323-111.5Q250-143 196-197t-85-127.5Q80-398 80-482t31-156.5Q142-711 196-765t127-84.5Q396-880 480-880t157 30.5Q710-819 764-765t85 126.5Q880-566 880-482t-31 157.5Q818-251 764-197t-127 85.5Q564-80 480-80t-157-31.5ZM480-138q35-36 58.5-82.5T577-331H384q14 60 37.5 108t58.5 85Zm-85-12q-25-38-43-82t-30-99H172q38 71 88 111.5T395-150Zm171-1q72-23 129.5-69T788-331H639q-13 54-30.5 98T566-151ZM152-391h159q-3-27-3.5-48.5T307-482q0-25 1-44.5t4-43.5H152q-7 24-9.5 43t-2.5 45q0 26 2.5 46.5T152-391Zm221 0h215q4-31 5-50.5t1-40.5q0-20-1-38.5t-5-49.5H373q-4 31-5 49.5t-1 38.5q0 21 1 40.5t5 50.5Zm275 0h160q7-24 9.5-44.5T820-482q0-26-2.5-45t-9.5-43H649q3 35 4 53.5t1 34.5q0 22-1.5 41.5T648-391Zm-10-239h150q-33-69-90.5-115T565-810q25 37 42.5 80T638-630Zm-254 0h194q-11-53-37-102.5T480-820q-32 27-54 71t-42 119Zm-212 0h151q11-54 28-96.5t43-82.5q-75 19-131 64t-91 115Z") }
+    val Copy: ImageVector by lazy { symbol("Copy", "M300-200q-24 0-42-18t-18-42v-560q0-24 18-42t42-18h440q24 0 42 18t18 42v560q0 24-18 42t-42 18H300Zm0-60h440v-560H300v560ZM180-80q-24 0-42-18t-18-42v-620h60v620h500v60H180Zm120-180v-560 560Z") }
+    val Sun: ImageVector by lazy { symbol("Sun", "M579-381q41-41 41-99t-41-99q-41-41-99-41t-99 41q-41 41-41 99t41 99q41 41 99 41t99-41Zm-240.5 42.5Q280-397 280-480t58.5-141.5Q397-680 480-680t141.5 58.5Q680-563 680-480t-58.5 141.5Q563-280 480-280t-141.5-58.5ZM200-450H40v-60h160v60Zm720 0H760v-60h160v60ZM450-760v-160h60v160h-60Zm0 720v-160h60v160h-60ZM262-658l-100-97 43-44 96 100-39 41Zm494 496-98-100 41-41 99 98-42 43Zm-99-537 98-99 44 42-99 98-43-41ZM162-205l99-98 42 42-98 99-43-43Zm318-275Z") }
+    val Moon: ImageVector by lazy { symbol("Moon", "M480-120q-150 0-255-105T120-480q0-150 105-255t255-105q8 0 17 .5t23 1.5q-36 32-56 79t-20 99q0 90 63 153t153 63q52 0 99-18.5t79-51.5q1 12 1.5 19.5t.5 14.5q0 150-105 255T480-120Zm0-60q109 0 190-67.5T771-406q-25 11-53.67 16.5Q688.67-384 660-384q-114.69 0-195.34-80.66Q384-545.31 384-660q0-24 5-51.5t18-62.5q-98 27-162.5 109.5T180-480q0 125 87.5 212.5T480-180Zm-4-297Z") }
+    val System: ImageVector by lazy { symbol("System", "M310-305h55l37-109h159l38 109h53L505-697h-48L310-305Zm107-157 61-163h5l62 163H417Zm64 433L346-160H160v-186L26-480l134-134v-186h186l135-134 133 134h186v186l134 134-134 134v186H614L481-29Zm0-84 108-107h151v-151l109-109-109-109v-151H589L481-849 371-740H220v151L111-480l109 109v151h150l111 107Zm-1-368Z") }
+    val Sync: ImageVector by lazy { symbol("Sync", "M167-160v-60h130l-15-12q-64-51-93-111t-29-134q0-106 62.5-190.5T387-784v62q-75 29-121 96.5T220-477q0 63 23.5 109.5T307-287l30 21v-124h60v230H167Zm407-15v-63q76-29 121-96.5T740-483q0-48-23.5-97.5T655-668l-29-26v124h-60v-230h230v60H665l15 14q60 56 90 120t30 123q0 106-62 191T574-175Z") }
+    val Error: ImageVector by lazy { symbol("Error", "M503.5-289.48q9.5-9.48 9.5-23.5t-9.48-23.52q-9.48-9.5-23.5-9.5t-23.52 9.48q-9.5 9.48-9.5 23.5t9.48 23.52q9.48 9.5 23.5 9.5t23.52-9.48ZM453-433h60v-253h-60v253Zm27.27 353q-82.74 0-155.5-31.5Q252-143 197.5-197.5t-86-127.34Q80-397.68 80-480.5t31.5-155.66Q143-709 197.5-763t127.34-85.5Q397.68-880 480.5-880t155.66 31.5Q709-817 763-763t85.5 127Q880-563 880-480.27q0 82.74-31.5 155.5Q817-252 763-197.68q-54 54.31-127 86Q563-80 480.27-80Zm.23-60Q622-140 721-239.5t99-241Q820-622 721.19-721T480-820q-141 0-240.5 98.81T140-480q0 141 99.5 240.5t241 99.5Zm-.5-340Z") }
+    val CheckCircle: ImageVector by lazy { symbol("CheckCircle", "m421-298 283-283-46-45-237 237-120-120-45 45 165 166Zm59 218q-82 0-155-31.5t-127.5-86Q143-252 111.5-325T80-480q0-83 31.5-156t86-127Q252-817 325-848.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 82-31.5 155T763-197.5q-54 54.5-127 86T480-80Zm0-60q142 0 241-99.5T820-480q0-142-99-241t-241-99q-141 0-240.5 99T140-480q0 141 99.5 240.5T480-140Zm0-340Z") }
+    val ArrowDownward: ImageVector by lazy { symbol("ArrowDownward", "M450-800v526L202-522l-42 42 320 320 320-320-42-42-248 248v-526h-60Z") }
+    val ArrowUpward: ImageVector by lazy { symbol("ArrowUpward", "M450-160v-526L202-438l-42-42 320-320 320 320-42 42-248-248v526h-60Z") }
+    val Computer: ImageVector by lazy { symbol("Computer", "M40-120v-60h880v60H40Zm100-120q-24 0-42-18t-18-42v-480q0-24 18-42t42-18h680q24 0 42 18t18 42v480q0 24-18 42t-42 18H140Zm0-60h680v-480H140v480Zm0 0v-480 480Z") }
 }
 
-val DevicesIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "Devices",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f
-    ).path(fill = SolidColor(Color.Black)) {
-        moveTo(4f, 6f)
-        horizontalLineTo(22f)
-        verticalLineTo(4f)
-        horizontalLineTo(4f)
-        curveTo(2.9f, 4f, 2f, 4.9f, 2f, 6f)
-        verticalLineTo(17f)
-        horizontalLineTo(0f)
-        verticalLineTo(20f)
-        horizontalLineTo(14f)
-        verticalLineTo(17f)
-        horizontalLineTo(4f)
-        verticalLineTo(6f)
-        close()
-        moveTo(23f, 8f)
-        horizontalLineTo(17f)
-        curveTo(16.45f, 8f, 16f, 8.45f, 16f, 9f)
-        verticalLineTo(19f)
-        curveTo(16f, 19.55f, 16.45f, 20f, 17f, 20f)
-        horizontalLineTo(23f)
-        curveTo(23.55f, 20f, 24f, 19.55f, 24f, 19f)
-        verticalLineTo(9f)
-        curveTo(24f, 8.45f, 23.55f, 8f, 23f, 8f)
-        close()
-        moveTo(22f, 17f)
-        horizontalLineTo(18f)
-        verticalLineTo(10f)
-        horizontalLineTo(22f)
-        verticalLineTo(17f)
-        close()
-    }.build()
-}
-
-val QrCodeIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "QrCode",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f
-    ).path(fill = SolidColor(Color.Black)) {
-        moveTo(2f, 2f)
-        verticalLineTo(8f)
-        horizontalLineTo(8f)
-        verticalLineTo(2f)
-        close()
-        moveTo(3.5f, 3.5f)
-        horizontalLineTo(6.5f)
-        verticalLineTo(6.5f)
-        horizontalLineTo(3.5f)
-        close()
-
-        moveTo(16f, 2f)
-        verticalLineTo(8f)
-        horizontalLineTo(22f)
-        verticalLineTo(2f)
-        close()
-        moveTo(17.5f, 3.5f)
-        horizontalLineTo(20.5f)
-        verticalLineTo(6.5f)
-        horizontalLineTo(17.5f)
-        close()
-
-        moveTo(2f, 16f)
-        verticalLineTo(22f)
-        horizontalLineTo(8f)
-        verticalLineTo(16f)
-        close()
-        moveTo(3.5f, 17.5f)
-        horizontalLineTo(6.5f)
-        verticalLineTo(20.5f)
-        horizontalLineTo(3.5f)
-        close()
-
-        moveTo(12f, 12f)
-        horizontalLineTo(14f)
-        verticalLineTo(14f)
-        horizontalLineTo(12f)
-        close()
-        
-        moveTo(16f, 16f)
-        horizontalLineTo(18f)
-        verticalLineTo(18f)
-        horizontalLineTo(16f)
-        close()
-
-        moveTo(20f, 20f)
-        horizontalLineTo(22f)
-        verticalLineTo(22f)
-        horizontalLineTo(20f)
-        close()
-
-        moveTo(10f, 18f)
-        horizontalLineTo(12f)
-        verticalLineTo(20f)
-        horizontalLineTo(10f)
-        close()
-
-        moveTo(18f, 10f)
-        horizontalLineTo(20f)
-        verticalLineTo(12f)
-        horizontalLineTo(18f)
-        close()
-    }.build()
-}
-
-val ImportExportIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "ImportExport",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f
-    ).path(fill = SolidColor(Color.Black)) {
-        moveTo(9f, 6f)
-        lineTo(5f, 10f)
-        horizontalLineTo(8f)
-        verticalLineTo(18f)
-        horizontalLineTo(10f)
-        verticalLineTo(8f)
-        horizontalLineTo(13f)
-        close()
-        
-        moveTo(15f, 16f)
-        horizontalLineTo(11f)
-        lineTo(15f, 20f)
-        lineTo(19f, 16f)
-        horizontalLineTo(16f)
-        verticalLineTo(6f)
-        horizontalLineTo(14f)
-        verticalLineTo(16f)
-        close()
-    }.build()
-}
-
-val ExitIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "Exit",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f
-    ).path(fill = SolidColor(Color.Black)) {
-        moveTo(10.09f, 15.59f)
-        lineTo(11.5f, 17f)
-        lineTo(16.5f, 12f)
-        lineTo(11.5f, 7f)
-        lineTo(10.09f, 8.41f)
-        lineTo(12.67f, 11f)
-        horizontalLineTo(3f)
-        verticalLineTo(13f)
-        horizontalLineTo(12.67f)
-        close()
-        
-        moveTo(19f, 3f)
-        horizontalLineTo(5f)
-        curveTo(3.9f, 3f, 3f, 3.9f, 3f, 5f)
-        verticalLineTo(9f)
-        horizontalLineTo(5f)
-        verticalLineTo(5f)
-        horizontalLineTo(19f)
-        verticalLineTo(19f)
-        horizontalLineTo(5f)
-        verticalLineTo(15f)
-        horizontalLineTo(3f)
-        verticalLineTo(19f)
-        curveTo(3f, 20.1f, 3.9f, 21f, 5f, 21f)
-        horizontalLineTo(19f)
-        curveTo(20.1f, 21f, 21f, 20.1f, 21f, 19f)
-        verticalLineTo(5f)
-        curveTo(21f, 3.9f, 20.1f, 3f, 19f, 3f)
-        close()
-    }.build()
-}
-
-val WebIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "Web",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f
-    ).path(fill = SolidColor(Color.Black)) {
-        moveTo(12f, 2f)
-        curveTo(6.48f, 2f, 2f, 6.48f, 2f, 12f)
-        curveTo(2f, 17.52f, 6.48f, 22f, 12f, 22f)
-        curveTo(17.52f, 22f, 22f, 17.52f, 22f, 12f)
-        curveTo(22f, 6.48f, 17.52f, 2f, 12f, 2f)
-        close()
-        
-        moveTo(12f, 4f)
-        curveTo(13.82f, 6.6f, 14.88f, 9.45f, 15f, 12f)
-        curveTo(14.88f, 14.55f, 13.82f, 17.4f, 12f, 20f)
-        curveTo(10.18f, 17.4f, 9.12f, 14.55f, 9f, 12f)
-        curveTo(9.12f, 9.45f, 10.18f, 6.6f, 12f, 4f)
-        close()
-        
-        moveTo(4.07f, 13f)
-        horizontalLineTo(8.03f)
-        curveTo(8.17f, 15.48f, 8.76f, 17.73f, 9.63f, 19.53f)
-        curveTo(6.83f, 18.75f, 4.76f, 16.18f, 4.07f, 13f)
-        close()
-        
-        moveTo(4.07f, 11f)
-        curveTo(4.76f, 7.82f, 6.83f, 5.25f, 9.63f, 4.47f)
-        curveTo(8.76f, 6.27f, 8.17f, 8.52f, 8.03f, 11f)
-        close()
-        
-        moveTo(14.37f, 4.47f)
-        curveTo(15.24f, 6.27f, 15.83f, 8.52f, 15.97f, 11f)
-        horizontalLineTo(19.93f)
-        curveTo(19.24f, 7.82f, 17.17f, 5.25f, 14.37f, 4.47f)
-        close()
-        
-        moveTo(14.37f, 19.53f)
-        curveTo(17.17f, 18.75f, 19.24f, 16.18f, 19.93f, 13f)
-        horizontalLineTo(15.97f)
-        curveTo(15.83f, 15.48f, 15.24f, 17.73f, 14.37f, 19.53f)
-        close()
-    }.build()
-}
-
-val HistoryIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "History",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f
-    ).path(fill = SolidColor(Color.Black)) {
-        moveTo(13f, 3f)
-        curveTo(8.03f, 3f, 4f, 7.03f, 4f, 12f)
-        horizontalLineTo(1f)
-        lineTo(4.89f, 15.89f)
-        lineTo(4.96f, 16.03f)
-        lineTo(9f, 12f)
-        horizontalLineTo(6f)
-        curveTo(6f, 8.13f, 9.13f, 5f, 13f, 5f)
-        curveTo(16.87f, 5f, 20f, 8.13f, 20f, 12f)
-        curveTo(20f, 15.87f, 16.87f, 19f, 13f, 19f)
-        curveTo(11.07f, 19f, 9.32f, 18.21f, 8.06f, 16.94f)
-        lineTo(6.64f, 18.36f)
-        curveTo(8.27f, 19.99f, 10.51f, 21f, 13f, 21f)
-        curveTo(17.97f, 21f, 22f, 16.97f, 22f, 12f)
-        curveTo(22f, 7.03f, 17.97f, 3f, 13f, 3f)
-        close()
-        moveTo(12.5f, 7f)
-        verticalLineTo(13f)
-        lineTo(17.5f, 16f)
-        lineTo(18.25f, 14.75f)
-        lineTo(14f, 12.25f)
-        verticalLineTo(7f)
-        horizontalLineTo(12.5f)
-        close()
-    }.build()
-}
-
-val CopyIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "Copy",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f
-    ).path(fill = SolidColor(Color.Black)) {
-        moveTo(16f, 1f)
-        horizontalLineTo(4f)
-        curveTo(2.9f, 1f, 2f, 1.9f, 2f, 3f)
-        verticalLineTo(17f)
-        horizontalLineTo(4f)
-        verticalLineTo(3f)
-        horizontalLineTo(16f)
-        verticalLineTo(1f)
-        close()
-        moveTo(19f, 5f)
-        horizontalLineTo(8f)
-        curveTo(6.9f, 5f, 6f, 5.9f, 6f, 7f)
-        verticalLineTo(21f)
-        curveTo(6f, 22.1f, 6.9f, 23f, 8f, 23f)
-        horizontalLineTo(19f)
-        curveTo(20.1f, 23f, 21f, 22.1f, 21f, 21f)
-        verticalLineTo(7f)
-        curveTo(21f, 5.9f, 20.1f, 5f, 19f, 5f)
-        close()
-        moveTo(19f, 21f)
-        horizontalLineTo(8f)
-        verticalLineTo(7f)
-        horizontalLineTo(19f)
-        verticalLineTo(21f)
-        close()
-    }.build()
-}
-
-val SunIcon: ImageVector by lazy {
-    ImageVector.Builder(name = "Sun", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
-        .path(fill = SolidColor(Color.Black)) {
-            moveTo(12f, 7f)
-            curveTo(9.24f, 7f, 7f, 9.24f, 7f, 12f)
-            curveTo(7f, 14.76f, 9.24f, 17f, 12f, 17f)
-            curveTo(14.76f, 17f, 17f, 14.76f, 17f, 12f)
-            curveTo(17f, 9.24f, 14.76f, 7f, 12f, 7f)
-            close()
-            moveTo(11f, 1f)
-            horizontalLineTo(13f)
-            verticalLineTo(5f)
-            horizontalLineTo(11f)
-            close()
-            moveTo(11f, 19f)
-            horizontalLineTo(13f)
-            verticalLineTo(23f)
-            horizontalLineTo(11f)
-            close()
-            moveTo(1f, 11f)
-            horizontalLineTo(5f)
-            verticalLineTo(13f)
-            horizontalLineTo(1f)
-            close()
-            moveTo(19f, 11f)
-            horizontalLineTo(23f)
-            verticalLineTo(13f)
-            horizontalLineTo(19f)
-            close()
-        }.build()
-}
-
-val MoonIcon: ImageVector by lazy {
-    ImageVector.Builder(name = "Moon", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
-        .path(fill = SolidColor(Color.Black)) {
-            moveTo(12f, 3f)
-            curveTo(10.5f, 4.5f, 9.5f, 6.5f, 9.5f, 9f)
-            curveTo(9.5f, 14.5f, 14f, 19f, 19.5f, 19f)
-            curveTo(19.8f, 19f, 20.1f, 19f, 20.4f, 19f)
-            curveTo(18.5f, 21f, 15.8f, 22f, 13f, 22f)
-            curveTo(7.5f, 22f, 3f, 17.5f, 3f, 12f)
-            curveTo(3f, 7.5f, 6.5f, 3.8f, 11f, 3.1f)
-            lineTo(12f, 3f)
-            close()
-        }.build()
-}
-
-val SystemIcon: ImageVector by lazy {
-    ImageVector.Builder(name = "System", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
-        .path(fill = SolidColor(Color.Black)) {
-            moveTo(21f, 2f)
-            horizontalLineTo(3f)
-            curveTo(1.9f, 2f, 1f, 2.9f, 1f, 4f)
-            verticalLineTo(16f)
-            curveTo(1f, 17.1f, 1.9f, 18f, 3f, 18f)
-            horizontalLineTo(10f)
-            verticalLineTo(20f)
-            horizontalLineTo(8f)
-            verticalLineTo(22f)
-            horizontalLineTo(16f)
-            verticalLineTo(20f)
-            horizontalLineTo(14f)
-            verticalLineTo(18f)
-            horizontalLineTo(21f)
-            curveTo(22.1f, 18f, 23f, 17.1f, 23f, 16f)
-            verticalLineTo(4f)
-            curveTo(23f, 2.9f, 22.1f, 2f, 21f, 2f)
-            close()
-            moveTo(21f, 14f)
-            horizontalLineTo(3f)
-            verticalLineTo(4f)
-            horizontalLineTo(21f)
-            verticalLineTo(14f)
-            close()
-        }.build()
-}
-
+// Aliases kept so existing call sites keep compiling.
+val FolderIcon: ImageVector get() = SynapseIcons.Folder
+val DevicesIcon: ImageVector get() = SynapseIcons.Devices
+val QrCodeIcon: ImageVector get() = SynapseIcons.QrCode
+val ImportExportIcon: ImageVector get() = SynapseIcons.ImportExport
+val ExitIcon: ImageVector get() = SynapseIcons.Exit
+val WebIcon: ImageVector get() = SynapseIcons.Web
+val HistoryIcon: ImageVector get() = SynapseIcons.History
+val CopyIcon: ImageVector get() = SynapseIcons.Copy
+val SunIcon: ImageVector get() = SynapseIcons.Sun
+val MoonIcon: ImageVector get() = SynapseIcons.Moon
+val SystemIcon: ImageVector get() = SynapseIcons.System

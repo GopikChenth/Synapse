@@ -5,7 +5,7 @@ package com.arcadelabs.synapse.core.domain.state
  */
 enum class BackendEngineType(val displayName: String, val isNativeRust: Boolean) {
     SYNAPSE_CORE("Synapse Core (Native Rust Engine)", isNativeRust = true),
-    SYNCTHING("Syncthing (Legacy Go Engine)", isNativeRust = false),
+    LEGACY_ENGINE("Legacy Go Engine", isNativeRust = false),
     UNKNOWN("Auto-Detecting", isNativeRust = false)
 }
 
@@ -14,7 +14,7 @@ enum class BackendEngineType(val displayName: String, val isNativeRust: Boolean)
  * Replaces simple disconnected boolean flags (like `isRunning: Boolean`) with
  * precise, inspectable connection lifecycles.
  *
- * UX: Clear badge display (Connected to Native Rust vs Syncthing, Reconnecting with retry counts).
+ * UX: Clear badge display (Connected to Native Rust vs Legacy Engine, Reconnecting with retry counts).
  * DX: Exhaustive handling of connection lifecycle in UI and CLI layers.
  * AX: Agents can inspect connection state with a single property and know the exact engine type and uptime.
  */

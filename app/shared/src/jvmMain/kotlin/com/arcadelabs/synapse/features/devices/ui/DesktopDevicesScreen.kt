@@ -1,302 +1,34 @@
 package com.arcadelabs.synapse.features.devices.ui
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import com.arcadelabs.synapse.core.designsystem.DevicesIcon
-import com.arcadelabs.synapse.core.designsystem.SynapseStatusColors
-import com.arcadelabs.synapse.core.designsystem.SynapseDialogShape
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import com.arcadelabs.synapse.core.designsystem.SynapseIcons
+import com.arcadelabs.synapse.core.designsystem.components.DesktopPage
 import org.koin.compose.viewmodel.koinViewModel
-import com.arcadelabs.synapse.core.domain.models.normalizeDeviceId
-import com.arcadelabs.synapse.core.domain.state.AsyncResource
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.text.style.TextOverflow
 
+/** Desktop devices page: the shared M3 device list in a desktop page layout. */
 @Composable
 fun DesktopDevicesScreen(
     onAddDeviceClick: (String, String) -> Unit,
     onEditDeviceClick: (DeviceUiModel) -> Unit = {},
     viewModel: DeviceViewModel = koinViewModel()
 ) {
-    val state by viewModel.state.collectAsState()
-    val devices = state.devices
-    val folders = state.folders
-    val isLoading = state.isLoading
-    val error = state.error
-    val myId = state.myId
-
-    var deviceToDelete by remember { mutableStateOf<DeviceUiModel?>(null) }
-
-    val filteredDevices = remember(devices, myId) {
-        devices.filter { 
-            it.id.normalizeDeviceId() != myId.normalizeDeviceId()
-        }
-    }
-
-    Scaffold(
+    DesktopPage(
+        title = "Devices",
         floatingActionButton = {
-            AnimatedVisibility(
-                visible = true,
-                enter = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)) + fadeIn(),
-                exit = scaleOut(animationSpec = spring(stiffness = Spring.StiffnessMedium)) + fadeOut()
-            ) {
-                ExtendedFloatingActionButton(
-                    onClick = { onAddDeviceClick("", "") },
-                    shape = FloatingActionButtonDefaults.extendedFabShape,
-                    elevation = FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 6.dp,
-                        pressedElevation = 8.dp,
-                        focusedElevation = 6.dp,
-                        hoveredElevation = 6.dp
-                    ),
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    text = { Text("Add device", style = MaterialTheme.typography.bodyMedium) }
-                )
-            }
-        }
-    ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .background(MaterialTheme.colorScheme.background)
-        ) {
-            when (val res = state.resource) {
-                is AsyncResource.Loading -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-                is AsyncResource.Error -> {
-                    if (filteredDevices.isEmpty()) {
-                        Column(
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = res.message.ifEmpty { error ?: "An error occurred" },
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Button(onClick = { viewModel.loadInitial() }) {
-                                Text("Retry")
-                            }
-                        }
-                    } else {
-                        LazyColumn(
-                            contentPadding = PaddingValues(vertical = 8.dp),
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            items(filteredDevices) { device ->
-                                DesktopDeviceItemCard(
-                                    device = device,
-                                    onOpenClick = { onEditDeviceClick(device) },
-                                    onDeleteClick = { deviceToDelete = device }
-                                )
-                            }
-                        }
-                    }
-                }
-                is AsyncResource.Empty -> {
-                    Text(
-                        text = "No devices connected",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-                is AsyncResource.Success, is AsyncResource.Idle -> {
-                    if (filteredDevices.isEmpty()) {
-                        Text(
-                            text = "No devices connected",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.align(Alignment.Center)
-                        )
-                    } else {
-                        LazyColumn(
-                            contentPadding = PaddingValues(vertical = 8.dp),
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            items(filteredDevices) { device ->
-                                DesktopDeviceItemCard(
-                                    device = device,
-                                    onOpenClick = { onEditDeviceClick(device) },
-                                    onDeleteClick = { deviceToDelete = device }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Delete Confirmation Dialog
-        deviceToDelete?.let { device ->
-            AlertDialog(
-                onDismissRequest = { deviceToDelete = null },
-                shape = SynapseDialogShape,
-                title = { Text("Delete Device?", style = MaterialTheme.typography.titleLarge) },
-                text = {
-                    Text("Are you sure you want to delete ${device.name.ifEmpty { "this device" }}?\n\nID: ${device.id.chunked(4).joinToString(" ")}")
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            viewModel.deleteDevice(device.id)
-                            deviceToDelete = null
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error,
-                            contentColor = MaterialTheme.colorScheme.onError
-                        )
-                    ) {
-                        Text("Delete")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { deviceToDelete = null }) {
-                        Text("Cancel")
-                    }
-                }
+            ExtendedFloatingActionButton(
+                onClick = { onAddDeviceClick("", "") },
+                icon = { Icon(SynapseIcons.Add, contentDescription = null) },
+                text = { Text("Add device") }
             )
         }
-    }
-}
-
-@Composable
-fun DesktopDeviceItemCard(
-    device: DeviceUiModel,
-    onOpenClick: () -> Unit,
-    onDeleteClick: () -> Unit
-) {
-    val sharedFolders = device.sharedFolders
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onOpenClick() }
-                .padding(start = 16.dp, top = 14.dp, bottom = 14.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Device icon in tinted circle
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                modifier = Modifier.size(48.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = DevicesIcon,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(26.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.width(16.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = device.name.ifEmpty { device.id.take(7) },
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                
-                val statusText = if (device.paused) "Paused" else if (device.connected) "Connected" else "Disconnected"
-                val statusColor = if (device.paused) SynapseStatusColors.Paused else if (device.connected) SynapseStatusColors.Connected else SynapseStatusColors.Disconnected
-                
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .background(statusColor, shape = RoundedCornerShape(4.dp))
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = statusColor,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    if (device.connected) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        val isBep = device.clientVersion.contains("bep", ignoreCase = true) ||
-                                    device.clientVersion.contains("syncthing", ignoreCase = true) ||
-                                    device.connectionType.contains("bep", ignoreCase = true)
-                        val badgeText = if (isBep) "BEP v1 (TLS 1.3)" else "QUIC (FastCDC)"
-                        val badgeBg = if (isBep) Color(0xFF1E88E5).copy(alpha = 0.15f) else Color(0xFF7C4DFF).copy(alpha = 0.15f)
-                        val badgeColor = if (isBep) Color(0xFF1E88E5) else Color(0xFF7C4DFF)
-
-                        Box(
-                            modifier = Modifier
-                                .background(badgeBg, shape = RoundedCornerShape(4.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = badgeText,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = badgeColor,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-
-                if (sharedFolders.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Folders: " + sharedFolders.joinToString(", "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            IconButton(onClick = onDeleteClick) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Delete Device",
-                    tint = MaterialTheme.colorScheme.error
-                )
-            }
-        }
+        DevicesScreen(
+            onAddDeviceClick = onAddDeviceClick,
+            onEditDeviceClick = onEditDeviceClick,
+            viewModel = viewModel
+        )
     }
 }

@@ -8,10 +8,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,7 +34,6 @@ fun EditFolderDialog(
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
 
-    var folderLabel by remember { mutableStateOf(folder.label) }
     var folderPath by remember { mutableStateOf(folder.path) }
     val selectedDevices = remember {
         mutableStateListOf<String>().apply {
@@ -46,12 +41,13 @@ fun EditFolderDialog(
         }
     }
     var folderType by remember { mutableStateOf(folder.type) }
-    var watchForChanges by remember { mutableStateOf(folder.fsWatcherEnabled) }
     var pauseFolder by remember { mutableStateOf(folder.paused) }
     var versioningType by remember { mutableStateOf(folder.versioning.type) }
-    var cleanoutAfter by remember {
+    // The engine reads and returns "cleanoutDays"; "cleanoutAfter" is the old app-side key.
+    var cleanoutDays by remember {
         mutableStateOf(
-            folder.versioning.params["cleanoutAfter"]?.toIntOrNull() ?: 0
+            (folder.versioning.params["cleanoutDays"] ?: folder.versioning.params["cleanoutAfter"])
+                ?.toIntOrNull() ?: 0
         )
     }
 
@@ -64,29 +60,27 @@ fun EditFolderDialog(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Edit Folder", style = MaterialTheme.typography.titleMedium) },
+                title = { Text("Edit folder") },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(SynapseIcons.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
                     IconButton(onClick = { showDeleteConfirm = true }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete Folder")
+                        Icon(SynapseIcons.Delete, contentDescription = "Delete Folder")
                     }
                     IconButton(
                         onClick = {
                             if (canSave) {
                                 viewModel.updateFolder(
                                     id = folder.id,
-                                    label = folderLabel.trim(),
                                     path = folderPath.trim(),
                                     type = folderType,
                                     paused = pauseFolder,
-                                    watchForChanges = watchForChanges,
                                     sharedDevices = selectedDevices.toList(),
                                     versioningType = versioningType,
-                                    cleanoutAfter = cleanoutAfter,
+                                    cleanoutDays = cleanoutDays,
                                     onSuccess = onDismiss
                                 )
                             }
@@ -100,13 +94,10 @@ fun EditFolderDialog(
                                 color = MaterialTheme.colorScheme.primary
                             )
                         } else {
-                            Icon(Icons.Default.Check, contentDescription = "Save")
+                            Icon(SynapseIcons.Check, contentDescription = "Save")
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
             )
         }
     ) { innerPadding ->
@@ -122,7 +113,7 @@ fun EditFolderDialog(
             if (error != null) {
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = MaterialTheme.shapes.small,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
@@ -133,16 +124,6 @@ fun EditFolderDialog(
                     )
                 }
             }
-
-            // Folder Label
-            OutlinedTextField(
-                value = folderLabel,
-                onValueChange = { folderLabel = it },
-                label = { Text("Folder Label (optional)") },
-                placeholder = { Text("e.g. My Documents") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
 
             // Folder ID (Read-only)
             OutlinedTextField(
@@ -248,41 +229,15 @@ fun EditFolderDialog(
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.weight(1f)
                         )
-                        Switch(
+                        Checkbox(
                             checked = isChecked,
                             onCheckedChange = { checked ->
                                 if (checked) selectedDevices.add(device.deviceID.normalizeDeviceId())
                                 else selectedDevices.remove(device.deviceID.normalizeDeviceId())
                             },
-                            modifier = Modifier.scale(0.85f)
                         )
                     }
                 }
-            }
-
-            // Watch for Changes
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        "Watch for Changes",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        "Auto-detect file changes without manual rescanning",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = watchForChanges,
-                    onCheckedChange = { watchForChanges = it },
-                    modifier = Modifier.scale(0.85f)
-                )
             }
 
             // Pause Folder
@@ -293,13 +248,11 @@ fun EditFolderDialog(
             ) {
                 Text(
                     "Pause Folder",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold
+                    style = MaterialTheme.typography.bodyLarge
                 )
                 Switch(
                     checked = pauseFolder,
                     onCheckedChange = { pauseFolder = it },
-                    modifier = Modifier.scale(0.85f)
                 )
             }
 
@@ -358,42 +311,19 @@ fun EditFolderDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = if (cleanoutAfter == 0) "Never (0)" else "$cleanoutAfter days",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.width(90.dp)
+                    Slider(
+                        value = cleanoutDays.toFloat(),
+                        onValueChange = { cleanoutDays = kotlin.math.round(it).toInt() },
+                        valueRange = 0f..90f,
+                        steps = 89,
+                        modifier = Modifier.weight(1f)
                     )
-                    
-                    val listState = rememberLazyListState(initialFirstVisibleItemIndex = maxOf(0, cleanoutAfter - 2))
-                    LazyRow(
-                        state = listState,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f).height(50.dp)
-                    ) {
-                        items(91) { index ->
-                            val isSelected = index == cleanoutAfter
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .background(
-                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                                        shape = RoundedCornerShape(10.dp)
-                                    )
-                                    .clickable { cleanoutAfter = index },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = if (index == 0) "∞" else index.toString(),
-                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(
+                        text = if (cleanoutDays == 0) "Never" else "$cleanoutDays days",
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.widthIn(min = 72.dp)
+                    )
                 }
             }
 
@@ -404,26 +334,21 @@ fun EditFolderDialog(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            shape = SynapseDialogShape,
-            title = { Text("Delete Folder?", style = MaterialTheme.typography.titleLarge) },
+            title = { Text("Delete folder?") },
             text = {
                 Text(
-                    "Remove \"${folder.label.ifEmpty { folder.id }}\" from Syncthing?\n\nThis will stop syncing but will NOT delete the files on disk.",
+                    "Remove \"${folder.label.ifEmpty { folder.id }}\" from Synapse?\n\nThis will stop syncing but will NOT delete the files on disk.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             },
             confirmButton = {
-                Button(
+                TextButton(
                     onClick = {
                         viewModel.deleteFolder(folder.id)
                         showDeleteConfirm = false
                         onDismiss()
                     },
-                    shape = SynapsePillShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) {
                     Text("Delete")
                 }
@@ -431,7 +356,6 @@ fun EditFolderDialog(
             dismissButton = {
                 TextButton(
                     onClick = { showDeleteConfirm = false },
-                    shape = SynapsePillShape
                 ) {
                     Text("Cancel")
                 }

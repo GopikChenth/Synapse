@@ -4,7 +4,7 @@ This document provides the definitive reference for the embedded Synapse Core HT
 
 The API provides two route sets:
 1. **Native Synapse API (`/api/v1/*`)**: Modern RESTful interface exposing 3-way conflict inspection, virtual quarantine resolution, Merkle DAG causality, and FastCDC storage metrics.
-2. **Syncthing Compatibility Layer (`/rest/*`)**: Drop-in REST route aliases supporting existing Synapse UI and Kotlin Multiplatform clients (`SyncthingApiClient.kt`) without code modification.
+2. **REST Compatibility Layer (`/rest/*`)**: Drop-in REST route aliases supporting existing Synapse UI and Kotlin Multiplatform clients (`SynapseApiClient.kt`) without code modification.
 
 ---
 
@@ -14,7 +14,7 @@ The API provides two route sets:
 - [Part 2: Folder Management & Sync Policy](#part-2-folder-management--sync-policy)
 - [Part 3: Cluster Devices & Mutual Pairing](#part-3-cluster-devices--mutual-pairing)
 - [Part 4: 3-Way Conflicts & Virtual Quarantine](#part-4-3-way-conflicts--virtual-quarantine)
-- [Part 5: Syncthing REST Compatibility Matrix](#part-5-syncthing-rest-compatibility-matrix)
+- [Part 5: REST Compatibility Matrix](#part-5-rest-compatibility-matrix)
 - [Part 6: Real-Time WebSocket Event Bus](#part-6-real-time-websocket-event-bus)
 
 ---
@@ -31,7 +31,7 @@ If the daemon is started with `--token <secret>` or `SYNAPSE_TOKEN=<secret>`:
 ```http
 Authorization: Bearer <secret>
 ```
-or via the Syncthing compatibility header:
+or via the REST compatibility header:
 ```http
 X-API-Key: <secret>
 ```
@@ -174,12 +174,12 @@ Registers a directory for continuous synchronization, validates mount markers, a
 ### 2.5 Trigger Folder Rescan
 Initiates an immediate disk index rescan and Merkle DAG reconciliation.
 - **Native:** `POST /api/v1/folders/:id/rescan`
-- **Syncthing Query Alias:** `POST /rest/db/scan?folder=notes_vault`
+- **REST Query Alias:** `POST /rest/db/scan?folder=notes_vault`
 - **Response:** `200 OK`
 
 ### 2.6 Folder Status Metrics
 - **Native:** `GET /api/v1/folders/:id/status`
-- **Syncthing Query Alias:** `GET /rest/db/status?folder=notes_vault`
+- **REST Query Alias:** `GET /rest/db/status?folder=notes_vault`
 - **Response:** `200 OK`
 ```json
 {
@@ -200,7 +200,7 @@ Initiates an immediate disk index rescan and Merkle DAG reconciliation.
 ### 2.7 Device Folder Completion
 Returns completion percentage and byte progress for a remote device.
 - **Native:** `GET /api/v1/folders/:id/completion`
-- **Syncthing Query Alias:** `GET /rest/db/completion?folder=notes_vault&device=DEVICE_ID`
+- **REST Query Alias:** `GET /rest/db/completion?folder=notes_vault&device=DEVICE_ID`
 - **Response:** `200 OK`
 ```json
 {
@@ -354,11 +354,11 @@ Returns pre-computed diff hunks for side-by-side UI merge viewers.
 
 ---
 
-## Part 5: Syncthing REST Compatibility Matrix
+## Part 5: REST Compatibility Matrix
 
-Clients targeting Syncthing’s API (such as `SyncthingApiClient.kt`) can interact with Synapse Core using standard `/rest/` paths:
+Clients targeting the REST API (such as `SynapseApiClient.kt`) can interact with Synapse Core using standard `/rest/` paths:
 
-| Syncthing Endpoint | HTTP Method | Synapse Core Equivalent Action |
+| REST Endpoint | HTTP Method | Synapse Core Equivalent Action |
 |---|---|---|
 | `/rest/system/status` | `GET` | System health, uptime, and resident memory |
 | `/rest/system/version` | `GET` | Core version string, OS, and architecture |
