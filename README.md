@@ -40,6 +40,20 @@
 
 ---
 
+### 🎬 Showcase Video
+
+A 31-second feature video, built with Remotion, lives in **[`/video`](./video)**. It covers peer-to-peer sync, encryption, block-level transfers, conflict merging and the supported platforms. See the [video README](./video/README.md) for the scene list and editing notes.
+
+Render it from the `video/` folder (the output in `video/out/` is not committed):
+
+```bash
+cd video
+npm i
+npx remotion render SynapseShowcase out/synapse-showcase.mp4
+```
+
+---
+
 ### 📁 Project Structure
 
 * **[`/app/shared`](./app/shared/src)**: The core UI and business logic shared across all platforms using Compose Multiplatform.
@@ -50,6 +64,7 @@
 * **[`/app/webApp`](./app/webApp)**: Builds the WASM and JS browser packages.
 * **[`/core`](./core/src)**: Shared networking, configuration databases, and utility logic.
 * **[`/server`](./server/src/main/kotlin)**: Built-in Ktor API server.
+* **[`/video`](./video)**: Remotion project for the showcase video.
 
 ---
 

@@ -1,54 +1,84 @@
-# Remotion video
+# Synapse showcase video
 
-<p align="center">
-  <a href="https://github.com/remotion-dev/logo">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://github.com/remotion-dev/logo/raw/main/animated-logo-banner-dark.apng">
-      <img alt="Animated Remotion Logo" src="https://github.com/remotion-dev/logo/raw/main/animated-logo-banner-light.gif">
-    </picture>
-  </a>
-</p>
+A 31-second feature video for Synapse, built with [Remotion](https://www.remotion.dev) (React).
 
-Welcome to your Remotion project!
+| Setting | Value |
+| :-- | :-- |
+| Composition | `SynapseShowcase` |
+| Size | 1920 × 1080 |
+| Frame rate | 30 fps |
+| Length | 936 frames (31.2 s) |
+| Audio | None yet |
+
+## Scenes
+
+| # | Scene | Shows | File |
+| :-- | :-- | :-- | :-- |
+| 1 | Intro | Logo, wordmark, "Your files, on every device. No cloud." | [`Intro.tsx`](src/scenes/Intro.tsx) |
+| 2 | Peer-to-peer | Phone, laptop and desktop syncing directly, crossed-out cloud | [`PeerToPeer.tsx`](src/scenes/PeerToPeer.tsx) |
+| 3 | Encrypted | Lock closing; Mutual TLS, QUIC, paired devices only | [`Encrypted.tsx`](src/scenes/Encrypted.tsx) |
+| 4 | Chunking | Only the edited blocks of a file are sent (3/10) | [`Chunking.tsx`](src/scenes/Chunking.tsx) |
+| 5 | Conflicts | Two edits merge into one file; unclear changes go to Quarantine | [`Conflicts.tsx`](src/scenes/Conflicts.tsx) |
+| 6 | Everywhere | Android, Desktop and Web mockups of the Folders screen | [`Everywhere.tsx`](src/scenes/Everywhere.tsx) |
+| 7 | Outro | Logo, "Sync without the cloud.", platform list | [`Outro.tsx`](src/scenes/Outro.tsx) |
+
+Every scene is also registered on its own under the **Scenes** folder in Studio, so you can preview or render one at a time.
+
+## Project layout
+
+```
+video/
+├── public/logo.png        App logo (copied from app/shared/.../drawable/logo.png)
+├── src/
+│   ├── Root.tsx           Registers the full video and each scene
+│   ├── Showcase.tsx       Scene order, lengths and transitions
+│   ├── theme.ts           Colors (Synapse Purple M3 dark + emerald/amber) and fonts (Outfit, Inter)
+│   ├── components/        Shared pieces: backdrop glow, text reveal, scene text, device icons
+│   └── scenes/            One file per scene
+└── out/                   Render output (ignored by Git)
+```
 
 ## Commands
 
-**Install Dependencies**
+Run these from the `video/` folder.
+
+Install dependencies:
 
 ```console
-npm i --loglevel=error
+npm i
 ```
 
-**Start Preview**
+Open Remotion Studio to preview and edit:
 
 ```console
 npm run dev
 ```
 
-**Render video**
+Render the full video:
 
 ```console
-npx remotion render
+npx remotion render SynapseShowcase out/synapse-showcase.mp4
 ```
 
-**Upgrade Remotion**
+Render a single scene, for example the intro:
 
 ```console
-npx remotion upgrade
+npx remotion render Intro out/intro.mp4
 ```
 
-## Docs
+Save one frame as an image:
 
-Get started with Remotion by reading the [fundamentals page](https://www.remotion.dev/docs/the-fundamentals).
+```console
+npx remotion still SynapseShowcase out/frame.png --frame=240
+```
 
-## Help
+## Editing
 
-We provide help on our [Discord server](https://discord.gg/6VzzNDwUwV).
-
-## Issues
-
-Found an issue with Remotion? [File an issue here](https://github.com/remotion-dev/remotion/issues/new).
+- **Text:** Scene headlines and supporting lines are props in [`Showcase.tsx`](src/Showcase.tsx). You can also edit them in Studio's properties panel.
+- **Timing:** Each scene's `durationInFrames` is set in [`Showcase.tsx`](src/Showcase.tsx). Transitions overlap neighbouring scenes, so the total is shorter than the scene lengths added together. If you change a length, update `durationInFrames` on `SynapseShowcase` in [`Root.tsx`](src/Root.tsx).
+- **Colors and fonts:** [`theme.ts`](src/theme.ts). The colors follow the app's design spec in [`design.md`](../design.md).
+- **Logo:** Replace `public/logo.png`.
 
 ## License
 
-Note that for some entities a company license is needed. [Read the terms here](https://github.com/remotion-dev/remotion/blob/main/LICENSE.md).
+Remotion is free for individuals and teams of up to 3. Larger companies need a [company license](https://www.remotion.dev/docs/license).
